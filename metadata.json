@@ -1,0 +1,6 @@
+{
+  "name": "KoHot | Digital Class Album & Department Legacy Plaque",
+  "description": "KoHot creates an enduring Digital Class Album for your graduating set. Established with a Department Legacy Plaque gifted to the pioneer set to display albums for the current and subsequent sets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

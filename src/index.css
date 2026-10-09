@@ -1,0 +1,785 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-gold: #d4af37;
+  --color-gold-light: #e6c158;
+  --color-gold-dark: #b89728;
+  --font-syne: 'Syne', sans-serif;
+  --font-tech: 'Space Grotesk', monospace, sans-serif;
+  --font-mono-tech: 'Space Grotesk', monospace, sans-serif;
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  html.dark {
+    background-color: #121214;
+    color: #e4e4e7;
+  }
+
+  .disable-transitions,
+  .disable-transitions *,
+  .disable-transitions *::before,
+  .disable-transitions *::after {
+    -webkit-transition: none !important;
+    -moz-transition: none !important;
+    -o-transition: none !important;
+    -ms-transition: none !important;
+    transition: none !important;
+  }
+
+  * {
+    scroll-behavior: smooth;
+  }
+
+  :root {
+    --color-gold: #d4af37;
+    --color-gold-light: #e6c158;
+    --color-gold-dark: #b89728;
+    --font-syne: 'Syne', sans-serif;
+    --font-tech: 'Space Grotesk', monospace, sans-serif;
+    --font-mono-tech: 'Space Grotesk', monospace, sans-serif;
+    --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  body {
+    font-family: var(--font-body);
+    background-color: #f8fafc;
+    color: #475569;
+    overflow-x: hidden;
+  }
+
+  html.dark body {
+    background-color: #121214;
+    background: radial-gradient(circle at 50% 0%, #1f1f23 0%, #141416 60%, #0e0e10 100%);
+    color: #e4e4e7;
+  }
+
+  img {
+    content-visibility: auto;
+  }
+}
+
+/* Original KoHot Typography */
+.font-syne {
+  font-family: 'Syne', sans-serif;
+}
+
+.font-tech,
+.font-mono-tech {
+  font-family: 'Space Grotesk', monospace, sans-serif;
+}
+
+.font-body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Obvious Slow-Motion Album Hero Zoom in/out keyframe */
+@keyframes albumHeroZoomObvious {
+  0% {
+    transform: scale(1.02) translate(0%, 0%);
+  }
+  50% {
+    transform: scale(1.15) translate(-1%, -0.8%);
+  }
+  100% {
+    transform: scale(1.02) translate(0%, 0%);
+  }
+}
+
+.animate-album-hero-zoom {
+  animation: albumHeroZoomObvious 24s ease-in-out infinite alternate;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+/* Slow-motion Ken Burns subtle zoom/pan keyframe */
+@keyframes kenBurnsSlow {
+  0% {
+    transform: scale(1) translate(0, 0);
+  }
+  50% {
+    transform: scale(1.10) translate(-1%, -0.8%);
+  }
+  100% {
+    transform: scale(1) translate(0, 0);
+  }
+}
+
+.animate-ken-burns {
+  animation: kenBurnsSlow 14s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+/* Custom smooth horizontal swipe carousels & hide scrollbars */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Smooth pop-up and reveal keyframes for scrolling sections */
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes popInGentle {
+  0% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes floatGentle {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-pop-in {
+  animation: popIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-pop-gentle {
+  animation: popInGentle 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-float-gentle {
+  animation: floatGentle 5s ease-in-out infinite;
+}
+
+@keyframes cardEntry {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-card-entry {
+  animation: cardEntry 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  will-change: transform, opacity;
+}
+
+/* Subtle image shimmer animation */
+@keyframes glazeSweep {
+  0% {
+    transform: translateX(-150%) skewX(-20deg);
+  }
+  100% {
+    transform: translateX(250%) skewX(-20deg);
+  }
+}
+
+.animate-glaze-sweep {
+  animation: glazeSweep 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Slow-motion text and card reveals */
+@keyframes slowMotionReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slow-reveal {
+  animation: slowMotionReveal 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animation-delay-100 {
+  animation-delay: 100ms;
+}
+
+.animation-delay-200 {
+  animation-delay: 200ms;
+}
+
+.animation-delay-350 {
+  animation-delay: 350ms;
+}
+
+.animation-delay-500 {
+  animation-delay: 500ms;
+}
+
+.animation-delay-650 {
+  animation-delay: 650ms;
+}
+
+.animation-delay-800 {
+  animation-delay: 800ms;
+}
+
+/* Infinite Memories passing light flash keyframe: slowly and continuously */
+@keyframes infinitePassingLight {
+  0% {
+    transform: translateX(-160%) skewX(-20deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.9;
+  }
+  50% {
+    transform: translateX(40%) skewX(-20deg);
+    opacity: 1;
+  }
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(240%) skewX(-20deg);
+    opacity: 0;
+  }
+}
+
+.animate-infinite-flash {
+  animation: infinitePassingLight 3.6s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+/* =========================================================================
+   PREMIUM LUXURY LIGHT MODE OVERHAUL
+   1. Surfaces & Cards: Crisp light grey backdrop (#f8fafc / bg-slate-50),
+      pure clean white cards (#ffffff / bg-white) with subtle borders
+      (#e2e8f0 / border-slate-200 or border-amber-200/50) and soft shadow-sm.
+   2. Typography Contrast: Deep charcoal/black text (#0f172a / text-slate-900)
+      for all titles & section headers. Rich medium slate (#475569 / text-slate-600)
+      for body/subtext. Low-contrast grey text completely eliminated.
+   3. Signature Accents: KoHot gold/amber (#d97706 / #f59e0b) & emerald highlights.
+   4. Input Fields & Modals: Crisp white backgrounds with dark borders
+      (#ffffff / border-slate-300 / text-slate-900).
+   ========================================================================= */
+
+.dashboard-light,
+html:not(.dark) [data-dashboard-theme="light"] {
+  background-color: #eef2f6 !important;
+  color: #334155 !important;
+}
+
+.dashboard-dark,
+html.dark [data-dashboard-theme="dark"] {
+  background-color: #121214 !important;
+  color: #e4e4e7 !important;
+}
+
+/* 1. All Primary Cards, Panels, Modules, Toolbars in Dashboards & Overviews */
+.dashboard-light div[class*="bg-[#0c0d14]"],
+.dashboard-light div[class*="bg-[#08090e]"],
+.dashboard-light div[class*="bg-[#10121a]"],
+.dashboard-light div[class*="bg-[#060709]"],
+.dashboard-light div[class*="bg-[#06070a]"],
+.dashboard-light div[class*="bg-[#0a0c12]"],
+.dashboard-light div[class*="bg-[#0c0e14]"],
+.dashboard-light div[class*="bg-[#12131a]"],
+.dashboard-light div[class*="bg-[#11131e]"],
+.dashboard-light div[class*="bg-[#12141c]"],
+.dashboard-light div[class*="bg-[#0e1017]"],
+.dashboard-light div[class*="bg-[#07080c]"],
+.dashboard-light div[class*="bg-[#0d0e16]"],
+.dashboard-light div[class*="bg-[#0a0a0c]"],
+.dashboard-light section[class*="bg-[#0c0d14]"],
+.dashboard-light article[class*="bg-[#0c0d14]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0c0d14]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#08090e]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#10121a]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#060709]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#06070a]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0a0c12]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0c0e14]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#12131a]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#11131e]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#12141c]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0e1017]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#07080c]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0d0e16]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0a0a0c]"],
+html:not(.dark) [data-dashboard-theme="light"] section[class*="bg-[#0c0d14]"],
+html:not(.dark) [data-dashboard-theme="light"] article[class*="bg-[#0c0d14]"] {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.08), 0 2px 6px -1px rgba(15, 23, 42, 0.04) !important;
+}
+
+/* Dark Mode Primary Dashboard Cards */
+.dashboard-dark div[class*="bg-[#0c0d14]"],
+.dashboard-dark div[class*="bg-[#08090e]"],
+.dashboard-dark div[class*="bg-[#10121a]"],
+.dashboard-dark div[class*="bg-[#060709]"],
+.dashboard-dark div[class*="bg-[#06070a]"],
+.dashboard-dark div[class*="bg-[#0a0c12]"],
+.dashboard-dark section[class*="bg-[#0c0d14]"],
+.dashboard-dark article[class*="bg-[#0c0d14]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-[#0c0d14]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-[#08090e]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-[#10121a]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-[#060709]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-[#06070a]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-[#0a0c12]"],
+html.dark [data-dashboard-theme="dark"] section[class*="bg-[#0c0d14]"],
+html.dark [data-dashboard-theme="dark"] article[class*="bg-[#0c0d14]"] {
+  background-color: #18181b !important;
+  border-color: #27272a !important;
+  color: #f4f4f5 !important;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.6) !important;
+}
+
+/* 2. Sub-cards, Wells, Inset Containers & Tables */
+.dashboard-light div[class*="bg-white/5"],
+.dashboard-light div[class*="bg-white/[0.02]"],
+.dashboard-light div[class*="bg-white/[0.03]"],
+.dashboard-light div[class*="bg-white/[0.04]"],
+.dashboard-light div[class*="bg-white/[0.06]"],
+.dashboard-light div[class*="bg-white/[0.08]"],
+.dashboard-light div[class*="bg-black/40"],
+.dashboard-light div[class*="bg-black/50"],
+.dashboard-light div[class*="bg-black/60"],
+.dashboard-light div[class*="bg-black/70"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/5"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.02]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.03]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.04]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.06]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.08]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/40"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/50"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/60"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/70"] {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  color: #334155 !important;
+}
+
+/* Dark Mode Sub-cards & Wells */
+.dashboard-dark div[class*="bg-white/5"],
+.dashboard-dark div[class*="bg-white/[0.02]"],
+.dashboard-dark div[class*="bg-white/[0.03]"],
+.dashboard-dark div[class*="bg-white/[0.04]"],
+.dashboard-dark div[class*="bg-white/[0.06]"],
+.dashboard-dark div[class*="bg-white/[0.08]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-white/5"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-white/[0.02]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-white/[0.03]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-white/[0.04]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-white/[0.06]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-white/[0.08]"] {
+  background-color: #202024 !important;
+  border-color: #2e2e33 !important;
+  color: #d4d4d8 !important;
+}
+
+/* 3. Modal Overlays & Pop-up Windows - CONTEXT AWARE (LIGHT MODE PURE WHITE, DARK MODE NEUTRAL GREY) */
+html:not(.dark) div.fixed.inset-0[class*="bg-black/"] {
+  background-color: rgba(15, 23, 42, 0.55) !important;
+  backdrop-filter: blur(12px) !important;
+}
+
+html:not(.dark) div.fixed.inset-0 div[class*="bg-[#0c0d14]"],
+html:not(.dark) div.fixed.inset-0 div[class*="bg-[#08090e]"],
+html:not(.dark) div.fixed.inset-0 div[class*="bg-[#11131e]"],
+html:not(.dark) div.fixed.inset-0 div[class*="bg-[#0e1017]"],
+html:not(.dark) div[id$="-modal-dialog"],
+html:not(.dark) div[id$="-modal-card"],
+html:not(.dark) div[role="dialog"] {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
+}
+
+/* DARK MODE UNIVERSAL RULES FOR ALL MODALS, FORMS & CARDS */
+html.dark div.fixed.inset-0[class*="bg-black/"] {
+  background-color: rgba(0, 0, 0, 0.82) !important;
+  backdrop-filter: blur(16px) !important;
+}
+
+html.dark div.fixed.inset-0 div[id$="-modal-dialog"],
+html.dark div.fixed.inset-0 div[id$="-modal-card"],
+html.dark div[id="onboarding-modal-dialog"],
+html.dark div[id="login-modal-card"],
+html.dark div[id="help-support-modal-dialog"],
+html.dark div[role="dialog"] {
+  background-color: #18181b !important;
+  border-color: #3f3f46 !important;
+  color: #f4f4f5 !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85) !important;
+}
+
+html.dark div[id="onboarding-modal-dialog"] > div:first-child,
+html.dark div[id="help-support-modal-dialog"] > div:first-child,
+html.dark div[id$="-modal-dialog"] > div:first-child {
+  background-color: #1f1f23 !important;
+  border-color: #27272a !important;
+  color: #ffffff !important;
+}
+
+html.dark div[id$="-modal-dialog"] h1,
+html.dark div[id$="-modal-dialog"] h2,
+html.dark div[id$="-modal-dialog"] h3,
+html.dark div[id$="-modal-dialog"] h4,
+html.dark div[id$="-modal-card"] h1,
+html.dark div[id$="-modal-card"] h2,
+html.dark div[id$="-modal-card"] h3,
+html.dark div[id$="-modal-card"] h4 {
+  color: #ffffff !important;
+}
+
+html.dark div[id$="-modal-dialog"] p,
+html.dark div[id$="-modal-dialog"] label,
+html.dark div[id$="-modal-card"] p,
+html.dark div[id$="-modal-card"] label {
+  color: #d4d4d8 !important;
+}
+
+html.dark div[id="onboarding-modal-dialog"] input,
+html.dark div[id="onboarding-modal-dialog"] select,
+html.dark div[id="onboarding-modal-dialog"] textarea,
+html.dark div[id="help-support-modal-dialog"] input,
+html.dark div[id="help-support-modal-dialog"] select,
+html.dark div[id="help-support-modal-dialog"] textarea {
+  background-color: #121214 !important;
+  border-color: #3f3f46 !important;
+  color: #ffffff !important;
+}
+
+html:not(.dark) div.fixed.inset-0 div[class*="bg-[#06070a]"] {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* 4. Headings & Typography - DEEP CHARCOAL/BLACK HEADINGS, RICH MEDIUM SLATE BODY */
+.dashboard-light h1,
+.dashboard-light h2,
+.dashboard-light h3,
+.dashboard-light h4,
+html:not(.dark) [data-dashboard-theme="light"] h1,
+html:not(.dark) [data-dashboard-theme="light"] h2,
+html:not(.dark) [data-dashboard-theme="light"] h3,
+html:not(.dark) [data-dashboard-theme="light"] h4,
+html:not(.dark) div.fixed.inset-0 h1,
+html:not(.dark) div.fixed.inset-0 h2,
+html:not(.dark) div.fixed.inset-0 h3,
+html:not(.dark) div.fixed.inset-0 h4,
+html:not(.dark) div[id$="-modal-dialog"] h1,
+html:not(.dark) div[id$="-modal-dialog"] h2,
+html:not(.dark) div[id$="-modal-dialog"] h3,
+html:not(.dark) div[id$="-modal-dialog"] h4 {
+  color: #0f172a !important;
+}
+
+.dashboard-light h5,
+.dashboard-light h6,
+html:not(.dark) [data-dashboard-theme="light"] h5,
+html:not(.dark) [data-dashboard-theme="light"] h6,
+html:not(.dark) div.fixed.inset-0 h5,
+html:not(.dark) div.fixed.inset-0 h6 {
+  color: #334155 !important;
+}
+
+.dashboard-light p,
+.dashboard-light label,
+.dashboard-light dt,
+.dashboard-light dd,
+.dashboard-light td,
+.dashboard-light th,
+.dashboard-light li,
+.dashboard-light small,
+html:not(.dark) [data-dashboard-theme="light"] p,
+html:not(.dark) [data-dashboard-theme="light"] label,
+html:not(.dark) [data-dashboard-theme="light"] dt,
+html:not(.dark) [data-dashboard-theme="light"] dd,
+html:not(.dark) [data-dashboard-theme="light"] td,
+html:not(.dark) [data-dashboard-theme="light"] th,
+html:not(.dark) [data-dashboard-theme="light"] li,
+html:not(.dark) [data-dashboard-theme="light"] small,
+html:not(.dark) div.fixed.inset-0 p,
+html:not(.dark) div.fixed.inset-0 label {
+  color: #475569 !important;
+}
+
+.dashboard-light strong,
+.dashboard-light b,
+html:not(.dark) [data-dashboard-theme="light"] strong,
+html:not(.dark) [data-dashboard-theme="light"] b,
+html:not(.dark) div.fixed.inset-0 strong,
+html:not(.dark) div.fixed.inset-0 b {
+  color: #0f172a !important;
+}
+
+/* 5. General Dark Borders to Subtle Refined Slate Borders */
+.dashboard-light [class*="border-white/"],
+html:not(.dark) [data-dashboard-theme="light"] [class*="border-white/"],
+html:not(.dark) div.fixed.inset-0 [class*="border-white/"] {
+  border-color: #e2e8f0 !important;
+}
+
+/* 6. Active Tabs & Clips: Sleek Charcoal/Black with Pure White Text */
+.dashboard-light button[class*="bg-zinc-950"],
+.dashboard-light button[class*="bg-black"],
+.dashboard-light a[class*="bg-zinc-950"],
+.dashboard-light a[class*="bg-black"],
+.dashboard-light [aria-selected="true"],
+.dashboard-light .active-clip,
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-zinc-950"],
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-black"],
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-zinc-950"],
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-black"],
+html:not(.dark) [data-dashboard-theme="light"] [aria-selected="true"],
+html:not(.dark) [data-dashboard-theme="light"] .active-clip {
+  background-color: #0f172a !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.15) !important;
+}
+
+.dashboard-light button[class*="bg-zinc-950"] *,
+.dashboard-light button[class*="bg-black"] *,
+.dashboard-light a[class*="bg-zinc-950"] *,
+.dashboard-light a[class*="bg-black"] *,
+.dashboard-light [aria-selected="true"] *,
+.dashboard-light .active-clip *,
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-zinc-950"] *,
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-black"] *,
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-zinc-950"] *,
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-black"] *,
+html:not(.dark) [data-dashboard-theme="light"] [aria-selected="true"] *,
+html:not(.dark) [data-dashboard-theme="light"] .active-clip * {
+  color: #ffffff !important;
+}
+
+/* Inactive navigation clips/tabs in light mode: Pure white card background with slate text */
+.dashboard-light button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]),
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]) {
+  background-color: #ffffff !important;
+  color: #475569 !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
+}
+
+.dashboard-light button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):hover,
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):hover {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* 7. Form Controls: Crisp White Inputs with Dark Slate Borders */
+.dashboard-light input[type="text"],
+.dashboard-light input[type="email"],
+.dashboard-light input[type="password"],
+.dashboard-light input[type="number"],
+.dashboard-light input[type="url"],
+.dashboard-light input[type="tel"],
+.dashboard-light textarea,
+.dashboard-light select,
+html:not(.dark) [data-dashboard-theme="light"] input[type="text"],
+html:not(.dark) [data-dashboard-theme="light"] input[type="email"],
+html:not(.dark) [data-dashboard-theme="light"] input[type="password"],
+html:not(.dark) [data-dashboard-theme="light"] input[type="number"],
+html:not(.dark) [data-dashboard-theme="light"] input[type="url"],
+html:not(.dark) [data-dashboard-theme="light"] input[type="tel"],
+html:not(.dark) [data-dashboard-theme="light"] textarea,
+html:not(.dark) [data-dashboard-theme="light"] select,
+html:not(.dark) div.fixed.inset-0 input[type="text"],
+html:not(.dark) div.fixed.inset-0 input[type="email"],
+html:not(.dark) div.fixed.inset-0 input[type="password"],
+html:not(.dark) div.fixed.inset-0 input[type="number"],
+html:not(.dark) div.fixed.inset-0 input[type="url"],
+html:not(.dark) div.fixed.inset-0 input[type="tel"],
+html:not(.dark) div.fixed.inset-0 textarea,
+html:not(.dark) div.fixed.inset-0 select,
+html:not(.dark) div[id$="-modal-dialog"] input,
+html:not(.dark) div[id$="-modal-dialog"] textarea,
+html:not(.dark) div[id$="-modal-dialog"] select {
+  background-color: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.dashboard-light input::placeholder,
+.dashboard-light textarea::placeholder,
+html:not(.dark) [data-dashboard-theme="light"] input::placeholder,
+html:not(.dark) [data-dashboard-theme="light"] textarea::placeholder,
+html:not(.dark) div.fixed.inset-0 input::placeholder,
+html:not(.dark) div.fixed.inset-0 textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+.dashboard-light input:focus,
+.dashboard-light textarea:focus,
+.dashboard-light select:focus,
+html:not(.dark) [data-dashboard-theme="light"] input:focus,
+html:not(.dark) [data-dashboard-theme="light"] textarea:focus,
+html:not(.dark) [data-dashboard-theme="light"] select:focus,
+html:not(.dark) div.fixed.inset-0 input:focus,
+html:not(.dark) div.fixed.inset-0 textarea:focus,
+html:not(.dark) div.fixed.inset-0 select:focus {
+  border-color: #d4af37 !important;
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.22) !important;
+  color: #0f172a !important;
+}
+
+/* Static locked backdrop when any modal or popup is open */
+body.modal-backdrop-locked,
+html.modal-backdrop-locked {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  -webkit-overflow-scrolling: auto !important;
+}
+
+/* Keyframe animations for motion on Legacy Wall & Album Entry */
+@keyframes completionLineMove {
+  0% {
+    transform: scaleX(0);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes entranceMotion {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-entrance {
+  animation: entranceMotion 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slideUpFadeMotion {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes timelineRailGlow {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 0% 200%;
+  }
+}
+
+@keyframes heroRevealCinematic {
+  0% {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulseGoldGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(212, 175, 55, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(212, 175, 55, 0.45);
+  }
+}
+
+.animate-slide-up-fade {
+  animation: slideUpFadeMotion 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-hero-reveal {
+  animation: heroRevealCinematic 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-timeline-rail {
+  background-size: 100% 200%;
+  animation: timelineRailGlow 3s linear infinite;
+}
+
+.animate-pulse-gold {
+  animation: pulseGoldGlow 3s ease-in-out infinite;
+}
+
+/* 8. Graduation Pattern Watermark Texture */
+.bg-graduation-watermark {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160' fill='none' stroke='%23000000' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M40 28 L15 40 L40 52 L65 40 Z'/%3E%3Cpath d='M25 45 V58 C25 64 55 64 55 58 V45'/%3E%3Cpath d='M60 42 V60 C60 62 58 64 58 66'/%3E%3Crect x='105' y='24' width='30' height='10' rx='3' transform='rotate(-25 105 24)'/%3E%3Cline x1='112' y1='18' x2='114' y2='28' stroke='%23b89728' stroke-width='1.5'/%3E%3Cpath d='M90 60 L92 65 L97 67 L92 69 L90 74 L88 69 L83 67 L88 65 Z' fill='%23b89728' stroke='none'/%3E%3Ccircle cx='20' cy='95' r='2' fill='%23000000' stroke='none'/%3E%3Cpath d='M125 110 L100 120 L125 130 L150 120 Z'/%3E%3Cpath d='M110 124 V134 C110 139 140 139 140 134 V124'/%3E%3Cpath d='M145 122 V138'/%3E%3Crect x='35' y='125' width='28' height='9' rx='2.5' transform='rotate(15 35 125)'/%3E%3Cpath d='M140 75 L141 78 L144 79 L141 80 L140 83 L139 80 L136 79 L139 78 Z' fill='%23000000' stroke='none'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 160px 160px;
+}
+
+.dark .bg-graduation-watermark,
+html.dark .bg-graduation-watermark {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160' fill='none' stroke='%23a1a1aa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M40 28 L15 40 L40 52 L65 40 Z' fill='%2371717a' fill-opacity='0.22'/%3E%3Cpath d='M25 45 V58 C25 64 55 64 55 58 V45' fill='%2371717a' fill-opacity='0.22'/%3E%3Cpath d='M60 42 V60 C60 62 58 64 58 66'/%3E%3Crect x='105' y='24' width='30' height='10' rx='3' transform='rotate(-25 105 24)' fill='%2371717a' fill-opacity='0.22'/%3E%3Cline x1='112' y1='18' x2='114' y2='28' stroke='%23d4af37' stroke-width='1.8'/%3E%3Cpath d='M90 60 L92 65 L97 67 L92 69 L90 74 L88 69 L83 67 L88 65 Z' fill='%23d4af37' stroke='none'/%3E%3Ccircle cx='20' cy='95' r='2' fill='%23a1a1aa' stroke='none'/%3E%3Cpath d='M125 110 L100 120 L125 130 L150 120 Z' fill='%2371717a' fill-opacity='0.22'/%3E%3Cpath d='M110 124 V134 C110 139 140 139 140 134 V124' fill='%2371717a' fill-opacity='0.22'/%3E%3Cpath d='M145 122 V138'/%3E%3Crect x='35' y='125' width='28' height='9' rx='2.5' transform='rotate(15 35 125)' fill='%2371717a' fill-opacity='0.22'/%3E%3Cpath d='M140 75 L141 78 L144 79 L141 80 L140 83 L139 80 L136 79 L139 78 Z' fill='%23d4af37' stroke='none'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 160px 160px;
+}
+
+/* 8. Gold Accents & Badges: Preserved with High Contrast */
+.dashboard-light .text-\[\#d4af37\] {
+  color: #b89728 !important;
+}
+
+/* 9. Preserve Functional Colored Action Buttons */
+.dashboard-light [class*="bg-emerald-500"],
+.dashboard-light [class*="bg-emerald-600"] {
+  background-color: #10b981 !important;
+  color: #000000 !important;
+}
+
+.dashboard-light [class*="bg-red-500"],
+.dashboard-light [class*="bg-red-600"] {
+  background-color: #ef4444 !important;
+  color: #ffffff !important;
+}
+
+.dashboard-light [class*="bg-amber-400"],
+.dashboard-light [class*="bg-amber-500"] {
+  background-color: #f59e0b !important;
+  color: #000000 !important;
+}
+
+.dashboard-light [class*="bg-[#d4af37]"] {
+  background-color: #d4af37 !important;
+  color: #000000 !important;
+}
+
