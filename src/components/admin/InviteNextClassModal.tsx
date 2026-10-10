@@ -384,6 +384,35 @@ export const InviteNextClassModal: React.FC<InviteNextClassModalProps> = ({
             </div>
           </div>
 
+          {/* Context Link Preview Card with Image of Graduates */}
+          <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5">
+            <div className="flex items-center justify-between text-[10px] font-mono-tech text-zinc-400">
+              <span className="uppercase font-semibold tracking-wider flex items-center gap-1.5 text-emerald-400">
+                <Sparkles className="w-3 h-3" />
+                Link Context Preview (Carries Graduates Photo)
+              </span>
+              <span>Department Legacy Wall</span>
+            </div>
+            <div className="flex items-center gap-3 p-2.5 rounded-xl bg-black/60 border border-white/10 overflow-hidden shadow-xs">
+              <img 
+                src={currentSet.legacyGroupImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=800&auto=format&fit=crop&q=80'} 
+                alt="Graduates" 
+                className="w-16 h-16 rounded-lg object-cover shrink-0 border border-white/10 shadow-xs" 
+              />
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <p className="font-syne font-bold text-xs text-white truncate">
+                  Baton Relay Handoff • Class of {nextGraduationYear}
+                </p>
+                <p className="font-body text-[11px] text-zinc-400 line-clamp-1">
+                  Passed forward by {currentSet.departmentName} (Class of {currentSet.graduationYear}) • {currentSet.institutionName || 'University'}
+                </p>
+                <p className="font-mono-tech text-[10px] text-amber-400 truncate">
+                  {inviteUrl}
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Secure Invitation Link Box */}
           <div className="space-y-2">
             <label className="block text-xs font-mono-tech uppercase tracking-wider text-zinc-300 font-semibold">

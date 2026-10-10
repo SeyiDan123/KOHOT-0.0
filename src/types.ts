@@ -75,6 +75,7 @@ export interface MemoryEventImage {
   rawUrl?: string; // Original uncropped image preserved across edits
   caption?: string;
   photographer?: string;
+  dateTime?: string;
 }
 
 export interface MemoryEvent {
@@ -336,6 +337,7 @@ export interface ClassSet {
   universityId?: string;
   universityName?: string;
   departmentCode?: string;
+  legacyFooterUrl?: string;
 }
 
 export interface PlaquePrivacySettings {
@@ -683,6 +685,8 @@ export interface WebsiteContentOverride {
   legacyPlaqueTourUrl?: string;
   annualReminderTourUrl?: string;
   legacyBannerImages?: string[]; // 4 banner images of a happy graduating class for fade-in/fade-out before album footer
+  executiveBlastImageUrl?: string; // Image of graduates for owner blast messages and department outreach links
+  executiveBlastMessageTemplate?: string; // Customizable message clip for blasting department executives
 
   // Editable Website Sections
   // 1. Hero Section

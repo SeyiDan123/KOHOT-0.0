@@ -588,10 +588,10 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                     setIsInviteDepartmentsOpen(true);
                   }}
                   className="w-full px-2.5 py-1.5 rounded-md hover:bg-white/10 text-[11px] font-mono-tech text-emerald-300 hover:text-emerald-200 flex items-center gap-2 transition-colors text-left cursor-pointer active:bg-white/15"
-                  title="Invite graduating class representatives of other departments to create their albums"
+                  title="Invite graduating class representatives of other departments to create their albums on the website"
                 >
                   <Building2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                  <span className="truncate">Invite Classes</span>
+                  <span className="truncate">Invite Departments</span>
                 </button>
               </div>
             )}

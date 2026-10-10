@@ -182,11 +182,14 @@ export function getStoredEmailTemplates(): Record<EmailEventType, EmailTemplate>
     const parsed = raw ? JSON.parse(raw) : {};
     const merged = { ...KOHOT_DEFAULT_TEMPLATES, ...parsed };
     const sanitized: Record<string, EmailTemplate> = {};
-    Object.entries(merged).forEach(([k, t]) => {
-      sanitized[k] = {
-        ...t,
-        name: t.name ? t.name.replace(/\s+Template$/i, ' Message') : t.name,
-      };
+    Object.entries(merged).forEach(([k, val]) => {
+      const t = val as EmailTemplate;
+      if (t && typeof t === 'object') {
+        sanitized[k] = {
+          ...t,
+          name: t.name ? t.name.replace(/\s+Template$/i, ' Message') : t.name,
+        };
+      }
     });
     return sanitized as Record<EmailEventType, EmailTemplate>;
   } catch (err) {

@@ -7,11 +7,15 @@ import { UniversalModal } from '../common/UniversalModal';
 import { 
   Crown, 
   Trash2, 
-  Crop
+  Crop,
+  Instagram,
+  Linkedin,
+  Facebook
 } from 'lucide-react';
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import { useFeedback } from '../common/FeedbackSystem';
 import { isValidEmail } from '../../utils/emailValidator';
+import { SocialUrlInputField } from '../common/SocialUrlInputField';
 
 interface EditStudentModalProps {
   isOpen: boolean;
@@ -39,6 +43,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
   const [email, setEmail] = useState('');
   const [instagramHandle, setInstagramHandle] = useState('');
   const [twitterHandle, setTwitterHandle] = useState('');
+  const [tiktokHandle, setTiktokHandle] = useState('');
   const [linkedinHandle, setLinkedinHandle] = useState('');
   const [facebookHandle, setFacebookHandle] = useState('');
   const [photoUrl, setPhotoUrl] = useState('');
@@ -58,6 +63,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
       setEmail(student.email || '');
       setInstagramHandle(student.socials?.instagram || (student.instagramOrTwitter && !student.instagramOrTwitter.includes('twitter.com') ? student.instagramOrTwitter : '') || '');
       setTwitterHandle(student.socials?.twitter || '');
+      setTiktokHandle(student.socials?.tiktok || '');
       setLinkedinHandle(student.socials?.linkedin || '');
       setFacebookHandle(student.socials?.facebook || '');
       setPhotoUrl(student.photoUrl || '');
@@ -78,6 +84,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
       email !== (student.email || '') ||
       instagramHandle !== (student.socials?.instagram || '') ||
       twitterHandle !== (student.socials?.twitter || '') ||
+      tiktokHandle !== (student.socials?.tiktok || '') ||
       linkedinHandle !== (student.socials?.linkedin || '') ||
       facebookHandle !== (student.socials?.facebook || '') ||
       photoUrl !== student.photoUrl
@@ -134,6 +141,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
           ...(student.socials || {}),
           instagram: instagramHandle.trim() || undefined,
           twitter: twitterHandle.trim() || undefined,
+          tiktok: tiktokHandle.trim() || undefined,
           linkedin: linkedinHandle.trim() || undefined,
           facebook: facebookHandle.trim() || undefined,
         },
@@ -163,6 +171,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
   const isPending = student.approved === false;
   const isLeader = position.trim().length > 0 && isLeaderProfile({ position });
   const isAdminProfile = Boolean(student.isClassRep || student.id.startsWith('admin-'));
+  const isDemoAlbum = Boolean(currentSet?.id?.startsWith('crownfield-') || currentSet?.institutionId === 'crownfield');
 
   return (
     <>
@@ -266,23 +275,25 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
                 setPhotoUrl(dataUrl);
                 setRawPhotoUrl(dataUrl);
               }}
-              aspectRatio="portrait"
+              aspectRatio="1:1"
               maxDimension={720}
-              helperText="Drag & drop or click to upload portrait photo. Automatically optimized for clarity and speed."
+              helperText="Drag & drop or click to upload square portrait photo. Automatically optimized for clarity and speed."
             />
 
             {photoUrl && (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-white/10">
-                {/* Subtle Before & After Compression Stats */}
-                <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono-tech text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>
-                    Original: {student.originalSizeKb ? (student.originalSizeKb > 1024 ? `${(student.originalSizeKb / 1024).toFixed(1)} MB` : `${student.originalSizeKb} KB`) : '1.8 MB'} 
-                    {' → '} 
-                    Compressed: {student.compressedSizeKb ? `${student.compressedSizeKb} KB` : `${Math.max(120, Math.round((photoUrl.length * 0.75) / 1024))} KB`} 
-                    <span className="text-emerald-700 dark:text-emerald-300 font-bold ml-1">(-91% optimized)</span>
-                  </span>
-                </div>
+                {/* Subtle Before & After Compression Stats - only visible for Demo albums */}
+                {isDemoAlbum ? (
+                  <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono-tech text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>
+                      Original: {student.originalSizeKb ? (student.originalSizeKb > 1024 ? `${(student.originalSizeKb / 1024).toFixed(1)} MB` : `${student.originalSizeKb} KB`) : '1.8 MB'} 
+                      {' → '} 
+                      Compressed: {student.compressedSizeKb ? `${student.compressedSizeKb} KB` : `${Math.max(120, Math.round((photoUrl.length * 0.75) / 1024))} KB`} 
+                      <span className="text-emerald-700 dark:text-emerald-300 font-bold ml-1">(-91% optimized)</span>
+                    </span>
+                  </div>
+                ) : <div />}
 
                 <button
                   type="button"
@@ -355,39 +366,6 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
               placeholder="e.g. Social Director or Class Rep"
               className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none text-xs"
             />
-
-            {/* Pocket list of common roles */}
-            <div className="pt-1">
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-[10px] font-mono-tech">
-                <span className="text-slate-500 dark:text-zinc-500 shrink-0 font-semibold">Pocket list:</span>
-                {[
-                  'Class President',
-                  'Vice President',
-                  'General Secretary',
-                  'Financial Secretary',
-                  'Public Relations Officer (P.R.O)',
-                  'Director of Socials',
-                  'Director of Sports',
-                  'Academic Secretary',
-                  'Welfare Secretary',
-                  'Valedictorian',
-                  'Graduate',
-                ].map((roleItem) => (
-                  <button
-                    key={roleItem}
-                    type="button"
-                    onClick={() => setPosition(roleItem)}
-                    className={`px-2 py-0.5 rounded-md border shrink-0 transition-colors cursor-pointer ${
-                      position === roleItem
-                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40 font-bold'
-                        : 'bg-slate-100 dark:bg-[#121420] hover:bg-slate-200 dark:hover:bg-white/10 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-white/10'
-                    }`}
-                  >
-                    {roleItem}
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
 
           {/* Quote */}
@@ -435,67 +413,67 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
             </p>
           </div>
 
-          {/* Social Profiles Matching Invite Form Exactly (All 4 Fields) */}
-          <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-white/10">
+          {/* Social Profiles with URL Prefixes */}
+          <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-white/10">
             <div>
               <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
                 Social Profiles <span className="text-slate-500 dark:text-zinc-500 lowercase font-normal">(optional)</span>
               </label>
-              <p className="text-[10px] text-slate-500 dark:text-zinc-400 font-mono-tech">
-                Editable by admin if classmate requested updates or links were added later.
-              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-zinc-400 mb-1 font-semibold">
-                  Instagram
-                </label>
-                <input
-                  type="text"
-                  value={instagramHandle}
-                  onChange={(e) => setInstagramHandle(e.target.value)}
-                  placeholder="e.g. @username"
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none font-mono-tech"
-                />
-              </div>
+              <SocialUrlInputField
+                label="Instagram"
+                prefix="instagram.com/"
+                value={instagramHandle}
+                onChange={setInstagramHandle}
+                placeholder="username"
+                icon={<Instagram className="w-3 h-3 text-[#E1306C]" />}
+              />
 
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-zinc-400 mb-1 font-semibold">
-                  X
-                </label>
-                <input
-                  type="text"
-                  value={twitterHandle}
-                  onChange={(e) => setTwitterHandle(e.target.value)}
-                  placeholder="e.g. @handle"
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none font-mono-tech"
-                />
-              </div>
+              <SocialUrlInputField
+                label="TikTok"
+                prefix="tiktok.com/@"
+                value={tiktokHandle}
+                onChange={setTiktokHandle}
+                placeholder="username"
+                icon={
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="w-3 h-3 fill-current text-slate-900 dark:text-white">
+                    <path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-5.201 1.743l-.068-.102a2.895 2.895 0 0 1 2.373-4.538c.328 0 .644.055.938.156V9.43a6.33 6.33 0 0 0-.938-.07 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.756a8.196 8.196 0 0 0 4.771 1.517V6.828c-.352 0-.691-.049-1-.142z"/>
+                  </svg>
+                }
+              />
 
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-zinc-400 mb-1 font-semibold">
-                  LinkedIn
-                </label>
-                <input
-                  type="text"
-                  value={linkedinHandle}
-                  onChange={(e) => setLinkedinHandle(e.target.value)}
-                  placeholder="e.g. linkedin.com/in/username"
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none font-mono-tech"
-                />
-              </div>
+              <SocialUrlInputField
+                label="X"
+                prefix="x.com/"
+                value={twitterHandle}
+                onChange={setTwitterHandle}
+                placeholder="handle"
+                icon={
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="w-3 h-3 fill-current text-slate-900 dark:text-white">
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                  </svg>
+                }
+              />
 
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-zinc-400 mb-1 font-semibold">
-                  Facebook
-                </label>
-                <input
-                  type="text"
+              <SocialUrlInputField
+                label="LinkedIn"
+                prefix="linkedin.com/in/"
+                value={linkedinHandle}
+                onChange={setLinkedinHandle}
+                placeholder="username"
+                icon={<Linkedin className="w-3 h-3 text-[#0077b5]" />}
+              />
+
+              <div className="sm:col-span-2">
+                <SocialUrlInputField
+                  label="Facebook"
+                  prefix="facebook.com/"
                   value={facebookHandle}
-                  onChange={(e) => setFacebookHandle(e.target.value)}
-                  placeholder="e.g. facebook.com/username"
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none font-mono-tech"
+                  onChange={setFacebookHandle}
+                  placeholder="username"
+                  icon={<Facebook className="w-3 h-3 text-[#1877F2]" />}
                 />
               </div>
             </div>
@@ -512,10 +490,10 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
           setPhotoUrl(croppedUrl);
           setIsCropModalOpen(false);
         }}
-        initialAspectRatio="4:5"
+        initialAspectRatio="1:1"
         isProfileSubmission={true}
         title="Position &amp; Crop Portrait"
-        helperText="Move the 4:5 portrait frame across your photo for official class album display."
+        helperText="Move the square portrait frame across your photo for official class album display."
       />
     </>
   );

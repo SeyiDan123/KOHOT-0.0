@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UniversityDirectoryItem, ClassSet, StudentProfile, DepartmentItem, EmailEventType, EmailLog, EmailTemplate } from '../../types';
+import { UniversityDirectoryItem, ClassSet, StudentProfile, DepartmentItem, EmailEventType, EmailLog, EmailTemplate, WebsiteContentOverride } from '../../types';
 import { DepartmentAnnualRemindersModal } from './DepartmentAnnualRemindersModal';
+import { ImageDropzone } from '../common/ImageDropzone';
 import {
   getStoredEmailTemplates,
   saveStoredEmailTemplates,
@@ -38,12 +39,18 @@ import {
   Download,
   Filter,
   Sliders,
-  Bell
+  Bell,
+  MessageCircle,
+  Smartphone,
+  Share2,
+  ArrowRight
 } from 'lucide-react';
 
 interface MasterAnnualRemindersSectionProps {
   universities: UniversityDirectoryItem[];
   sets: ClassSet[];
+  contentOverride?: WebsiteContentOverride;
+  onUpdateContentOverride?: (content: WebsiteContentOverride) => void;
 }
 
 // Helper to resolve student email with realistic fallback for demo
@@ -70,9 +77,52 @@ export function getGraduateEmail(student: StudentProfile, uniShortCode: string):
 export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSectionProps> = ({
   universities,
   sets,
+  contentOverride,
+  onUpdateContentOverride,
 }) => {
-  // Main Section Navigation: Directory & Reminders vs Templates vs Audit History
-  const [communicationsTab, setCommunicationsTab] = useState<'directory' | 'templates' | 'audit_history'>('directory');
+  // Main Section Navigation: Directory & Reminders vs Executive Blast vs Templates vs Audit History
+  const [communicationsTab, setCommunicationsTab] = useState<'directory' | 'executive_blast' | 'templates' | 'audit_history'>('directory');
+
+  // Executive Outreach Blast State
+  const defaultBlastImg = contentOverride?.executiveBlastImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85';
+  const [blastImageUrl, setBlastImageUrl] = useState<string>(defaultBlastImg);
+  const [targetBlastAudience, setTargetBlastAudience] = useState<string>('all');
+  const [blastMessageClip, setBlastMessageClip] = useState<string>(() => {
+    return contentOverride?.executiveBlastMessageTemplate ||
+`Hello Department Executives & Student Leaders,
+
+Preserve the heritage, memories, and individual student achievements of your department's graduating class on KoHot.
+
+Establish your official Department Class Album, install your corridor Legacy Plaque, and ensure your graduating set is remembered across generations.
+
+Create your Class Album today at:
+{{website_url}}
+
+KoHot — Beautiful graduate memories live here.`;
+  });
+  const [isSendingExecBlast, setIsSendingExecBlast] = useState(false);
+  const [execBlastToast, setExecBlastToast] = useState<string | null>(null);
+  const [copiedBlastLink, setCopiedBlastLink] = useState(false);
+  const [copiedBlastMessage, setCopiedBlastMessage] = useState(false);
+  const [imageSaveToast, setImageSaveToast] = useState(false);
+
+  useEffect(() => {
+    if (contentOverride?.executiveBlastImageUrl) {
+      setBlastImageUrl(contentOverride.executiveBlastImageUrl);
+    }
+  }, [contentOverride?.executiveBlastImageUrl]);
+
+  const handleUpdateBlastImage = (newUrl: string) => {
+    setBlastImageUrl(newUrl);
+    if (onUpdateContentOverride && contentOverride) {
+      onUpdateContentOverride({
+        ...contentOverride,
+        executiveBlastImageUrl: newUrl,
+      });
+      setImageSaveToast(true);
+      setTimeout(() => setImageSaveToast(false), 3000);
+    }
+  };
 
   // Directory & Reminders States
   const [viewMode, setViewMode] = useState<'hierarchy' | 'flat'>('hierarchy');
@@ -367,6 +417,20 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
 
           <button
             type="button"
+            id="tab-comms-exec-blast"
+            onClick={() => setCommunicationsTab('executive_blast')}
+            className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              communicationsTab === 'executive_blast'
+                ? 'bg-[#d4af37] text-black font-bold shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Send className="w-3.5 h-3.5 text-black" />
+            <span>Department Executives Blast</span>
+          </button>
+
+          <button
+            type="button"
             id="tab-comms-templates"
             onClick={() => setCommunicationsTab('templates')}
             className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
@@ -619,7 +683,425 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
       )}
 
       {/* =========================================================================
-          VIEW 2: EMAIL TEMPLATES STUDIO (WITH DYNAMIC VARIABLES)
+          VIEW 2: DEPARTMENT EXECUTIVES ALBUM BLAST & LINK CONTEXT ASSET MANAGER
+          Clip section where the owner can blast messages to department executives
+          to create their album, landing on the website page with an editable graduate image.
+          ========================================================================= */}
+      {communicationsTab === 'executive_blast' && (
+        <div className="space-y-8 animate-fadeIn" id="executive-blast-section">
+          {/* Section Overview Header */}
+          <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-2">
+            <div className="flex items-center gap-2 text-[#d4af37]">
+              <Sparkles className="w-4 h-4" />
+              <span className="font-mono-tech text-[11px] uppercase tracking-wider font-bold">
+                Executive Outreach &amp; Album Creation Engine
+              </span>
+            </div>
+            <h3 className="font-syne font-black text-xl sm:text-2xl text-white">
+              Blast Outreach to Department Executives
+            </h3>
+            <p className="font-body text-xs sm:text-sm text-zinc-300 max-w-3xl leading-relaxed">
+              Compose and dispatch broadcast messages directly to department executive leadership and student union representatives across universities inviting them to create their graduating class album. Links sent here land directly on the <strong>KoHot website homepage</strong>.
+            </p>
+          </div>
+
+          {/* Toast notices */}
+          {execBlastToast && (
+            <div className="p-4 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs font-mono-tech flex items-center gap-3 animate-fadeIn shadow-xl">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{execBlastToast}</span>
+            </div>
+          )}
+
+          {imageSaveToast && (
+            <div className="p-4 rounded-2xl bg-[#d4af37]/20 border border-[#d4af37]/40 text-[#d4af37] text-xs font-mono-tech flex items-center gap-3 animate-fadeIn shadow-xl">
+              <Check className="w-4 h-4 text-[#d4af37] shrink-0" />
+              <span>Broadcast Link Context Image updated and saved permanently to platform assets!</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            {/* LEFT COLUMN: CONTEXT IMAGE EDITOR & MESSAGE COMPOSER */}
+            <div className="lg:col-span-7 space-y-6">
+              {/* AREA 1: CONTEXT IMAGE MANAGER (GRADUATES PHOTO) */}
+              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-5 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-white/10 gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <ImageIcon className="w-5 h-5 text-[#d4af37]" />
+                    <div>
+                      <h4 className="font-syne font-bold text-sm text-white">
+                        Platform Links Context Image (Graduates Photo)
+                      </h4>
+                      <p className="text-zinc-400 text-xs font-body mt-0.5">
+                        Carried across blast message links, Next Class relay links, and Other Department invites.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85')}
+                    className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs self-start sm:self-auto cursor-pointer transition-colors"
+                  >
+                    Reset to Default
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <ImageDropzone
+                    value={blastImageUrl}
+                    onChange={(url) => handleUpdateBlastImage(url)}
+                    aspectRatio="16:9"
+                    maxDimension={1200}
+                    helperText="Upload or drag & drop a high-resolution photo of graduating students/celebration. Automatically optimized for social cards."
+                  />
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-mono-tech uppercase text-zinc-400 font-semibold">
+                      Direct Context Image URL
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={blastImageUrl}
+                        onChange={(e) => setBlastImageUrl(e.target.value)}
+                        placeholder="https://images.unsplash.com/photo-..."
+                        className="flex-1 px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-[#d4af37]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateBlastImage(blastImageUrl)}
+                        className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs cursor-pointer border border-white/20 transition-colors"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Presets */}
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar text-[11px] font-mono-tech">
+                    <span className="text-zinc-500 shrink-0 font-semibold">Presets:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85')}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
+                    >
+                      Graduation Caps
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1600&auto=format&fit=crop&q=85')}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
+                    >
+                      Cohort Convocation
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1600&auto=format&fit=crop&q=85')}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
+                    >
+                      Alumni Group Smile
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* AREA 2: MESSAGE CLIP COMPOSER */}
+              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-5 shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                  <div className="flex items-center gap-2">
+                    <Edit3 className="w-4 h-4 text-[#d4af37]" />
+                    <h4 className="font-syne font-bold text-sm text-white">
+                      Executive Outreach Message Clip
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-mono-tech text-zinc-500 uppercase">
+                    Variable: {'{{website_url}}'}
+                  </span>
+                </div>
+
+                {/* Audience Selector */}
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-mono-tech uppercase text-zinc-400 font-semibold">
+                    Target Department Executives Audience
+                  </label>
+                  <select
+                    value={targetBlastAudience}
+                    onChange={(e) => setTargetBlastAudience(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-[#d4af37]"
+                  >
+                    <option value="all">
+                      All Universities &amp; All Departments ({universities.reduce((acc, u) => acc + (u.departments?.length || 0), 0)} Departments)
+                    </option>
+                    {universities.map((uni) => (
+                      <option key={uni.id} value={uni.id}>
+                        {uni.name} ({uni.departments?.length || 0} Departments)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Destination Link Info Box */}
+                <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono-tech text-[10px] uppercase text-zinc-400 font-bold">
+                      Destination Landing Link
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px]">
+                      Lands on Website Homepage
+                    </span>
+                  </div>
+                  <p className="font-mono-tech text-xs text-[#d4af37] break-all select-all">
+                    {typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast'}
+                  </p>
+                </div>
+
+                {/* Textarea */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[11px] font-mono-tech uppercase text-zinc-400 font-semibold">
+                      Outreach Message Text *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setBlastMessageClip((prev) => prev + ' {{website_url}}')}
+                      className="text-[10px] font-mono-tech text-[#d4af37] hover:underline cursor-pointer"
+                    >
+                      + Insert {'{{website_url}}'}
+                    </button>
+                  </div>
+                  <textarea
+                    rows={8}
+                    value={blastMessageClip}
+                    onChange={(e) => setBlastMessageClip(e.target.value)}
+                    className="w-full p-4 rounded-2xl bg-black/60 border border-white/15 text-white text-xs font-body leading-relaxed focus:outline-none focus:border-[#d4af37] resize-y"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[10px] font-mono-tech text-zinc-500">
+                    Auto-interpolates website URL when dispatched
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onUpdateContentOverride && contentOverride) {
+                        onUpdateContentOverride({
+                          ...contentOverride,
+                          executiveBlastMessageTemplate: blastMessageClip,
+                        });
+                        setExecBlastToast('Message template saved to platform configuration!');
+                        setTimeout(() => setExecBlastToast(null), 3000);
+                      }
+                    }}
+                    className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer border border-white/15"
+                  >
+                    Save As Default Template
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT COLUMN: LIVE CONTEXT CARD PREVIEW & DISPATCH BAR */}
+            <div className="lg:col-span-5 space-y-6">
+              {/* LIVE SOCIAL / MESSAGING CARD PREVIEW */}
+              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                  <div className="flex items-center gap-2">
+                    <Share2 className="w-4 h-4 text-[#d4af37]" />
+                    <h4 className="font-syne font-bold text-sm text-white">
+                      Shared Link Card Preview
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-mono-tech text-emerald-400">
+                    Live Context Preview
+                  </span>
+                </div>
+
+                <p className="text-zinc-400 text-xs font-body">
+                  When recipients receive this link via WhatsApp, Telegram, or social media, it displays the visual card below with your graduate image:
+                </p>
+
+                {/* Simulated Social Card */}
+                <div className="rounded-2xl border border-white/15 bg-black overflow-hidden shadow-2xl transition-all hover:border-[#d4af37]/40">
+                  <div className="relative aspect-[16/9] w-full overflow-hidden bg-black/80">
+                    <img
+                      src={blastImageUrl}
+                      alt="Graduates Context"
+                      className="w-full h-full object-cover filter contrast-[1.05]"
+                    />
+                    <div className="absolute top-3 left-3 px-2.5 py-0.5 rounded-full bg-black/70 backdrop-blur-md border border-white/20 text-[10px] font-mono-tech uppercase text-[#d4af37] font-bold">
+                      KoHot Album Platform
+                    </div>
+                  </div>
+
+                  <div className="p-4 space-y-2 bg-[#121420]">
+                    <span className="text-[10px] font-mono-tech uppercase text-zinc-500 font-bold block">
+                      kohot.com • Direct Department Invitation
+                    </span>
+                    <h5 className="font-syne font-bold text-sm text-white leading-snug">
+                      Preserve Your Department Class Album — KoHot
+                    </h5>
+                    <p className="text-zinc-400 text-xs line-clamp-2 leading-relaxed">
+                      Establish the official permanent archive and corridor Legacy Plaque for your graduating class. Beautiful graduate memories live here.
+                    </p>
+                    <div className="pt-2 border-t border-white/10 flex items-center justify-between">
+                      <span className="text-[10px] font-mono-tech text-emerald-400 font-semibold">
+                        Destination: Website Homepage
+                      </span>
+                      <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* MULTI-CHANNEL DISPATCH BAR */}
+              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
+                <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
+                  <Send className="w-4 h-4 text-[#d4af37]" />
+                  <span>Outreach &amp; Dispatch Channels</span>
+                </h4>
+
+                {/* Primary Blast Email Action */}
+                <button
+                  type="button"
+                  id="blast-email-to-executives-btn"
+                  disabled={isSendingExecBlast}
+                  onClick={() => {
+                    setIsSendingExecBlast(true);
+                    setTimeout(() => {
+                      const allDepts = universities
+                        .filter((u) => targetBlastAudience === 'all' || u.id === targetBlastAudience)
+                        .flatMap((u) => (u.departments || []).map((d) => ({ dept: d, uni: u })));
+
+                      allDepts.slice(0, 15).forEach(({ dept, uni }) => {
+                        const email = dept.officialPortal && dept.officialPortal.includes('@')
+                          ? dept.officialPortal
+                          : `executives.${dept.code?.toLowerCase() || 'admin'}@${uni.shortCode.toLowerCase()}.edu.ng`;
+                        logAndDispatchEmail({
+                          event: 'class_album_is_live',
+                          recipientEmail: email,
+                          recipientName: dept.hodName || `${dept.name} Executives`,
+                          variables: {
+                            recipientName: dept.hodName || `${dept.name} Executives`,
+                            departmentName: dept.name,
+                            graduationYear: 2026,
+                            institutionName: uni.name,
+                            albumUrl: `${window.location.origin}/?ref=dept_exec_blast`,
+                            legacyPlaqueDetails: `${uni.name} Corridors`,
+                          },
+                          metadata: {
+                            departmentName: dept.name,
+                          },
+                        });
+                      });
+
+                      setEmailLogs(getStoredEmailLogs());
+                      setIsSendingExecBlast(false);
+                      setExecBlastToast(`Dispatched executive invitation clip to ${allDepts.length} department executive portals!`);
+                      setTimeout(() => setExecBlastToast(null), 5000);
+                    }, 1200);
+                  }}
+                  className="w-full py-3.5 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 disabled:opacity-50"
+                >
+                  <Send className="w-4 h-4 text-black" />
+                  <span>{isSendingExecBlast ? 'Dispatching...' : 'Blast Email to Department Executives'}</span>
+                </button>
+
+                {/* Messaging Channels Grid */}
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  {/* WhatsApp */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
+                      window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
+                    }}
+                    className="p-3 rounded-2xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/30 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-semibold cursor-pointer transition-all hover:scale-[1.02]"
+                  >
+                    <MessageCircle className="w-4 h-4 text-[#25D366]" />
+                    <span>WhatsApp</span>
+                  </button>
+
+                  {/* Telegram */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
+                      window.open(`https://t.me/share/url?url=${encodeURIComponent(webUrl)}&text=${encodeURIComponent(msg)}`, '_blank');
+                    }}
+                    className="p-3 rounded-2xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-semibold cursor-pointer transition-all hover:scale-[1.02]"
+                  >
+                    <Send className="w-4 h-4 text-sky-400" />
+                    <span>Telegram</span>
+                  </button>
+
+                  {/* Copy Link */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      navigator.clipboard.writeText(webUrl);
+                      setCopiedBlastLink(true);
+                      setTimeout(() => setCopiedBlastLink(false), 3000);
+                    }}
+                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all hover:scale-[1.02]"
+                  >
+                    {copiedBlastLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    <span>{copiedBlastLink ? 'Link Copied!' : 'Copy Link'}</span>
+                  </button>
+
+                  {/* Device Native Share */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
+                      if (navigator.share) {
+                        navigator.share({
+                          title: 'Create Your Department Class Album — KoHot',
+                          text: msg,
+                          url: webUrl,
+                        }).catch(() => {});
+                      } else {
+                        navigator.clipboard.writeText(msg);
+                        setCopiedBlastMessage(true);
+                        setTimeout(() => setCopiedBlastMessage(false), 3000);
+                      }
+                    }}
+                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all hover:scale-[1.02]"
+                  >
+                    <Share2 className="w-4 h-4 text-[#d4af37]" />
+                    <span>Native Share</span>
+                  </button>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
+                      navigator.clipboard.writeText(msg);
+                      setCopiedBlastMessage(true);
+                      setTimeout(() => setCopiedBlastMessage(false), 3000);
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-300 font-mono-tech text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    {copiedBlastMessage ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedBlastMessage ? 'Full Clip & Link Copied!' : 'Copy Full Message Text & Link'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          VIEW 3: EMAIL TEMPLATES STUDIO (WITH DYNAMIC VARIABLES)
           ========================================================================= */}
       {communicationsTab === 'templates' && (
         <div className="space-y-6 animate-fadeIn">

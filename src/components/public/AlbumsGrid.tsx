@@ -128,10 +128,20 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     return list;
   }, [universities]);
 
-  // Only the 4 demo albums from the owner dashboard show on the legacy wall
-  const currentUniversity = CROWNFIELD_UNIVERSITY;
-  const currentDepartment = CROWNFIELD_UNIVERSITY.departments[0];
-  const universityDisplayName = 'Crownfield University (CU)';
+  // Check if viewing a specific unlisted department accessed via direct link
+  const isDirectSharedDept = Boolean(controlledDeptId && controlledDeptId !== 'dept-crownfield-public-law');
+
+  const targetSharedUni = isDirectSharedDept
+    ? universities.find((u) => u.id === controlledUniId || u.departments?.some((d) => d.id === controlledDeptId)) || CROWNFIELD_UNIVERSITY
+    : CROWNFIELD_UNIVERSITY;
+
+  const targetSharedDept = isDirectSharedDept
+    ? targetSharedUni.departments?.find((d) => d.id === controlledDeptId) || CROWNFIELD_UNIVERSITY.departments[0]
+    : CROWNFIELD_UNIVERSITY.departments[0];
+
+  const currentUniversity = targetSharedUni;
+  const currentDepartment = targetSharedDept;
+  const universityDisplayName = isDirectSharedDept ? currentUniversity.name : 'Crownfield University (CU)';
   const universityDepartments = currentUniversity.departments;
 
   const handleSelectUni = (uniId: string) => {
@@ -142,8 +152,12 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     setActiveDeptId(deptId);
   };
 
-  // Filtered sets based exclusively on the 4 demo albums from the owner dashboard
+  // Filtered sets: if accessed via direct class/dept share link, show that department's sets.
+  // Otherwise, public legacy wall demo strictly displays ONLY the 4 Crownfield Demo albums!
   const displayedSets = useMemo(() => {
+    if (isDirectSharedDept) {
+      return sets.filter((s) => s.departmentId === controlledDeptId).sort((a, b) => b.graduationYear - a.graduationYear);
+    }
     const demoIds = ['crownfield-law-2026', 'crownfield-law-2025', 'crownfield-law-2024', 'crownfield-law-2023'];
     const matched = sets.filter((s) => demoIds.includes(s.id));
     if (matched.length === 4) {
@@ -151,7 +165,7 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     }
     const merged = demoIds.map((id) => sets.find((s) => s.id === id) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === id)!);
     return merged.filter(Boolean).sort((a, b) => b.graduationYear - a.graduationYear);
-  }, [sets]);
+  }, [sets, isDirectSharedDept, controlledDeptId]);
 
   // Total student portraits archived in this selection
   const totalPortraits = useMemo(() => {
@@ -198,6 +212,15 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
 
   const departmentSets = displayedSets;
   const isAlbumAdmin = currentUser?.role === 'class_rep' || currentUser?.role === 'master_host';
+  const isPlaqueOrSharedWall = Boolean(
+    isDirectSharedDept ||
+    (typeof window !== 'undefined' && (
+      window.location.search.includes('plaque') ||
+      window.location.search.includes('scan') ||
+      window.location.search.includes('dept') ||
+      window.location.hash.includes('dept-')
+    ))
+  );
 
   // Chronologically sorted with latest cohort at the top (e.g. 2026 down to 2023)
   const timelineSets = useMemo(() => {
@@ -268,38 +291,57 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
           : 'bg-[#121214]/95 border-zinc-800 text-white'
       }`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 relative z-10">
-          <button
-            id="legacy-wall-top-kohot-btn"
-            type="button"
-            onClick={() => {
-              if (currentUser?.role === 'class_rep') {
-                return; // Return to website is only possible via log out under profile icon
-              }
-              if (onBackToLanding) {
-                onBackToLanding();
-              } else {
-                window.location.hash = '#home';
-              }
-              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-            }}
-            className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
-              isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
-            }`}
-            title="Return to KoHot Website"
-          >
-            <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
-              isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
-            }`}>
-              <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
-                isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
-              }`} />
+          {isPlaqueOrSharedWall || currentUser?.role === 'class_rep' ? (
+            <div
+              id="legacy-wall-top-kohot-badge"
+              className={`flex items-center gap-2.5 select-none ${
+                isLightMode ? 'text-slate-900' : 'text-white'
+              }`}
+            >
+              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center shadow-xs ${
+                isLightMode ? 'bg-slate-100 border-slate-200' : 'bg-white/10 border-white/20'
+              }`}>
+                <div className={`w-2.5 h-2.5 rotate-45 ${
+                  isLightMode ? 'bg-slate-900' : 'bg-white'
+                }`} />
+              </div>
+              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase ${
+                isLightMode ? 'text-slate-900' : 'text-white'
+              }`}>
+                KoHot
+              </span>
             </div>
-            <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
-              isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
-            }`}>
-              KoHot
-            </span>
-          </button>
+          ) : (
+            <button
+              id="legacy-wall-top-kohot-btn"
+              type="button"
+              onClick={() => {
+                if (onBackToLanding) {
+                  onBackToLanding();
+                } else {
+                  window.location.hash = '#home';
+                }
+                window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+              }}
+              className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
+                isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
+              }`}
+              title="Return to KoHot Website"
+            >
+              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
+                isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
+              }`}>
+                <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
+                  isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
+                }`} />
+              </div>
+              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
+                isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
+              }`}>
+                KoHot
+              </span>
+            </button>
+          )}
 
           <div className="flex items-center gap-3">
             {/* Context-aware Light/Dark Mode Switcher */}
@@ -487,82 +529,84 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
 
                 {/* Train Carriages Grid / List */}
                 <div className="space-y-6 sm:space-y-8">
-                  {/* Next Year Continuation Album Card on Timeline */}
-                  <div className="relative group animate-slide-up-fade">
-                    {/* Side Timeline Bar Year Station Node */}
-                    <div className="absolute -left-7 sm:-left-12 md:-left-14 top-6 -translate-x-1/2 z-20 flex items-center justify-center pointer-events-none">
-                      <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[10px] sm:text-[11px] font-mono-tech font-bold border-2 border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 shadow-md">
-                        <span>{nextContinuationYear}</span>
-                      </div>
-                    </div>
-
-                    {/* Connector Link between Timeline Bar and Card */}
-                    <div className="absolute -left-3.5 sm:-left-6 md:-left-7 top-9 w-3.5 sm:w-6 md:w-7 h-px bg-amber-400 pointer-events-none" />
-
-                    {/* Continuation Card Styled Like Album Card */}
-                    <div
-                      id="next-class-continuation-card"
-                      onClick={() => {
-                        if (inviteContext && onOpenOnboardingWithInvite) {
-                          onOpenOnboardingWithInvite({
-                            inviteCode: inviteContext.inviteCode || 'CONTINUATION',
-                            departmentId: currentDepartment.id,
-                            universityId: currentUniversity.id,
-                            targetYear: nextContinuationYear,
-                            fromYear: nextContinuationYear - 1,
-                          });
-                        } else {
-                          onOpenOnboarding();
-                        }
-                      }}
-                      className={`group/card relative rounded-2xl border-2 border-dashed border-amber-500/50 overflow-hidden transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl cursor-pointer select-none max-w-4xl ${
-                        isLightMode
-                          ? 'bg-amber-50/40 hover:bg-amber-50/70 text-zinc-900 shadow-sm'
-                          : 'bg-[#18181b]/80 hover:bg-[#18181b] text-white shadow-md'
-                      }`}
-                    >
-                      <div className="flex flex-col md:flex-row items-stretch">
-                        <div className="relative h-44 sm:h-48 md:h-auto md:w-72 lg:w-80 shrink-0 overflow-hidden bg-amber-500/10 flex flex-col items-center justify-center p-6 text-center">
-                          <span className="font-mono-tech text-[10px] uppercase tracking-widest text-[#d4af37] font-bold">
-                            Incoming Relay Station
-                          </span>
-                          <h4 className="font-syne font-extrabold text-2xl text-slate-900 dark:text-white mt-1">
-                            Class of {nextContinuationYear}
-                          </h4>
-                          <span className="text-[11px] font-mono-tech text-amber-600 dark:text-amber-400 mt-1 font-semibold">
-                            Upcoming Cohort Album
-                          </span>
-                        </div>
-
-                        <div className="p-5 sm:p-6 flex-1 flex flex-col justify-between">
-                          <div className="space-y-2">
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech font-bold uppercase tracking-wider bg-amber-500/15 text-amber-900 dark:text-amber-300 border border-amber-500/30 inline-block">
-                              {nextContinuationYear} Continuation
-                            </span>
-                            <h3 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white group-hover/card:text-[#d4af37] transition-colors">
-                              {currentDepartment.name} — Class of {nextContinuationYear}
-                            </h3>
-                            <p className={`font-body text-xs leading-relaxed max-w-2xl ${isLightMode ? 'text-slate-600' : 'text-zinc-300'}`}>
-                              The continuous legacy train moves forward! Start your cohort album to join the continuous legacy train and preserve your class milestone.
-                            </p>
-                          </div>
-
-                          <div className={`pt-4 mt-3 border-t flex items-center justify-between text-xs ${isLightMode ? 'border-amber-200/60' : 'border-amber-500/20'}`}>
-                            <span className="text-[11px] font-mono-tech text-[#d4af37] font-semibold">
-                              Open for Class Album Admin
-                            </span>
-                            <button
-                              type="button"
-                              className="px-4 py-2 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
-                            >
-                              <span>Create Class Album</span>
-                              <ArrowRight className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                  {/* Next Year Continuation Album Card on Timeline - Strictly reserved for invited new class set admin */}
+                  {inviteContext && (
+                    <div className="relative group animate-slide-up-fade">
+                      {/* Side Timeline Bar Year Station Node */}
+                      <div className="absolute -left-7 sm:-left-12 md:-left-14 top-6 -translate-x-1/2 z-20 flex items-center justify-center pointer-events-none">
+                        <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[10px] sm:text-[11px] font-mono-tech font-bold border-2 border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 shadow-md">
+                          <span>{nextContinuationYear}</span>
                         </div>
                       </div>
+
+                      {/* Connector Link between Timeline Bar and Card */}
+                      <div className="absolute -left-3.5 sm:-left-6 md:-left-7 top-9 w-3.5 sm:w-6 md:w-7 h-px bg-amber-400 pointer-events-none" />
+
+                      {/* Continuation Card Styled Like Album Card */}
+                      <div
+                        id="next-class-continuation-card"
+                        onClick={() => {
+                          if (inviteContext && onOpenOnboardingWithInvite) {
+                            onOpenOnboardingWithInvite({
+                              inviteCode: inviteContext.inviteCode || 'CONTINUATION',
+                              departmentId: currentDepartment.id,
+                              universityId: currentUniversity.id,
+                              targetYear: nextContinuationYear,
+                              fromYear: nextContinuationYear - 1,
+                            });
+                          } else {
+                            onOpenOnboarding();
+                          }
+                        }}
+                        className={`group/card relative rounded-2xl border-2 border-dashed border-amber-500/50 overflow-hidden transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl cursor-pointer select-none max-w-4xl ${
+                          isLightMode
+                            ? 'bg-amber-50/40 hover:bg-amber-50/70 text-zinc-900 shadow-sm'
+                            : 'bg-[#18181b]/80 hover:bg-[#18181b] text-white shadow-md'
+                        }`}
+                      >
+                        <div className="flex flex-col md:flex-row items-stretch">
+                          <div className="relative h-44 sm:h-48 md:h-auto md:w-72 lg:w-80 shrink-0 overflow-hidden bg-amber-500/10 flex flex-col items-center justify-center p-6 text-center">
+                            <span className="font-mono-tech text-[10px] uppercase tracking-widest text-[#d4af37] font-bold">
+                              Incoming Relay Station
+                            </span>
+                            <h4 className="font-syne font-extrabold text-2xl text-slate-900 dark:text-white mt-1">
+                              Class of {nextContinuationYear}
+                            </h4>
+                            <span className="text-[11px] font-mono-tech text-amber-600 dark:text-amber-400 mt-1 font-semibold">
+                              Upcoming Cohort Album
+                            </span>
+                          </div>
+
+                          <div className="p-5 sm:p-6 flex-1 flex flex-col justify-between">
+                            <div className="space-y-2">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech font-bold uppercase tracking-wider bg-amber-500/15 text-amber-900 dark:text-amber-300 border border-amber-500/30 inline-block">
+                                {nextContinuationYear} Continuation
+                              </span>
+                              <h3 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white group-hover/card:text-[#d4af37] transition-colors">
+                                {currentDepartment.name} — Class of {nextContinuationYear}
+                              </h3>
+                              <p className={`font-body text-xs leading-relaxed max-w-2xl ${isLightMode ? 'text-slate-600' : 'text-zinc-300'}`}>
+                                The continuous legacy train moves forward! Start your cohort album to join the continuous legacy train and preserve your class milestone.
+                              </p>
+                            </div>
+
+                            <div className={`pt-4 mt-3 border-t flex items-center justify-between text-xs ${isLightMode ? 'border-amber-200/60' : 'border-amber-500/20'}`}>
+                              <span className="text-[11px] font-mono-tech text-[#d4af37] font-semibold">
+                                Open for Class Album Admin
+                              </span>
+                              <button
+                                type="button"
+                                className="px-4 py-2 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                              >
+                                <span>Create Class Album</span>
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {timelineSets.map((set, setIndex) => {
                     const studentCount = set.students?.length || 0;
@@ -738,29 +782,40 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
         <div className="max-w-7xl mx-auto px-4 sm:px-8 space-y-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-6 pb-6 border-b border-zinc-800">
             {/* KoHot Logo */}
-            <button
-              id="legacy-wall-footer-kohot-btn"
-              type="button"
-              onClick={() => {
-                if (currentUser?.role === 'class_rep') {
-                  return; // Return to website is only possible via log out under profile icon
-                }
-                if (onBackToLanding) {
-                  onBackToLanding();
-                } else {
-                  window.location.hash = '#home';
-                }
-              }}
-              className="flex items-center gap-2 text-white hover:text-[#d4af37] transition-colors cursor-pointer group"
-              title="Visit KoHot Main Website"
-            >
-              <div className="w-5 h-5 rounded-md bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center group-hover:border-[#d4af37] transition-colors">
-                <div className="w-2 h-2 bg-[#d4af37] rotate-45" />
+            {isPlaqueOrSharedWall || currentUser?.role === 'class_rep' ? (
+              <div
+                id="legacy-wall-footer-kohot-badge"
+                className="flex items-center gap-2 text-white select-none"
+              >
+                <div className="w-5 h-5 rounded-md bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center">
+                  <div className="w-2 h-2 bg-[#d4af37] rotate-45" />
+                </div>
+                <span className="font-syne font-bold text-xs tracking-wider uppercase text-white">
+                  KoHot
+                </span>
               </div>
-              <span className="font-syne font-bold text-xs tracking-wider uppercase text-white group-hover:text-[#d4af37] transition-colors">
-                KoHot
-              </span>
-            </button>
+            ) : (
+              <button
+                id="legacy-wall-footer-kohot-btn"
+                type="button"
+                onClick={() => {
+                  if (onBackToLanding) {
+                    onBackToLanding();
+                  } else {
+                    window.location.hash = '#home';
+                  }
+                }}
+                className="flex items-center gap-2 text-white hover:text-[#d4af37] transition-colors cursor-pointer group"
+                title="Visit KoHot Main Website"
+              >
+                <div className="w-5 h-5 rounded-md bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center group-hover:border-[#d4af37] transition-colors">
+                  <div className="w-2 h-2 bg-[#d4af37] rotate-45" />
+                </div>
+                <span className="font-syne font-bold text-xs tracking-wider uppercase text-white group-hover:text-[#d4af37] transition-colors">
+                  KoHot
+                </span>
+              </button>
+            )}
 
             {/* Sign In / Dashboard Button */}
             <div className="flex items-center gap-2">
@@ -867,34 +922,36 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
         </div>
       )}
 
-      {/* Floating Create Class Album CTA Button - Lower Left, aligned with Arrow Up button on the right */}
-      <button
-        id="floating-create-album-btn"
-        type="button"
-        onClick={() => {
-          if (inviteContext && onOpenOnboardingWithInvite) {
-            onOpenOnboardingWithInvite({
-              inviteCode: inviteContext.inviteCode || 'BATON',
-              departmentId: currentDepartment.id,
-              universityId: currentUniversity.id,
-              targetYear: nextContinuationYear,
-              fromYear: nextContinuationYear - 1,
-            });
-          } else {
-            onOpenOnboarding();
-          }
-        }}
-        className="fixed bottom-6 left-6 z-50 px-4 sm:px-5 py-3 rounded-full bg-slate-900 hover:bg-black dark:bg-[#18181b] dark:hover:bg-zinc-800 text-white font-syne font-bold text-xs uppercase tracking-wider shadow-2xl backdrop-blur-xl border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer flex items-center gap-2 group"
-        style={{
-          position: 'fixed',
-          left: '1.5rem',
-          bottom: '1.5rem',
-        }}
-        title="Create Class Album"
-      >
-        <span className="w-2.5 h-2.5 rounded-full bg-[#d4af37] animate-pulse" />
-        <span>Create Class Album</span>
-      </button>
+      {/* Floating Create Class Album CTA Button - Lower Left, aligned with Arrow Up button on the right - strictly reserved for invited next album admin */}
+      {inviteContext && (
+        <button
+          id="floating-create-album-btn"
+          type="button"
+          onClick={() => {
+            if (onOpenOnboardingWithInvite) {
+              onOpenOnboardingWithInvite({
+                inviteCode: inviteContext.inviteCode || 'BATON',
+                departmentId: currentDepartment.id,
+                universityId: currentUniversity.id,
+                targetYear: nextContinuationYear,
+                fromYear: nextContinuationYear - 1,
+              });
+            } else {
+              onOpenOnboarding();
+            }
+          }}
+          className="fixed bottom-6 left-6 z-50 px-4 sm:px-5 py-3 rounded-full bg-slate-900 hover:bg-black dark:bg-[#18181b] dark:hover:bg-zinc-800 text-white font-syne font-bold text-xs uppercase tracking-wider shadow-2xl backdrop-blur-xl border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer flex items-center gap-2 group"
+          style={{
+            position: 'fixed',
+            left: '1.5rem',
+            bottom: '1.5rem',
+          }}
+          title="Create Class Album"
+        >
+          <span className="w-2.5 h-2.5 rounded-full bg-[#d4af37] animate-pulse" />
+          <span>Create Class Album</span>
+        </button>
+      )}
     </div>
   );
 };

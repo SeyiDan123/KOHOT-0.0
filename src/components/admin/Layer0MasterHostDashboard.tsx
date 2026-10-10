@@ -2670,7 +2670,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                         05. Class Album Legacy Banner Images (Fade In / Fade Out)
                       </h3>
                       <p className="text-zinc-400 text-xs font-body mt-0.5">
-                        These 4 rotating images appear before the album footer with the caption: <em>"Your Legacy preserved forever"</em>.
+                        These 4 rotating crossfading images appear before the website footer area with the text: <em>"Preserve your Legacy"</em> and the <em>"Create Class Album"</em> CTA.
                       </p>
                     </div>
                   </div>
@@ -3102,6 +3102,8 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           <MasterAnnualRemindersSection
             universities={universities}
             sets={sets}
+            contentOverride={contentOverride}
+            onUpdateContentOverride={onUpdateContentOverride}
           />
         )}
 

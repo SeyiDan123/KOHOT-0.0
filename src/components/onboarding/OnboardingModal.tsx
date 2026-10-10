@@ -104,9 +104,50 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     initialDepartmentName || ''
   );
   const lockedRelayYear = inviteContext ? inviteContext.targetYear : undefined;
-  const [graduationYear, setGraduationYear] = useState<number>(
-    lockedRelayYear || initialGraduationYear || 2026
-  );
+
+  // Helper to format class set nickname with short year (e.g. "The Trailblazers" -> "The Trailblazers '26")
+  const formatClassSetName = (nickname: string, year: number): string => {
+    const trimmed = nickname.trim();
+    if (!trimmed) return '';
+    const yr2 = String(year).slice(-2);
+    const yr4 = String(year);
+    if (trimmed.endsWith(`'${yr2}`) || trimmed.endsWith(`'${yr4}`) || trimmed.endsWith(` ${yr4}`)) {
+      return trimmed;
+    }
+    return `${trimmed} '${yr2}`;
+  };
+
+  // Determine previous highest year in this department to prefill next year
+  const departmentExistingSets = useMemo(() => {
+    return sets.filter(
+      (s) =>
+        (!selectedUniId || s.institutionId === selectedUniId || s.universityId === selectedUniId) &&
+        s.departmentName?.toLowerCase().trim() === selectedDepartmentName?.toLowerCase().trim()
+    );
+  }, [sets, selectedUniId, selectedDepartmentName]);
+
+  const latestPrevYear = useMemo(() => {
+    if (departmentExistingSets.length === 0) return null;
+    return Math.max(...departmentExistingSets.map((s) => s.graduationYear));
+  }, [departmentExistingSets]);
+
+  const [graduationYear, setGraduationYear] = useState<number>(() => {
+    if (lockedRelayYear) return lockedRelayYear;
+    if (initialGraduationYear) return initialGraduationYear;
+    return 2026;
+  });
+
+  // Automatically prefill to the next year after previous department cohort, while allowing user to edit
+  useEffect(() => {
+    if (lockedRelayYear) {
+      setGraduationYear(lockedRelayYear);
+    } else if (latestPrevYear) {
+      setGraduationYear(latestPrevYear + 1);
+    } else if (initialGraduationYear) {
+      setGraduationYear(initialGraduationYear);
+    }
+  }, [selectedDepartmentName, latestPrevYear, lockedRelayYear, initialGraduationYear]);
+
   const [estimatedGraduates, setEstimatedGraduates] = useState<number>(100);
   const [classSetName, setClassSetName] = useState<string>('');
   const [academicYears, setAcademicYears] = useState<number>(4);
@@ -133,6 +174,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionSuccess, setSubmissionSuccess] = useState(false);
+  const [isFoundingSubmitted, setIsFoundingSubmitted] = useState(false);
   const [showHelpNotice, setShowHelpNotice] = useState(false);
   const [isAlbumAdminHelpOpen, setIsAlbumAdminHelpOpen] = useState(false);
 
@@ -142,6 +184,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       setCurrentStep(1);
       setValidationError(null);
       setSubmissionSuccess(false);
+      setIsFoundingSubmitted(false);
       setShowHelpNotice(false);
       setIsAlbumAdminHelpOpen(false);
       setAdminFullName('');
@@ -382,7 +425,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     setIsSubmitting(true);
 
     const effectiveRole = applicantRole === 'Other' && customRole.trim() ? customRole.trim() : applicantRole;
-    const effectiveSetName = classSetName.trim() || `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`;
+    const effectiveSetName = classSetName.trim()
+      ? formatClassSetName(classSetName, graduationYear)
+      : `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`;
     const effectiveDeptId = `dept-${currentUni.id}-${selectedDepartmentName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 
     // Establish official album set
@@ -468,11 +513,54 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       payerEmail: effectiveAdmin.email,
     };
 
-    setTimeout(() => {
-      onRegisterSuccess(newAlbumSet, userAccountForAdmin, emptyTx);
-      setIsSubmitting(false);
-      setSubmissionSuccess(true);
-    }, 700);
+    const isInvitedRelayAdmin = Boolean(
+      isRelayMode ||
+      (typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('next_class_invite') || new URLSearchParams(window.location.search).get('invite_department')))
+    );
+
+    if (isInvitedRelayAdmin) {
+      // Invited new class set admin: creates album immediately without requiring admin approval
+      setTimeout(() => {
+        onRegisterSuccess(newAlbumSet, userAccountForAdmin, emptyTx);
+        setIsSubmitting(false);
+        setIsFoundingSubmitted(false);
+        setSubmissionSuccess(true);
+      }, 700);
+    } else {
+      // Founding class submission: strictly requires Master Host admin approval
+      const foundingReq: FoundingClassRequest = {
+        id: `founding-req-${Date.now()}`,
+        universityId: currentUni.id,
+        universityName: currentUni.name,
+        facultyName: selectedFaculty || 'Faculty of Science',
+        departmentId: effectiveDeptId,
+        departmentName: selectedDepartmentName,
+        classYear: Number(graduationYear),
+        classSetName: effectiveSetName,
+        classSlogan: classMotto.trim() || undefined,
+        yearsTogether: Number(academicYears) || 4,
+        applicantRole: effectiveRole,
+        applicantName: effectiveAdmin.fullName,
+        applicantEmail: effectiveAdmin.email,
+        applicantPhone: (repPhone || adminPhone).trim(),
+        backupContact: {
+          fullName: backupName.trim(),
+          phoneOrWhatsapp: backupPhone.trim(),
+          email: backupEmail.trim() || undefined,
+          relationshipOrRole: backupRole.trim() || undefined,
+        },
+        estimatedGraduatesCount: Number(estimatedGraduates) || 100,
+        status: 'Pending',
+        submissionDate: nowIso.split('T')[0],
+      };
+
+      setTimeout(() => {
+        onSubmitFoundingRequest(foundingReq);
+        setIsSubmitting(false);
+        setIsFoundingSubmitted(true);
+        setSubmissionSuccess(true);
+      }, 700);
+    }
   };
 
   if (!isOpen) return null;
@@ -599,16 +687,34 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           {submissionSuccess ? (
             /* Celebration Success State */
             <div className="py-8 text-center space-y-4 animate-fadeIn">
-              <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 flex items-center justify-center text-emerald-700 dark:text-emerald-400 mx-auto shadow-md">
-                <CheckCircle2 className="w-8 h-8" />
+              <div className={`w-16 h-16 rounded-full border flex items-center justify-center mx-auto shadow-md ${
+                isFoundingSubmitted
+                  ? 'bg-amber-100 dark:bg-amber-950/60 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400'
+                  : 'bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400'
+              }`}>
+                {isFoundingSubmitted ? (
+                  <Sparkles className="w-8 h-8" />
+                ) : (
+                  <CheckCircle2 className="w-8 h-8" />
+                )}
               </div>
 
               <div className="space-y-1.5 max-w-md mx-auto">
                 <h3 className="font-syne font-extrabold text-xl sm:text-2xl text-slate-900 dark:text-white">
-                  Class Album Registration Submitted!
+                  {isFoundingSubmitted
+                    ? 'Founding Class Application Submitted!'
+                    : 'Class Album Registration Complete!'}
                 </h3>
                 <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-400 leading-relaxed">
-                  Your registration for <strong>{selectedDepartmentName} (Class of {graduationYear})</strong> has been received and initialized on KoHot.
+                  {isFoundingSubmitted ? (
+                    <>
+                      Your application to establish the founding class album for <strong>{selectedDepartmentName} (Class of {graduationYear})</strong> has been received. Founding classes require Master Host approval before activation.
+                    </>
+                  ) : (
+                    <>
+                      Your registration for <strong>{selectedDepartmentName} (Class of {graduationYear})</strong> has been initialized and activated on KoHot via your official relay invite link.
+                    </>
+                  )}
                 </p>
               </div>
 
@@ -627,12 +733,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500 dark:text-zinc-400">Status:</span>
-                  <span className="text-emerald-700 dark:text-emerald-400 font-bold uppercase">Ready &amp; Active</span>
+                  {isFoundingSubmitted ? (
+                    <span className="text-amber-600 dark:text-amber-400 font-bold uppercase">Pending Admin Approval</span>
+                  ) : (
+                    <span className="text-emerald-700 dark:text-emerald-400 font-bold uppercase">Ready &amp; Active</span>
+                  )}
                 </div>
               </div>
 
               <p className="text-[11px] font-mono-tech text-slate-600 dark:text-zinc-400 max-w-md mx-auto">
-                You now have full Class Album Admin access to invite classmates, approve submissions, and build your digital heritage.
+                {isFoundingSubmitted
+                  ? 'Our administrative team reviews founding class applications to protect departmental integrity. You will receive confirmation once approved.'
+                  : 'You now have full Class Album Admin access to invite classmates, approve submissions, and build your digital heritage.'}
               </p>
 
               <div className="pt-2">
@@ -641,7 +753,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   onClick={onClose}
                   className="px-6 py-2.5 rounded-full bg-slate-900 hover:bg-black dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 font-syne font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer shadow-lg active:scale-95"
                 >
-                  Done &amp; Open Album
+                  {isFoundingSubmitted ? 'Done (Return to Homepage)' : 'Done & Open Album'}
                 </button>
               </div>
             </div>
@@ -885,17 +997,23 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                     {/* Graduation Year */}
                     <div className="space-y-1.5">
-                      <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
-                        Graduating Set Year *
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
+                          Graduating Set Year *
+                        </label>
+                        {latestPrevYear && (
+                          <span className="text-[10px] font-mono-tech text-amber-600 dark:text-amber-400 font-medium">
+                            Prev: {latestPrevYear} → Next: {latestPrevYear + 1}
+                          </span>
+                        )}
+                      </div>
                       <input
                         type="number"
                         min="1990"
                         max="2035"
-                        disabled={Boolean(lockedRelayYear)}
                         value={graduationYear}
                         onChange={(e) => setGraduationYear(Number(e.target.value))}
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 disabled:opacity-60 shadow-xs"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 shadow-xs"
                       />
                     </div>
 
@@ -914,18 +1032,35 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       />
                     </div>
 
-                    {/* Class Name / Nickname */}
+                    {/* Class Name / Nickname with automatic year suffix */}
                     <div className="space-y-1.5 sm:col-span-2">
                       <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
                         Class Set Name / Nickname <span className="text-slate-500 dark:text-zinc-400 lowercase">(optional)</span>
                       </label>
-                      <input
-                        type="text"
-                        value={classSetName}
-                        onChange={(e) => setClassSetName(e.target.value)}
-                        placeholder={`e.g. The Vanguard Set or ${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`}
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 shadow-xs"
-                      />
+                      <div className="flex items-center rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 focus-within:border-amber-500 focus-within:ring-2 focus-within:ring-amber-500/20 shadow-xs overflow-hidden">
+                        <input
+                          type="text"
+                          value={classSetName}
+                          onChange={(e) => setClassSetName(e.target.value)}
+                          placeholder="e.g. The Trailblazers"
+                          className="w-full px-3.5 py-2.5 bg-transparent text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none"
+                        />
+                        <span 
+                          className="px-3.5 py-2.5 text-xs font-mono-tech font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 border-l border-slate-200 dark:border-zinc-700/60 select-none shrink-0" 
+                          title={`Year suffix: '${String(graduationYear).slice(-2)}`}
+                        >
+                          '{String(graduationYear).slice(-2)}
+                        </span>
+                      </div>
+                      {classSetName.trim() ? (
+                        <p className="text-[11px] font-mono-tech text-slate-600 dark:text-zinc-400">
+                          Complete Set Name: <span className="font-bold text-amber-600 dark:text-amber-400">{formatClassSetName(classSetName, graduationYear)}</span>
+                        </p>
+                      ) : (
+                        <p className="text-[10px] font-mono-tech text-slate-500 dark:text-zinc-400">
+                          Type your set nickname — '{String(graduationYear).slice(-2)} will be attached automatically (e.g. The Trailblazers '{String(graduationYear).slice(-2)}).
+                        </p>
+                      )}
                     </div>
 
                     {/* Program Duration */}
@@ -1271,7 +1406,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                         <div>
                           <span className="text-slate-500 dark:text-zinc-400 block text-[10px]">Class Name:</span>
-                          <span className="text-slate-900 dark:text-white">{classSetName || `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`}</span>
+                          <span className="text-slate-900 dark:text-white font-bold">{classSetName.trim() ? formatClassSetName(classSetName, graduationYear) : `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`}</span>
                         </div>
                         <div>
                           <span className="text-slate-500 dark:text-zinc-400 block text-[10px]">Est. Graduates:</span>

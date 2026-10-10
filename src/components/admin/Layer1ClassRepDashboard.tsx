@@ -369,22 +369,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
   const handleSharePublishedAlbum = async () => {
     if (!isAlbumPublished) return;
-    const albumUrl = getAlbumUrl(currentSet);
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `${currentSet.departmentName} Class of ${currentSet.graduationYear} Album`,
-          text: `Explore the official Class of ${currentSet.graduationYear} Album for ${currentSet.departmentName} on KoHot!`,
-          url: albumUrl,
-        });
-        showSuccess('Invitation ready to share.', 'The message and album link are ready.');
-        return;
-      } catch (e) {
-        // user dismissed or native share unsupported
-      }
-    }
-    await copyUrlToClipboard(albumUrl);
-    showSuccess('Invitation ready to share.', 'The album link is ready to share.');
+    setIsShareAlbumModalOpen(true);
   };
 
   const handleUpdateStudentDirect = (studentId: string, partial: Partial<StudentProfile>) => {
@@ -955,6 +940,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const [editingAwardModalItem, setEditingAwardModalItem] = useState<AwardItem | null>(null);
   const [editingVoiceModalItem, setEditingVoiceModalItem] = useState<VoiceItem | null>(null);
   const [isSaveToCloudOpen, setIsSaveToCloudOpen] = useState(false);
+  const [isShareAlbumModalOpen, setIsShareAlbumModalOpen] = useState(false);
+  const [copiedAlbumShareLink, setCopiedAlbumShareLink] = useState(false);
   const modalAwardPhotoInputRef = useRef<HTMLInputElement>(null);
   const modalVoicePhotoInputRef = useRef<HTMLInputElement>(null);
 
@@ -5261,6 +5248,130 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           onClose={() => setIsSaveToCloudOpen(false)}
           currentSet={currentSet}
         />
+      )}
+
+      {/* Share Published Album Modal with Hero Context Preview */}
+      {isShareAlbumModalOpen && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn select-none"
+          onClick={() => setIsShareAlbumModalOpen(false)}
+        >
+          <div 
+            className="w-full max-w-lg bg-[#0c0d14] border border-white/20 rounded-3xl p-6 sm:p-7 shadow-2xl space-y-5 my-8 select-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <Share2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-syne font-bold text-base text-white">Share Published Album</h3>
+                  <p className="font-mono-tech text-[11px] text-zinc-400">Carries official album hero image</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsShareAlbumModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Hero Context Image Link Card */}
+            <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+              <div className="flex items-center justify-between text-[10px] font-mono-tech text-zinc-400">
+                <span className="uppercase font-semibold tracking-wider flex items-center gap-1.5 text-amber-400">
+                  <Sparkles className="w-3 h-3" />
+                  Link Context Preview (Displays Album Hero)
+                </span>
+                <span>Live Archive</span>
+              </div>
+
+              <div className="rounded-xl overflow-hidden border border-white/10 bg-black/60 shadow-lg">
+                <div className="h-40 w-full overflow-hidden relative">
+                  <img 
+                    src={currentSet.bannerImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85'} 
+                    alt="Album Hero"
+                    className="w-full h-full object-cover" 
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                  <div className="absolute bottom-2.5 left-3 right-3 text-white">
+                    <span className="text-[10px] font-mono-tech uppercase font-bold text-[#d4af37] block">
+                      {currentSet.institutionName || 'University'}
+                    </span>
+                    <h4 className="font-syne font-bold text-sm truncate">
+                      {currentSet.departmentName} (Class of {currentSet.graduationYear})
+                    </h4>
+                  </div>
+                </div>
+                <div className="p-3 bg-zinc-950/80 space-y-1">
+                  <p className="font-body text-xs text-zinc-300 line-clamp-2">
+                    {currentSet.ourStory || 'Explore portraits, memories, awards, and milestones of our graduating set.'}
+                  </p>
+                  <p className="font-mono-tech text-[10px] text-amber-400 truncate">
+                    {getAlbumUrl(currentSet)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Share & Copy Actions */}
+            <div className="space-y-3 pt-1">
+              <div className="p-3 rounded-xl bg-black/60 border border-white/10 flex items-center justify-between gap-3">
+                <span className="font-mono-tech text-xs text-zinc-300 truncate select-all">
+                  {getAlbumUrl(currentSet)}
+                </span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await copyUrlToClipboard(getAlbumUrl(currentSet));
+                    setCopiedAlbumShareLink(true);
+                    setTimeout(() => setCopiedAlbumShareLink(false), 2500);
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                >
+                  {copiedAlbumShareLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedAlbumShareLink ? 'Copied!' : 'Copy'}</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <a
+                  href={`https://api.whatsapp.com/send?text=${encodeURIComponent(`Explore the official Class of ${currentSet.graduationYear} Album for ${currentSet.departmentName}:\n${getAlbumUrl(currentSet)}`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 border border-[#25D366]/40 text-emerald-300 font-mono-tech text-xs flex items-center justify-center gap-2 transition-all cursor-pointer font-semibold"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>WhatsApp</span>
+                </a>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (typeof navigator !== 'undefined' && 'share' in navigator) {
+                      try {
+                        await navigator.share({
+                          title: `${currentSet.departmentName} Class of ${currentSet.graduationYear} Album`,
+                          text: `Explore the official Class of ${currentSet.graduationYear} Album for ${currentSet.departmentName} on KoHot!`,
+                          url: getAlbumUrl(currentSet),
+                        });
+                      } catch (e) {}
+                    } else {
+                      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Explore the official Class of ${currentSet.graduationYear} Album for ${currentSet.departmentName} on KoHot:`)}&url=${encodeURIComponent(getAlbumUrl(currentSet))}`, '_blank');
+                    }
+                  }}
+                  className="p-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-mono-tech text-xs flex items-center justify-center gap-2 transition-all cursor-pointer font-semibold"
+                >
+                  <Share2 className="w-4 h-4" />
+                  <span>Share Album</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Pop-up Window: Edit Class Award Modal */}

@@ -212,23 +212,13 @@ function resolveCurrentRoute(currentSets: ClassSet[], currentUnis: UniversityDir
         };
       }
 
-      if (targetSet) {
-        return {
-          view: 'department_album',
-          setId: targetSet.id,
-          uniId: parentUni ? parentUni.id : targetSet.institutionId || null,
-          deptId: deptId,
-          isExternalEntry: true,
-          label: targetSet.classSetName || `${targetSet.departmentName} ’${String(targetSet.graduationYear).slice(-2)}`,
-        };
-      }
       return {
         view: 'albums_grid',
-        setId: currentSets[0]?.id || 'unilag-cs-2026',
-        uniId: parentUni ? parentUni.id : null,
+        setId: targetSet ? targetSet.id : currentSets[0]?.id || 'unilag-cs-2026',
+        uniId: parentUni ? parentUni.id : targetSet?.institutionId || null,
         deptId: deptId,
         isExternalEntry: true,
-        label: parentUni ? `DEPARTMENT OF ${deptId.toUpperCase()}` : 'DEPARTMENT OF COMPUTER SCIENCE',
+        label: targetSet?.departmentName ? `DEPARTMENT OF ${targetSet.departmentName.toUpperCase()}` : 'DEPARTMENT LEGACY WALL',
       };
     }
   }
@@ -819,12 +809,10 @@ export default function App() {
             onExploreDemos={() => {
               setIsOnboardingOpen(false);
               setIsLoginOpen(false);
-              setSelectedDepartmentId('dept-unilag-cs');
-              setSelectedUniversityId('unilag');
-              const csSet = sets.find((s) => s.departmentId === 'dept-unilag-cs');
-              const deptName = csSet?.departmentName || 'Computer Science';
-              setTransitionLabel(deptName.toLowerCase().startsWith('department of') ? deptName : `Department of ${deptName}`);
-              setTransitionInstitution(csSet?.institutionName || 'University Of Ilorin');
+              setSelectedDepartmentId('dept-crownfield-public-law');
+              setSelectedUniversityId('crownfield');
+              setTransitionLabel('Department of Public Law');
+              setTransitionInstitution('Crownfield University (CU)');
               setIsTransitioning(true);
               setTimeout(() => {
                 setActiveView('albums_grid');

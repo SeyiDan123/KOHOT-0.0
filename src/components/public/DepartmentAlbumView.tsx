@@ -255,28 +255,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   const [selectedVideo, setSelectedVideo] = useState<DepartmentVideoItem | null>(null);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
 
-  // 4-Image Cross-Fade Banner before footer (Editable via Owner Dashboard under KoHot Media)
-  const legacyBannerImages = useMemo(() => {
-    if (contentOverride?.legacyBannerImages && contentOverride.legacyBannerImages.length === 4) {
-      return contentOverride.legacyBannerImages;
-    }
-    return [
-      'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=1600&auto=format&fit=crop',
-      'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1600&auto=format&fit=crop',
-      'https://images.unsplash.com/photo-1627556704302-624286467c65?q=80&w=1600&auto=format&fit=crop',
-      'https://images.unsplash.com/photo-1576267423445-b2e0074d68a4?q=80&w=1600&auto=format&fit=crop',
-    ];
-  }, [contentOverride?.legacyBannerImages]);
-
-  const [activeBannerIdx, setActiveBannerIdx] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setActiveBannerIdx((prev) => (prev + 1) % legacyBannerImages.length);
-    }, 4500);
-    return () => clearInterval(timer);
-  }, [legacyBannerImages.length]);
-
   // Context-Aware Light / Dark Mode State with localStorage Persistence (Default: Light Mode)
   const [isLightMode, setIsLightMode] = useState<boolean>(() => getTheme() === 'light');
 
@@ -327,6 +305,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     totalCategories?: number;
     imageIndexInCategory?: number;
     totalImagesInCategory?: number;
+    dateStr?: string;
   }>>([]);
   const [lightboxMomentIndex, setLightboxMomentIndex] = useState<number | null>(null);
   const [momentZoomScale, setMomentZoomScale] = useState<number>(1);
@@ -869,13 +848,15 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 </div>
               </div>
 
-              {/* Institution and Department Names Below Logos */}
+              {/* Department and Institution Names Below Logos - Department First */}
               <div className="text-center">
                 <p className="font-syne font-bold text-sm sm:text-base text-white tracking-wide">
-                  {currentSet.institutionName}
+                  {currentSet.departmentName.toUpperCase().startsWith('DEPARTMENT')
+                    ? currentSet.departmentName
+                    : `Department of ${currentSet.departmentName}`}
                 </p>
                 <p className="font-mono-tech text-xs text-zinc-300 mt-0.5">
-                  {currentSet.departmentName} • Class of {currentSet.graduationYear}
+                  {currentSet.institutionName} • Class of {currentSet.graduationYear}
                 </p>
               </div>
             </div>
@@ -887,6 +868,13 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             >
               {currentSet.classSetName || `${currentSet.departmentName} ’${String(currentSet.graduationYear).slice(-2)}`}
             </h1>
+
+            {/* Class Slogan / Motto Under Class Name */}
+            {currentSet.classSlogan && (
+              <p className="font-body italic text-sm sm:text-base md:text-lg text-amber-300/90 max-w-xl text-center mx-auto mt-2.5 animate-slow-reveal animation-delay-250">
+                “{currentSet.classSlogan.replace(/^["“”']+|["“”']+$/g, '')}”
+              </p>
+            )}
 
             {/* Hero Statistics: Centralized with Infinite Memories Flash */}
             <div className="mt-6 pt-5 border-t border-white/15 flex flex-wrap items-center justify-center gap-8 sm:gap-14 animate-slow-reveal animation-delay-350">
@@ -1259,13 +1247,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                         </p>
                       )}
 
-                      {/* Social icons visible after name and nickname */}
+                      {/* Social icons visible after name and nickname - reduced size, opens full view on click */}
                       {student.socials && Object.values(student.socials).some(Boolean) && (
-                        <div 
-                          className="mt-2"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <SocialIconsRow socials={student.socials} isLightMode={isLightMode} size="sm" />
+                        <div className="mt-1.5 pointer-events-none">
+                          <SocialIconsRow socials={student.socials} isLightMode={isLightMode} size="xs" interactive={false} />
                         </div>
                       )}
                     </div>
@@ -1613,6 +1598,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                                 totalCategories: number;
                                 imageIndexInCategory: number;
                                 totalImagesInCategory: number;
+                                dateStr?: string;
                               }> = [];
 
                               (currentSet.memories || []).forEach((cat, catIdx) => {
@@ -1628,6 +1614,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                                     totalCategories: (currentSet.memories || []).length,
                                     imageIndexInCategory: iIdx,
                                     totalImagesInCategory: (cat.images || []).length,
+                                    dateStr: im.dateTime || cat.dateStr || undefined,
                                   });
                                 });
                               });
@@ -1648,13 +1635,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                             <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-[10px] font-mono-tech text-white/80 border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
                               Click to expand
                             </div>
-                          </div>
-
-                          {/* Individual photo date and time - very minimal, no backdrop, simple text */}
-                          <div className="py-2.5 px-3.5 flex items-center justify-between text-[11px] font-mono-tech select-none">
-                            <span className={isLightMode ? 'text-zinc-500 font-medium' : 'text-zinc-400'}>
-                              {img.dateTime || `${event.dateStr || `Oct ${20 + (imgIdx % 10)}, ${currentSet.graduationYear}`} • ${2 + (imgIdx % 6)}:${10 + ((imgIdx * 7) % 50)} PM`}
-                            </span>
                           </div>
                         </div>
                       );
@@ -2319,8 +2299,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 ? 'bg-gradient-to-b from-white/95 via-white/60 to-transparent'
                 : 'bg-gradient-to-b from-black/85 via-black/45 to-transparent'
             }`}>
-              {/* Category Title at Top Left */}
-              <div className="flex items-center gap-3">
+              {/* Category Title & Date at Top Left */}
+              <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap">
                 <span className={`px-4 py-1.5 rounded-full text-xs font-syne font-bold uppercase tracking-wider border backdrop-blur-md shadow-xs ${
                   momentCardMode === 'light'
                     ? 'bg-black/5 text-black border-black/15'
@@ -2333,6 +2313,14 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 }`}>
                   Photo {((currentMoment.imageIndexInCategory ?? 0) + 1)} of {(currentMoment.totalImagesInCategory ?? lightboxMomentsList.length)}
                 </span>
+                {currentMoment.dateStr && (
+                  <span className={`font-mono-tech text-xs flex items-center gap-1.5 ${
+                    momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
+                  }`}>
+                    <span className="opacity-40">•</span>
+                    <span>{currentMoment.dateStr}</span>
+                  </span>
+                )}
               </div>
 
               {/* Close Button Only on Top Right - Icon only, no text cancel/close */}

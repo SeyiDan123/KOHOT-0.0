@@ -12,13 +12,17 @@ import {
   User, 
   Send,
   Sliders,
-  Crop
+  Crop,
+  Instagram,
+  Linkedin,
+  Facebook
 } from 'lucide-react';
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import { updateSocialMetaTags } from '../../utils/metaTags';
 import { SocialIconsRow } from '../common/SocialIconsRow';
 import { ImageCropModal } from '../common/ImageCropModal';
 import { isValidEmail } from '../../utils/emailValidator';
+import { SocialUrlInputField } from '../common/SocialUrlInputField';
 
 interface StudentSubmissionPageProps {
   currentSet: ClassSet;
@@ -45,6 +49,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   const [emailError, setEmailError] = useState('');
   const [instagramHandle, setInstagramHandle] = useState('');
   const [twitterHandle, setTwitterHandle] = useState('');
+  const [tiktokHandle, setTiktokHandle] = useState('');
   const [facebookHandle, setFacebookHandle] = useState('');
   const [linkedinHandle, setLinkedinHandle] = useState('');
   const [photoDataUrl, setPhotoDataUrl] = useState('');
@@ -167,6 +172,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
         instagram: instagramHandle.trim() || undefined,
         linkedin: linkedinHandle.trim() || undefined,
         twitter: twitterHandle.trim() || undefined,
+        tiktok: tiktokHandle.trim() || undefined,
         facebook: facebookHandle.trim() || undefined,
       },
       approved: false, // Awaiting verification from class album admin
@@ -381,7 +387,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                           <img
                             src={photoDataUrl}
                             alt="Portrait Preview"
-                            className="w-20 h-25 aspect-[4/5] rounded-xl object-cover border border-slate-300 dark:border-neutral-700 shadow-md bg-white"
+                            className="w-20 h-20 aspect-square rounded-xl object-cover border border-slate-300 dark:border-neutral-700 shadow-md bg-white"
                           />
                           <div className="text-left space-y-1.5">
                             <p className="font-syne font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
@@ -480,39 +486,6 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                       placeholder="e.g. Social Director or Class Rep"
                       className="w-full px-4 py-2.5 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border border-slate-300 dark:border-neutral-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900 focus:outline-none shadow-xs text-xs"
                     />
-
-                    {/* Pocket list of popular roles */}
-                    <div className="pt-1">
-                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-[10px] font-mono-tech">
-                        <span className="text-slate-500 dark:text-zinc-500 shrink-0 font-semibold">Pocket list:</span>
-                        {[
-                          'Class President',
-                          'Vice President',
-                          'General Secretary',
-                          'Financial Secretary',
-                          'Public Relations Officer (P.R.O)',
-                          'Director of Socials',
-                          'Director of Sports',
-                          'Academic Secretary',
-                          'Welfare Secretary',
-                          'Valedictorian',
-                          'Graduate',
-                        ].map((roleItem) => (
-                          <button
-                            key={roleItem}
-                            type="button"
-                            onClick={() => setPosition(roleItem)}
-                            className={`px-2 py-0.5 rounded-md border shrink-0 transition-colors cursor-pointer ${
-                              position === roleItem
-                                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40 font-bold'
-                                : 'bg-slate-100 dark:bg-neutral-900 hover:bg-slate-200 dark:hover:bg-neutral-800 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-neutral-800'
-                            }`}
-                          >
-                            {roleItem}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
                   </div>
 
                   {/* Parting Quote */}
@@ -585,55 +558,63 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1 font-semibold">
-                          Instagram
-                        </label>
-                        <input
-                          type="text"
-                          value={instagramHandle}
-                          onChange={(e) => setInstagramHandle(e.target.value)}
-                          placeholder="e.g. @username"
-                          className="w-full px-3.5 py-2 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border border-slate-300 dark:border-neutral-700 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900 focus:outline-none font-mono-tech shadow-xs"
-                        />
-                      </div>
+                      <SocialUrlInputField
+                        label="Instagram"
+                        prefix="instagram.com/"
+                        value={instagramHandle}
+                        onChange={setInstagramHandle}
+                        placeholder="username"
+                        icon={<Instagram className="w-3 h-3 text-[#E1306C]" />}
+                        isLightMode={true}
+                      />
 
-                      <div>
-                        <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1 font-semibold">
-                          X
-                        </label>
-                        <input
-                          type="text"
-                          value={twitterHandle}
-                          onChange={(e) => setTwitterHandle(e.target.value)}
-                          placeholder="e.g. @handle"
-                          className="w-full px-3.5 py-2 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border border-slate-300 dark:border-neutral-700 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900 focus:outline-none font-mono-tech shadow-xs"
-                        />
-                      </div>
+                      <SocialUrlInputField
+                        label="TikTok"
+                        prefix="tiktok.com/@"
+                        value={tiktokHandle}
+                        onChange={setTiktokHandle}
+                        placeholder="username"
+                        icon={
+                          <svg viewBox="0 0 24 24" aria-hidden="true" className="w-3 h-3 fill-current text-slate-900 dark:text-white">
+                            <path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-5.201 1.743l-.068-.102a2.895 2.895 0 0 1 2.373-4.538c.328 0 .644.055.938.156V9.43a6.33 6.33 0 0 0-.938-.07 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.756a8.196 8.196 0 0 0 4.771 1.517V6.828c-.352 0-.691-.049-1-.142z"/>
+                          </svg>
+                        }
+                        isLightMode={true}
+                      />
 
-                      <div>
-                        <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1 font-semibold">
-                          LinkedIn
-                        </label>
-                        <input
-                          type="text"
-                          value={linkedinHandle}
-                          onChange={(e) => setLinkedinHandle(e.target.value)}
-                          placeholder="e.g. linkedin.com/in/username"
-                          className="w-full px-3.5 py-2 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border border-slate-300 dark:border-neutral-700 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900 focus:outline-none font-mono-tech shadow-xs"
-                        />
-                      </div>
+                      <SocialUrlInputField
+                        label="X"
+                        prefix="x.com/"
+                        value={twitterHandle}
+                        onChange={setTwitterHandle}
+                        placeholder="handle"
+                        icon={
+                          <svg viewBox="0 0 24 24" aria-hidden="true" className="w-3 h-3 fill-current text-slate-900 dark:text-white">
+                            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                          </svg>
+                        }
+                        isLightMode={true}
+                      />
 
-                      <div>
-                        <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1 font-semibold">
-                          Facebook
-                        </label>
-                        <input
-                          type="text"
+                      <SocialUrlInputField
+                        label="LinkedIn"
+                        prefix="linkedin.com/in/"
+                        value={linkedinHandle}
+                        onChange={setLinkedinHandle}
+                        placeholder="username"
+                        icon={<Linkedin className="w-3 h-3 text-[#0077b5]" />}
+                        isLightMode={true}
+                      />
+
+                      <div className="sm:col-span-2">
+                        <SocialUrlInputField
+                          label="Facebook"
+                          prefix="facebook.com/"
                           value={facebookHandle}
-                          onChange={(e) => setFacebookHandle(e.target.value)}
-                          placeholder="e.g. facebook.com/username"
-                          className="w-full px-3.5 py-2 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border border-slate-300 dark:border-neutral-700 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900 focus:outline-none font-mono-tech shadow-xs"
+                          onChange={setFacebookHandle}
+                          placeholder="username"
+                          icon={<Facebook className="w-3 h-3 text-[#1877F2]" />}
+                          isLightMode={true}
                         />
                       </div>
                     </div>
@@ -728,7 +709,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                     )}
 
                     {/* Social Row */}
-                    {(instagramHandle || twitterHandle || linkedinHandle || facebookHandle) && (
+                    {(instagramHandle || twitterHandle || tiktokHandle || linkedinHandle || facebookHandle) && (
                       <div className="pt-2 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between">
                         <span className="font-mono-tech text-[10px] uppercase text-slate-500 tracking-wider">
                           Socials
@@ -737,6 +718,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                           socials={{
                             instagram: instagramHandle,
                             twitter: twitterHandle,
+                            tiktok: tiktokHandle,
                             linkedin: linkedinHandle,
                             facebook: facebookHandle,
                           }}
@@ -771,17 +753,17 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
         )}
       </main>
 
-      {/* Profile Photo Crop Modal (Matches Display 4:5 Aspect Ratio) */}
+      {/* Profile Photo Crop Modal (Square Frame) */}
       {isCropModalOpen && rawPhotoToCrop && (
         <ImageCropModal
           isOpen={isCropModalOpen}
           imageSrc={rawPhotoToCrop}
           onClose={() => setIsCropModalOpen(false)}
           onApplyCrop={handleApplyCrop}
-          initialAspectRatio="4:5"
+          initialAspectRatio="1:1"
           isProfileSubmission={true}
           title="Position Your Portrait"
-          helperText="Move the 4:5 portrait frame across your photo to capture your face."
+          helperText="Move the square portrait frame across your photo to capture your face."
         />
       )}
     </div>

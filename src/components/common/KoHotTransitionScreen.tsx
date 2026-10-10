@@ -93,16 +93,16 @@ export const KoHotTransitionScreen: React.FC<KoHotTransitionScreenProps> = ({
         {/* Brand Typography & Requested Text Under KoHot */}
         <div className="space-y-2 animate-slide-up-fade" style={{ animationDelay: '100ms' }}>
           {/* Brand Name */}
-          <h1 className="font-syne font-extrabold text-4xl sm:text-5xl text-white tracking-tight uppercase">
+          <h1 className="font-syne font-extrabold text-4xl sm:text-5xl !text-white tracking-tight uppercase" style={{ color: '#ffffff' }}>
             KOHOT
           </h1>
 
           {/* The text under KoHot - Constant White / Calm Grey */}
           <div className="space-y-1 pt-1">
-            <h2 className="font-syne font-bold text-base sm:text-lg text-white tracking-tight leading-snug max-w-sm mx-auto">
+            <h2 className="font-syne font-bold text-base sm:text-lg !text-white tracking-tight leading-snug max-w-sm mx-auto" style={{ color: '#ffffff' }}>
               {normalizedDepartment}
             </h2>
-            <p className="font-syne font-medium text-xs sm:text-sm text-zinc-400 tracking-wide">
+            <p className="font-syne font-medium text-xs sm:text-sm !text-zinc-300 tracking-wide" style={{ color: '#d4d4d8' }}>
               {institutionLabel}
             </p>
           </div>

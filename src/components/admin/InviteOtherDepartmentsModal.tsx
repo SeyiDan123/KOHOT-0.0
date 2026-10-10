@@ -341,6 +341,35 @@ export const InviteOtherDepartmentsModal: React.FC<InviteOtherDepartmentsModalPr
             </div>
           </form>
 
+          {/* Context Link Preview Card with Image of Graduates */}
+          <div className="p-3.5 rounded-2xl bg-slate-100 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10 space-y-2.5">
+            <div className="flex items-center justify-between text-[10px] font-mono-tech text-slate-600 dark:text-zinc-400">
+              <span className="uppercase font-semibold tracking-wider flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+                <Sparkles className="w-3 h-3" />
+                Link Context Preview (Carries Graduates Photo)
+              </span>
+              <span>Directs to KoHot Website</span>
+            </div>
+            <div className="flex items-center gap-3 p-2.5 rounded-xl bg-white dark:bg-black/60 border border-slate-200 dark:border-white/10 overflow-hidden shadow-xs">
+              <img 
+                src={currentSet.legacyGroupImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=800&auto=format&fit=crop&q=80'} 
+                alt="Graduates" 
+                className="w-16 h-16 rounded-lg object-cover shrink-0 border border-slate-200 dark:border-white/10 shadow-xs" 
+              />
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <p className="font-syne font-bold text-xs text-slate-900 dark:text-white truncate">
+                  Create Your Department Class Album • KoHot
+                </p>
+                <p className="font-body text-[11px] text-slate-600 dark:text-zinc-400 line-clamp-1">
+                  Invited by {currentSet.departmentName} (Class of {currentSet.graduationYear}) • {currentSet.institutionName || 'University'}
+                </p>
+                <p className="font-mono-tech text-[10px] text-emerald-600 dark:text-emerald-400 truncate">
+                  {inviteUrl}
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Customizable Template Message Box */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">

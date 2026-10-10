@@ -4,8 +4,29 @@ export interface FormattedSocials {
   linkedinUrl?: string;
   instagramUrl?: string;
   twitterUrl?: string;
+  tiktokUrl?: string;
   facebookUrl?: string;
   whatsappUrl?: string;
+}
+
+/**
+ * Strips URLs, protocols, and leading @ from input strings so only the pure username remains
+ */
+export function extractSocialUsername(val: string): string {
+  if (!val) return '';
+  let clean = val.trim();
+  // Strip protocol
+  clean = clean.replace(/^https?:\/\//i, '');
+  // Strip domain names
+  clean = clean.replace(/^(www\.)?(instagram\.com|instagr\.am)\/?/i, '');
+  clean = clean.replace(/^(www\.)?(x\.com|twitter\.com)\/?/i, '');
+  clean = clean.replace(/^(www\.)?linkedin\.com\/in\/?/i, '');
+  clean = clean.replace(/^(www\.)?linkedin\.com\/?/i, '');
+  clean = clean.replace(/^(www\.)?tiktok\.com\/@?/i, '');
+  clean = clean.replace(/^(www\.)?facebook\.com\/?/i, '');
+  // Strip leading @ or slashes
+  clean = clean.replace(/^@+/, '').replace(/\/+$/, '');
+  return clean;
 }
 
 export const getSocialUrls = (
@@ -54,6 +75,19 @@ export const getSocialUrls = (
       result.twitterUrl = `https://${rawTwitter}`;
     } else {
       result.twitterUrl = `https://x.com/${rawTwitter.replace('@', '')}`;
+    }
+  }
+
+  // TikTok
+  const rawTiktok = socials?.tiktok?.trim();
+  if (rawTiktok) {
+    if (rawTiktok.startsWith('http://') || rawTiktok.startsWith('https://')) {
+      result.tiktokUrl = rawTiktok;
+    } else if (rawTiktok.startsWith('tiktok.com')) {
+      result.tiktokUrl = `https://${rawTiktok}`;
+    } else {
+      const cleanUser = rawTiktok.startsWith('@') ? rawTiktok : `@${rawTiktok}`;
+      result.tiktokUrl = `https://tiktok.com/${cleanUser}`;
     }
   }
 

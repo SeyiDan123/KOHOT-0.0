@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { WebsiteContentOverride, UserAccount, ClassSet } from '../../types';
 import { HowItWorksShowcase } from './HowItWorksShowcase';
 import { PillarsCarousel } from './PillarsCarousel';
@@ -95,6 +95,28 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     }, 5000);
     return () => clearInterval(timer);
   }, [HERO_MONTAGE_IMAGES.length]);
+
+  // 4 Crossfading Legacy Banner Images before Footer (Editable via Owner Dashboard under Website Media)
+  const legacyBannerImages = useMemo(() => {
+    if (contentOverride?.legacyBannerImages && contentOverride.legacyBannerImages.length === 4) {
+      return contentOverride.legacyBannerImages;
+    }
+    return [
+      'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=1600&auto=format&fit=crop',
+      'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1600&auto=format&fit=crop',
+      'https://images.unsplash.com/photo-1523240795612-9a054b0db644?q=80&w=1600&auto=format&fit=crop',
+      'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?q=80&w=1600&auto=format&fit=crop',
+    ];
+  }, [contentOverride?.legacyBannerImages]);
+
+  const [activeBannerIdx, setActiveBannerIdx] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActiveBannerIdx((prev) => (prev + 1) % legacyBannerImages.length);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [legacyBannerImages.length]);
 
   const toggleVideoPlay = () => {
     if (heroVideoRef.current) {
@@ -375,6 +397,92 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {contentOverride?.showTestimonialsSection !== false && (
         <TestimonialsCarousel />
       )}
+
+      {/* =========================================================================
+          SECTION 5: CLASS ALBUM LEGACY PRESERVATION BANNER (FADE IN / FADE OUT 4 PHOTOS)
+          Placed directly before the footer area with "Preserve your Legacy"
+          followed by "Create Class Album" CTA.
+          ========================================================================= */}
+      <section 
+        id="legacy-preservation-banner"
+        className="relative w-full overflow-hidden border-t border-zinc-800 text-white min-h-[440px] sm:min-h-[480px] flex items-center justify-center select-none"
+      >
+        {/* 4 Fade-in / Fade-out Background Pictures */}
+        <div className="absolute inset-0 z-0 overflow-hidden">
+          {legacyBannerImages.map((imgUrl, idx) => (
+            <div
+              key={idx}
+              className={`absolute inset-0 bg-cover bg-center transition-opacity duration-1000 ease-in-out ${
+                activeBannerIdx === idx ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
+              style={{
+                backgroundImage: `url(${imgUrl})`,
+              }}
+            />
+          ))}
+          {/* Multi-layer Luxury Dark Vignette & Gradient for High Contrast */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-black/60 z-10" />
+          <div className="absolute inset-0 bg-black/40 z-10" />
+        </div>
+
+        {/* Foreground Content */}
+        <div className="relative z-20 max-w-4xl mx-auto px-6 py-20 sm:py-24 text-center space-y-7 animate-fadeIn">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-[#d4af37] shadow-lg">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-[0.2em] font-semibold text-white">
+              Permanent Class Preservation
+            </span>
+          </div>
+
+          <h2 className="font-syne font-black text-3xl sm:text-5xl lg:text-6xl text-white tracking-tight leading-tight">
+            Preserve your Legacy
+          </h2>
+
+          <p className="font-body text-sm sm:text-base md:text-lg text-zinc-300 max-w-2xl mx-auto leading-relaxed font-normal">
+            The people you shared these formative years with. The moments, laughter, triumphs, and stories you built together. Give your graduating class a permanent home to remember it all.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
+            <button
+              id="banner-create-class-album-btn"
+              type="button"
+              onClick={onOpenOnboarding}
+              className="w-full sm:w-auto px-8 py-4 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs sm:text-sm uppercase tracking-wider transition-all flex items-center justify-center gap-2.5 cursor-pointer shadow-2xl hover:scale-105 active:scale-95"
+            >
+              <span>Create Class Album</span>
+              <ArrowRight className="w-4 h-4 text-black" />
+            </button>
+
+            {onExploreDemos && (
+              <button
+                type="button"
+                onClick={handleExplore}
+                className="w-full sm:w-auto px-7 py-4 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md text-white font-syne font-semibold text-xs sm:text-sm uppercase tracking-wider border border-white/25 transition-all flex items-center justify-center gap-2 cursor-pointer hover:scale-105 active:scale-95"
+              >
+                <span>Explore Demo Albums</span>
+                <ExternalLink className="w-3.5 h-3.5 text-zinc-300" />
+              </button>
+            )}
+          </div>
+
+          {/* 4 Image Slide Indicators */}
+          <div className="flex items-center justify-center gap-2 pt-3">
+            {legacyBannerImages.map((_, dotIdx) => (
+              <button
+                key={dotIdx}
+                type="button"
+                onClick={() => setActiveBannerIdx(dotIdx)}
+                className={`transition-all duration-300 cursor-pointer rounded-full ${
+                  activeBannerIdx === dotIdx
+                    ? 'w-7 h-2 bg-[#d4af37]'
+                    : 'w-2 h-2 bg-white/30 hover:bg-white/60'
+                }`}
+                aria-label={`Slide ${dotIdx + 1}`}
+              />
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* =========================================================================
           SIMPLE FOOTER: CLEAN, CONCISE, WITH DISCREET HELP & ESSENTIAL LINKS

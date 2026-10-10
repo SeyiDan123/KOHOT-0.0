@@ -341,6 +341,7 @@ export const INITIAL_SETS: ClassSet[] = [
     graduationYear: 2026,
     academicYears: 4,
     classSetName: 'The Tech Titans \'26',
+    classSlogan: 'Architects of Africa\'s Digital Century',
     isFoundingClass: false,
     estimatedGraduatesCount: 95,
     paymentStatus: 'paid',
@@ -2540,6 +2541,8 @@ export const INITIAL_CONTENT_OVERRIDE: WebsiteContentOverride = {
     'https://images.unsplash.com/photo-1523240795612-9a054b0db644?q=80&w=1600&auto=format&fit=crop',
     'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?q=80&w=1600&auto=format&fit=crop',
   ],
+  executiveBlastImageUrl: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
+  executiveBlastMessageTemplate: `Hello Department Executives & Student Leaders,\n\nPreserve the heritage, memories, and individual student achievements of your department's graduating class on KoHot.\n\nEstablish your official Department Class Album, install your corridor Legacy Plaque, and ensure your graduating set is remembered across generations.\n\nCreate your Class Album today at:\n{{website_url}}\n\nKoHot — Beautiful graduate memories live here.`,
   // Website section text defaults
   heroHeadlineLine1: 'Beautiful',
   heroHeadlineLine2: 'graduate memories',
