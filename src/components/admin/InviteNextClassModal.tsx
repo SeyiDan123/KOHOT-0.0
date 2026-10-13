@@ -521,7 +521,7 @@ export const InviteNextClassModal: React.FC<InviteNextClassModalProps> = ({
               <span>Handoff Verification &amp; Authorization Policy</span>
             </div>
             <p className="text-zinc-400 text-[11px]">
-              This invitation preserves the relay context so the incoming cohort can view your class album and learn the traditions of {currentSet.departmentName}. It <strong>does not automatically grant admin privileges</strong>; the recipient must still submit their Class Album request and undergo Owner verification.
+              This invitation preserves the relay context so the incoming cohort can view your class album and learn the traditions of {currentSet.departmentName}. It <strong>does not automatically grant admin privileges</strong>; the recipient must still submit their Class Album request and undergo Host verification.
             </p>
           </div>
 

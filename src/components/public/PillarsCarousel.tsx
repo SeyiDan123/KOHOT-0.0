@@ -301,7 +301,7 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
 
   const handleCardCta = (action: PillarItem['ctaAction']) => {
     if (action === 'demo') {
-      onExploreDemoAlbum('unilag-cs-2026');
+      onExploreDemoAlbum('crownfield-law-2026');
     } else if (action === 'legacy') {
       const el = document.getElementById('department-legacy-showcase');
       if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -333,21 +333,21 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
               <span className="text-[#d4af37]">WHY KOHOT EXISTS</span>
             </div>
 
-            <h2 className="font-syne font-extrabold text-3xl sm:text-5xl lg:text-6xl text-zinc-900 dark:text-white tracking-tight leading-tight">
+            <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-zinc-900 dark:text-white tracking-tight leading-tight text-left">
               The years you shared will move on. Your memories don’t have to.
             </h2>
           </ScrollReveal>
 
           <ScrollReveal delayMs={480} durationMs={1350}>
             {/* Rich medium slate body text in light mode, calm white in dark mode for contrast */}
-            <div className="space-y-4 font-body text-base sm:text-lg text-slate-600 dark:text-zinc-200 leading-relaxed">
+            <div className="space-y-4 font-body text-base sm:text-lg text-slate-600 dark:text-zinc-200 leading-relaxed text-left">
               <p>
                 Graduation changes everything: people move away, busy lives begin, and class groups quiet down. Photos become scattered across old phones, disappearing stories, and forgotten group chats.
               </p>
               <p className="text-slate-600 dark:text-zinc-200 font-normal">
                 Physical paper albums get damaged, lost, or left behind in family basements. But the bonds you built over years of late-night studio sessions, lab defenses, and dinner galas deserve more than fading away.
               </p>
-              <p className="text-slate-900 dark:text-white font-bold">
+              <p className="text-slate-900 dark:text-white font-semibold">
                 KoHot gives your class somewhere to remain.
               </p>
             </div>
@@ -358,14 +358,14 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
             PART 2: THREE PILLARS
             SLOW-MOTION: Title first, then Caption
             ===================================================================== */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6 pt-10 border-t border-slate-200 dark:border-zinc-800">
+        <div className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6 pt-10 border-t border-slate-200 dark:border-zinc-800 text-left">
           <div className="max-w-2xl space-y-3">
             <ScrollReveal delayMs={0} durationMs={1250}>
-              <div className="flex items-center gap-2 font-mono-tech text-xs uppercase tracking-widest font-extrabold mb-2">
+              <div className="flex items-center gap-2 font-mono-tech text-xs uppercase tracking-widest font-semibold mb-2">
                 <Layers className="w-3.5 h-3.5 text-[#d4af37]" />
                 <span className="text-[#d4af37]">{contentOverride?.pillarsEyebrow || 'THE THREE ELEMENTS'}</span>
               </div>
-              <h3 className="font-syne font-extrabold text-2xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight leading-tight">
+              <h3 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
                 {contentOverride?.pillarsHeading || 'Everything your class needs to leave a legacy'}
               </h3>
             </ScrollReveal>

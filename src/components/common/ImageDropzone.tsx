@@ -40,9 +40,8 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   const getCropAspectRatio = (): CropAspectRatio => {
     switch (aspectRatio) {
       case '1:1':
-        return '1:1';
       case 'portrait':
-        return '4:5';
+        return '1:1';
       case '16:9':
         return '16:9';
       case 'banner':
@@ -141,13 +140,12 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   const getAspectClass = () => {
     switch (aspectRatio) {
       case '1:1':
-        return 'aspect-square max-h-40';
+      case 'portrait':
+        return 'aspect-square max-w-[200px] sm:max-w-[220px] mx-auto';
       case '16:9':
         return 'aspect-[16/9] max-h-56';
       case 'banner':
         return 'aspect-[21/9] max-h-48 sm:max-h-56';
-      case 'portrait':
-        return 'aspect-[4/5] max-h-52';
       default:
         return 'min-h-[120px] max-h-52';
     }

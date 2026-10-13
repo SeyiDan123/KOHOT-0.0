@@ -18,6 +18,7 @@ import {
   History,
   ArrowRightLeft,
   Building2,
+  MessageSquare,
   X
 } from 'lucide-react';
 import { UserAccount, ClassSet } from '../../types';
@@ -26,6 +27,7 @@ import { InviteOtherDepartmentsModal } from '../admin/InviteOtherDepartmentsModa
 import { HelpModal } from '../public/HelpModal';
 import { UniversalModal } from './UniversalModal';
 import { ImageCropModal } from './ImageCropModal';
+import { ContactSupportModal } from './ContactSupportModal';
 
 export interface ProfileMenuProps {
   currentUser: UserAccount;
@@ -100,6 +102,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
   const [classAdminInitialTab, setClassAdminInitialTab] = useState<'admin_history' | 'transfer_admin'>('transfer_admin');
   const [isInviteDepartmentsOpen, setIsInviteDepartmentsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isSupportOpen, setIsSupportOpen] = useState(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [isMyProfileModalOpen, setIsMyProfileModalOpen] = useState(false);
 
@@ -552,6 +555,11 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
             <div className="font-mono-tech text-[10px] text-zinc-400 truncate">
               {currentUser.email}
             </div>
+            {currentUser.phone && (
+              <div className="font-mono-tech text-[10px] text-zinc-400 truncate">
+                {currentUser.phone}
+              </div>
+            )}
             <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase bg-white/10 text-white border border-white/15 font-semibold">
               <ShieldCheck className="w-2.5 h-2.5 text-[#d4af37]" />
               <span className="truncate">{roleTitle}</span>
@@ -657,6 +665,20 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
             >
               <HelpCircle className="w-4 h-4 text-zinc-400" />
               <span>Help &amp; FAQ</span>
+            </button>
+
+            {/* 5b. Contact Support */}
+            <button
+              id="profile-menu-contact-support"
+              type="button"
+              onClick={() => {
+                setIsProfileOpen(false);
+                setIsSupportOpen(true);
+              }}
+              className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white flex items-center gap-2.5 transition-colors text-left cursor-pointer active:bg-white/15"
+            >
+              <MessageSquare className="w-4 h-4 text-[#d4af37]" />
+              <span>Contact Support</span>
             </button>
 
             <div className="my-1 border-t border-white/10" />
@@ -974,6 +996,14 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
           }}
         />
       )}
+
+      {/* Contact Support Modal */}
+      <ContactSupportModal
+        isOpen={isSupportOpen}
+        onClose={() => setIsSupportOpen(false)}
+        currentUser={currentUser}
+        currentSet={currentSet}
+      />
     </div>
   );
 };

@@ -11,7 +11,15 @@ import {
   ExternalLink,
   MessageSquare,
   Camera,
-  Heart
+  Heart,
+  LayoutDashboard,
+  Layers,
+  Award,
+  BookOpen,
+  Users,
+  Video,
+  ShieldCheck,
+  Quote
 } from 'lucide-react';
 import { ScrollReveal } from '../common/ScrollReveal';
 
@@ -167,13 +175,13 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
         
         {/* Section Header - SLOW-MOTION: Titles first (1250ms), then Captions (1350ms) */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6">
-          <div className="max-w-2xl space-y-3">
+          <div className="max-w-2xl space-y-3 text-left">
             <ScrollReveal delayMs={0} durationMs={1250}>
               <div className="flex items-center gap-2 font-mono-tech text-xs uppercase tracking-widest font-extrabold mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-[#d4af37]" />
                 <span className="text-[#d4af37]">HOW IT WORKS</span>
               </div>
-              <h2 className="font-syne font-extrabold text-3xl sm:text-5xl lg:text-6xl text-slate-900 dark:text-white tracking-tight leading-tight">
+              <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
                 From Your Class to a Legacy That Lasts
               </h2>
             </ScrollReveal>
@@ -480,23 +488,23 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
             SLOW-MOTION: Title first (1250ms), then Captions (1350ms)
             ===================================================================== */}
         <div id="department-legacy" className="mt-28 pt-20 -mx-6 sm:-mx-10 px-6 sm:px-10 py-24 bg-slate-100/80 dark:bg-[#121214] border-t border-b border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-white transition-colors duration-300 relative overflow-hidden">
-          <div className="text-center max-w-3xl mx-auto space-y-4 mb-16 relative z-10">
+          <div className="text-left max-w-4xl space-y-4 mb-16 relative z-10">
             <ScrollReveal delayMs={0} durationMs={1250}>
-              <div className="flex items-center justify-center gap-2 font-mono-tech text-xs uppercase tracking-widest font-extrabold mb-2">
+              <div className="flex items-center gap-2 font-mono-tech text-xs uppercase tracking-widest font-extrabold mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-[#d4af37]" />
                 <span className="text-[#d4af37]">ONE DEPARTMENT. MANY GENERATIONS.</span>
               </div>
-              <h3 className="font-syne font-extrabold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight leading-tight">
+              <h3 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
                 One Legacy. Every Class.
               </h3>
             </ScrollReveal>
 
             <ScrollReveal delayMs={480} durationMs={1350}>
               {/* Calm white in dark mode, slate grey in light mode */}
-              <p className="font-body text-base text-slate-600 dark:text-zinc-200 font-medium max-w-2xl mx-auto leading-relaxed">
+              <p className="font-body text-base text-slate-600 dark:text-zinc-200 font-medium max-w-3xl leading-relaxed">
                 A graduating class is not an isolated event, but one chapter in a department’s continuing story.
               </p>
-              <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 font-normal max-w-2xl mx-auto leading-relaxed mt-2">
+              <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 font-normal max-w-3xl leading-relaxed mt-2">
                 Mounted permanently in your faculty corridor, the architectural metal Department Legacy Plaque links generations of classes together. Anyone scanning or tapping the physical plaque instantly accesses the living archive of graduating classes across decades.
               </p>
             </ScrollReveal>
@@ -599,17 +607,201 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
           </ScrollReveal>
 
           {/* =====================================================================
-              PART 3: REASSURING PRIVACY & PRESERVATION (PURE WHITE CARD IN LIGHT, DARK GREY IN DARK)
+              PART 3: THE ALBUM EXPERIENCE & ARCHITECTURE (PRODUCT SPECIFICATION)
+              Curated overview of platform systems, physical plaques & features
+              ===================================================================== */}
+          <div id="album-experience-specs" className="mt-20 max-w-5xl mx-auto space-y-8">
+            <ScrollReveal delayMs={100} durationMs={800}>
+              <div className="text-left space-y-3 mb-10">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] text-[11px] font-mono-tech font-bold uppercase tracking-wider">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>The Complete Album Experience</span>
+                </div>
+                <h3 className="font-syne font-bold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight">
+                  Everything Crafted for Your Graduating Class
+                </h3>
+                <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-300 max-w-3xl leading-relaxed">
+                  A seamless blend of physical campus permanence, dedicated administrative control, and rich interactive storytelling designed to celebrate your cohort forever.
+                </p>
+              </div>
+            </ScrollReveal>
+
+            {/* Product Specifications Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {/* Feature 1: Admin Dashboard */}
+              <ScrollReveal delayMs={150} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[#d4af37] flex items-center justify-center">
+                      <LayoutDashboard className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      Dedicated Admin Dashboard
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      Intuitive curation suite for class reps to review graduate submissions, moderate photo stories, trigger WhatsApp invitations, and configure anniversary dispatch queues.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase tracking-wider font-semibold">
+                    Curation &amp; Management
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 2: Dedicated Legacy Wall */}
+              <ScrollReveal delayMs={200} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-blue-500 dark:text-blue-400 flex items-center justify-center">
+                      <Layers className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      Dedicated Legacy Wall
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      A central generational portal dedicated exclusively to your department, displaying historical sets chronologically without mixing cohorts across institutions.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-blue-600 dark:text-blue-400 uppercase tracking-wider font-semibold">
+                    Department Timeline
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 3: 1 Album per Set & Physical Plaque */}
+              <ScrollReveal delayMs={250} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                      <QrCode className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      1 Album Per Set &amp; Legacy Plaque
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      One immutable digital album tethered to a physical architectural brass plaque permanently installed in the department faculty corridor.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-emerald-600 dark:text-emerald-400 uppercase tracking-wider font-semibold">
+                    Physical Campus Anchor
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 4: Profiles */}
+              <ScrollReveal delayMs={300} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                      <Users className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      High-Fidelity Profiles
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      Square portrait framing preserving edge balance, nicknames, memorable quotes, verified email links, and diverse social handles (X/Twitter, LinkedIn, Instagram).
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-purple-600 dark:text-purple-400 uppercase tracking-wider font-semibold">
+                    Graduate Directory
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 5: Moments & Video Stream */}
+              <ScrollReveal delayMs={350} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                      <Video className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      Moments &amp; Video Streams
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      Photo memories organized by event milestones (matriculation, dinners, project defense) paired with streaming video streams of class documentaries.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-rose-600 dark:text-rose-400 uppercase tracking-wider font-semibold">
+                    Media Archives
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 6: Honors & Awards */}
+              <ScrollReveal delayMs={400} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center">
+                      <Award className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      Awards &amp; Peer Honors
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      Peer-voted superlatives and academic honors recognizing exceptional talent, student leadership, and unforgettable class personalities.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase tracking-wider font-semibold">
+                    Accolades &amp; Honors
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 7: Final Thoughts (Lecturers & Leaders) */}
+              <ScrollReveal delayMs={450} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
+                      <Quote className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      Final Thoughts &amp; Voices
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      Valedictory charges and wisdom recorded directly from revered lecturers, heads of department, and student union executives.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-cyan-600 dark:text-cyan-400 uppercase tracking-wider font-semibold">
+                    Mentorship &amp; Guidance
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 8: Our Story */}
+              <ScrollReveal delayMs={500} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 md:col-span-2 lg:col-span-2">
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                      <BookOpen className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      Our Story &amp; Department Narrative
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      An authentic narrative chronicling the department’s origins, curriculum journeys, landmark milestones, and the collective spirit of the graduating class across their entire academic voyage.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-indigo-600 dark:text-indigo-400 uppercase tracking-wider font-semibold">
+                    Chronicle &amp; Legacy
+                  </span>
+                </div>
+              </ScrollReveal>
+            </div>
+          </div>
+
+          {/* =====================================================================
+              PART 4: REASSURING PRIVACY & PRESERVATION (LEFT-ALIGNED CLEAN CARD)
               ===================================================================== */}
           <ScrollReveal delayMs={300} durationMs={950}>
-            <div className="mt-16 p-8 sm:p-10 rounded-[32px] bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 text-center max-w-4xl mx-auto space-y-4 shadow-sm text-slate-900 dark:text-white">
-              <span className="font-mono-tech text-xs uppercase tracking-widest text-[#d4af37] font-bold">
+            <div className="mt-16 p-8 sm:p-10 rounded-[32px] bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 text-left max-w-4xl mx-auto space-y-4 shadow-sm text-slate-900 dark:text-white">
+              <span className="font-mono-tech text-xs uppercase tracking-widest text-[#d4af37] font-bold block text-left">
                 PRIVACY &amp; PRESERVATION
               </span>
-              <h4 className="font-syne font-bold text-2xl sm:text-3xl text-slate-900 dark:text-white tracking-tight">
+              <h4 className="font-syne font-bold text-2xl sm:text-3xl text-slate-900 dark:text-white tracking-tight text-left">
                 Not public. Not forgotten. Preserved within your department’s story.
               </h4>
-              <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 max-w-2xl mx-auto leading-relaxed">
+              <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 max-w-3xl leading-relaxed text-left">
                 A Class Album is not an unsearchable lost page and not a public social media feed. It is safely preserved as part of your department’s KoHot Legacy, reached through your department’s physical Legacy Plaque, and shared by the members of your graduating class.
               </p>
             </div>

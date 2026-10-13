@@ -177,7 +177,7 @@ export const AlbumAdminHelpModal: React.FC<AlbumAdminHelpModalProps> = ({
                 Your request has been received.
               </h4>
               <p className="font-body text-xs text-zinc-300 max-w-md mx-auto leading-relaxed">
-                KoHot normally assigns Class Album administration through its registration and approval process. An Owner will review your details, cross-reference administration history, and reach out via email if any follow-up is needed.
+                KoHot normally assigns Class Album administration through its registration and approval process. A Host will review your details, cross-reference administration history, and reach out via email if any follow-up is needed.
               </p>
             </div>
 
@@ -229,7 +229,7 @@ export const AlbumAdminHelpModal: React.FC<AlbumAdminHelpModalProps> = ({
               <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-start gap-2.5">
                 <Info className="w-4 h-4 shrink-0 mt-0.5" />
                 <p className="leading-relaxed">
-                  Currently recorded Class Admin: <strong>{currentSet.classRepName || 'Assigned Representative'}</strong>. Submitting this form requests structured Owner review. It does not automatically transfer or alter administrative control.
+                  Currently recorded Class Admin: <strong>{currentSet.classRepName || 'Assigned Representative'}</strong>. Submitting this form requests structured Host review. It does not automatically transfer or alter administrative control.
                 </p>
               </div>
             )}

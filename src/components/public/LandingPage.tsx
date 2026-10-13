@@ -5,6 +5,7 @@ import { PillarsCarousel } from './PillarsCarousel';
 import { TestimonialsCarousel } from './TestimonialsCarousel';
 import { HelpModal } from './HelpModal';
 import { AlbumDisputeModal } from '../admin/AlbumDisputeModal';
+import { ContactSupportModal } from '../common/ContactSupportModal';
 import { 
   ArrowRight, 
   Lock, 
@@ -52,6 +53,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 }) => {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
+  const [isSupportOpen, setIsSupportOpen] = useState(false);
   const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() => getTheme());
 
   useEffect(() => {
@@ -263,7 +265,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             {/* Main Headline - Heading remains deep charcoal/black in light mode, white in dark mode */}
             <h1 
               id="hero-main-title"
-              className="font-syne font-extrabold text-4xl sm:text-6xl md:text-7xl lg:text-[5.5rem] text-zinc-900 dark:text-white tracking-tight leading-[1.08] max-w-4xl animate-slow-reveal"
+              className="font-syne font-extrabold text-3xl sm:text-5xl md:text-6xl lg:text-[4.75rem] text-zinc-900 dark:text-white tracking-tight leading-[1.08] max-w-4xl animate-slow-reveal"
             >
               <span className="block">{contentOverride?.heroHeadlineLine1 || 'Beautiful'}</span>
               <span className="block text-zinc-900 dark:text-white italic font-medium">{contentOverride?.heroHeadlineLine2 || 'graduate memories'}</span>
@@ -377,7 +379,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           "EVERYTHING YOUR CLASS NEEDS TO LEAVE A LEGACY"
           ========================================================================= */}
       <PillarsCarousel 
-        onExploreDemoAlbum={(setId) => onSelectSet(setId || sets[0]?.id || 'unilag-cs-2026')}
+        onExploreDemoAlbum={(setId) => onSelectSet(setId || 'crownfield-law-2026')}
         onOpenOnboarding={onOpenOnboarding}
         contentOverride={contentOverride}
       />
@@ -405,9 +407,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           ========================================================================= */}
       <section 
         id="legacy-preservation-banner"
-        className="relative w-full overflow-hidden border-t border-zinc-800 text-white min-h-[440px] sm:min-h-[480px] flex items-center justify-center select-none"
+        className="relative w-full overflow-hidden border-t border-zinc-800 text-white min-h-[440px] sm:min-h-[480px] flex items-center select-none"
       >
-        {/* 4 Fade-in / Fade-out Background Pictures */}
+        {/* 4 Fade-in / Fade-out Background Pictures - Reduced darkness so pictures clearly show */}
         <div className="absolute inset-0 z-0 overflow-hidden">
           {legacyBannerImages.map((imgUrl, idx) => (
             <div
@@ -420,29 +422,28 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               }}
             />
           ))}
-          {/* Multi-layer Luxury Dark Vignette & Gradient for High Contrast */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-black/60 z-10" />
-          <div className="absolute inset-0 bg-black/40 z-10" />
+          {/* Soft light gradient overlay so transitioning background photos clearly shine through */}
+          <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/30 to-black/15 z-10" />
         </div>
 
-        {/* Foreground Content */}
-        <div className="relative z-20 max-w-4xl mx-auto px-6 py-20 sm:py-24 text-center space-y-7 animate-fadeIn">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-[#d4af37] shadow-lg">
+        {/* Foreground Content - Aligned to the Left */}
+        <div className="relative z-20 max-w-7xl w-full mx-auto px-6 sm:px-10 py-16 sm:py-20 text-left space-y-6 animate-fadeIn">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/40 backdrop-blur-md border border-white/20 text-[#d4af37] shadow-lg">
             <Sparkles className="w-3.5 h-3.5" />
             <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-[0.2em] font-semibold text-white">
               Permanent Class Preservation
             </span>
           </div>
 
-          <h2 className="font-syne font-black text-3xl sm:text-5xl lg:text-6xl text-white tracking-tight leading-tight">
+          <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-white tracking-tight leading-tight max-w-3xl drop-shadow-md">
             Preserve your Legacy
           </h2>
 
-          <p className="font-body text-sm sm:text-base md:text-lg text-zinc-300 max-w-2xl mx-auto leading-relaxed font-normal">
+          <p className="font-body text-sm sm:text-base md:text-lg text-zinc-100 max-w-2xl leading-relaxed font-normal drop-shadow">
             The people you shared these formative years with. The moments, laughter, triumphs, and stories you built together. Give your graduating class a permanent home to remember it all.
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
+          <div className="flex flex-col sm:flex-row items-start justify-start gap-4 pt-2">
             <button
               id="banner-create-class-album-btn"
               type="button"
@@ -457,29 +458,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <button
                 type="button"
                 onClick={handleExplore}
-                className="w-full sm:w-auto px-7 py-4 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md text-white font-syne font-semibold text-xs sm:text-sm uppercase tracking-wider border border-white/25 transition-all flex items-center justify-center gap-2 cursor-pointer hover:scale-105 active:scale-95"
+                className="w-full sm:w-auto px-7 py-4 rounded-full bg-black/50 hover:bg-black/70 backdrop-blur-md text-white font-syne font-semibold text-xs sm:text-sm uppercase tracking-wider border border-white/25 transition-all flex items-center justify-center gap-2 cursor-pointer hover:scale-105 active:scale-95"
               >
                 <span>Explore Demo Albums</span>
                 <ExternalLink className="w-3.5 h-3.5 text-zinc-300" />
               </button>
             )}
-          </div>
-
-          {/* 4 Image Slide Indicators */}
-          <div className="flex items-center justify-center gap-2 pt-3">
-            {legacyBannerImages.map((_, dotIdx) => (
-              <button
-                key={dotIdx}
-                type="button"
-                onClick={() => setActiveBannerIdx(dotIdx)}
-                className={`transition-all duration-300 cursor-pointer rounded-full ${
-                  activeBannerIdx === dotIdx
-                    ? 'w-7 h-2 bg-[#d4af37]'
-                    : 'w-2 h-2 bg-white/30 hover:bg-white/60'
-                }`}
-                aria-label={`Slide ${dotIdx + 1}`}
-              />
-            ))}
           </div>
         </div>
       </section>
@@ -512,6 +496,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               className="hover:text-white transition-colors cursor-pointer"
             >
               Explore Demos
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsSupportOpen(true)}
+              className="hover:text-white transition-colors cursor-pointer"
+            >
+              Contact Support
             </button>
             <button
               onClick={() => setIsHelpOpen(true)}
@@ -558,6 +549,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       <AlbumDisputeModal
         isOpen={isDisputeModalOpen}
         onClose={() => setIsDisputeModalOpen(false)}
+        currentUser={currentUser}
+      />
+
+      {/* Public Contact Support Modal */}
+      <ContactSupportModal
+        isOpen={isSupportOpen}
+        onClose={() => setIsSupportOpen(false)}
         currentUser={currentUser}
       />
     </div>

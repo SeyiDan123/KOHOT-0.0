@@ -175,10 +175,10 @@ export const MasterNextClassHandoffsSection: React.FC<MasterNextClassHandoffsSec
     // 1. Log manual communication
     logManualCommunication({
       channel,
-      recipientContact: phone || 'Owner Follow-up',
+      recipientContact: phone || 'Host Follow-up',
       recipientName: contact?.name || `Class of ${nextYear} Representative`,
-      event: 'owner_manual_whatsapp_followup',
-      subjectOrSummary: `Owner Manual Outreach: ${set.departmentName} (${nextYear})`,
+      event: 'host_manual_whatsapp_followup',
+      subjectOrSummary: `Host Manual Outreach: ${set.departmentName} (${nextYear})`,
       bodySnippet: customMessage,
       metadata: {
         setId: set.id,
@@ -213,7 +213,7 @@ export const MasterNextClassHandoffsSection: React.FC<MasterNextClassHandoffsSec
       history: [
         ...(invite?.history || []),
         {
-          action: `KoHot Owner Manual Follow-up via ${channel.toUpperCase()}`,
+          action: `KoHot Host Manual Follow-up via ${channel.toUpperCase()}`,
           timestamp: nowIso,
           actor: 'KoHot Master Host',
           channel,
@@ -276,7 +276,7 @@ export const MasterNextClassHandoffsSection: React.FC<MasterNextClassHandoffsSec
       history: [
         ...(rec.invite?.history || []),
         {
-          action: `Status manually updated to ${newStatus} by Owner`,
+          action: `Status manually updated to ${newStatus} by Host`,
           timestamp: nowIso,
           actor: 'KoHot Master Host',
         },
@@ -390,7 +390,7 @@ export const MasterNextClassHandoffsSection: React.FC<MasterNextClassHandoffsSec
                 <th className="p-4">Stored Backup / Contact</th>
                 <th className="p-4">Handoff Status</th>
                 <th className="p-4">Last Activity</th>
-                <th className="p-4 text-right">Owner Actions</th>
+                <th className="p-4 text-right">Host Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 font-mono-tech">

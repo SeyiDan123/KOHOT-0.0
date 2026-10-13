@@ -12,6 +12,7 @@ import {
   interpolateTemplate,
   KOHOT_DEFAULT_TEMPLATES
 } from '../../utils/kohotCommunications';
+import { runReminderCheck, fetchReminderLogs } from '../../utils/apiClient';
 import {
   Calendar,
   Mail,
@@ -80,8 +81,18 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
   contentOverride,
   onUpdateContentOverride,
 }) => {
-  // Main Section Navigation: Directory & Reminders vs Executive Blast vs Templates vs Audit History
-  const [communicationsTab, setCommunicationsTab] = useState<'directory' | 'executive_blast' | 'templates' | 'audit_history'>('directory');
+  // Main Section Navigation: Directory & Reminders vs Executive Blast vs Templates vs Audit History vs Testing Tools
+  const [communicationsTab, setCommunicationsTab] = useState<'directory' | 'testing_tools' | 'executive_blast' | 'templates' | 'audit_history'>('directory');
+
+  // Annual Album Reminder Testing Tools State (Prompt B.8 & B.5)
+  const [dryRunMode, setDryRunMode] = useState(true);
+  const [asOfDateInput, setAsOfDateInput] = useState(() => new Date().toISOString().split('T')[0]);
+  const [isRunningReminderCheck, setIsRunningReminderCheck] = useState(false);
+  const [reminderCheckResult, setReminderCheckResult] = useState<any | null>(null);
+  const [reminderLogsList, setReminderLogsList] = useState<any[]>([]);
+  const [bouncesList, setBouncesList] = useState<any[]>([]);
+  const [reminderErrorMsg, setReminderErrorMsg] = useState('');
+  const [testModeActive, setTestModeActive] = useState(false);
 
   // Executive Outreach Blast State
   const defaultBlastImg = contentOverride?.executiveBlastImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85';
@@ -441,6 +452,27 @@ KoHot — Beautiful graduate memories live here.`;
           >
             <Edit3 className="w-3.5 h-3.5" />
             <span>Email/Messages Templates</span>
+          </button>
+
+          <button
+            type="button"
+            id="tab-comms-testing-tools"
+            onClick={() => {
+              setCommunicationsTab('testing_tools');
+              // Automatically fetch logs when opening tab
+              fetchReminderLogs().then((d) => {
+                setReminderLogsList(d.logs || []);
+                setBouncesList(d.bounces || []);
+              }).catch(() => {});
+            }}
+            className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              communicationsTab === 'testing_tools'
+                ? 'bg-amber-400 text-black font-bold shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>Reminder Engine &amp; Testing Tools</span>
           </button>
 
           <button
@@ -1466,6 +1498,296 @@ KoHot — Beautiful graduate memories live here.`;
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 5: ANNUAL REMINDER ENGINE & TESTING TOOLS (PROMPT B.1-B.8)
+          ========================================================================= */}
+      {communicationsTab === 'testing_tools' && (
+        <div className="space-y-8 animate-fadeIn">
+          {/* Header Card */}
+          <div className="p-6 sm:p-8 rounded-3xl bg-[#14151a] border border-white/10 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-white/10">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-[#d4af37] flex items-center justify-center shrink-0">
+                  <Sliders className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-syne font-bold text-xl text-white">
+                    Annual Album Reminder Engine
+                  </h3>
+                  <p className="font-body text-xs text-zinc-400">
+                    Resend API Provider • 15-Minute Cloudflare Cron • 40/run subrequest cap • 90/day send cap
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-mono-tech">
+                  Provider: Resend Active
+                </span>
+                <span className="px-3 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs font-mono-tech">
+                  Cloudflare: TODO
+                </span>
+              </div>
+            </div>
+
+            {/* Architecture Details Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono-tech">
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
+                <span className="text-zinc-500 text-[10px] uppercase">Anniversary Trigger</span>
+                <p className="text-white font-bold">15-Minute Cron Job</p>
+                <span className="text-zinc-400 text-[11px]">*/15 * * * * trigger</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
+                <span className="text-zinc-500 text-[10px] uppercase">Class Spread (1-28)</span>
+                <p className="text-white font-bold">Derived Send Day</p>
+                <span className="text-zinc-400 text-[11px]">Fixed day from album ID</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
+                <span className="text-zinc-500 text-[10px] uppercase">Safety Limits</span>
+                <p className="text-white font-bold">Max 40 / run • 90 / day</p>
+                <span className="text-zinc-400 text-[11px]">Free tier subrequest safe</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
+                <span className="text-zinc-500 text-[10px] uppercase">D1 Reliability</span>
+                <p className="text-white font-bold">Never Sent Twice</p>
+                <span className="text-zinc-400 text-[11px]">Failed retries next run</span>
+              </div>
+            </div>
+
+            {/* Interactive Testing Controls Form */}
+            <div className="p-6 rounded-2xl bg-[#0b0c10] border border-[#d4af37]/30 space-y-5">
+              <div className="flex items-center justify-between">
+                <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#d4af37]" />
+                  <span>Interactive Testing Tools</span>
+                </h4>
+                <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase font-bold tracking-wider">
+                  Host Exclusive
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                {/* 1. Dry Run Toggle */}
+                <div className="space-y-1.5">
+                  <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
+                    Execution Mode
+                  </label>
+                  <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={dryRunMode}
+                      onChange={(e) => setDryRunMode(e.target.checked)}
+                      className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
+                    />
+                    <span className="font-mono-tech text-xs text-white">
+                      Dry-Run Mode (Simulate without sending)
+                    </span>
+                  </label>
+                </div>
+
+                {/* 2. Simulated Date Picker */}
+                <div className="space-y-1.5">
+                  <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
+                    Simulate Date (Run as if today were)
+                  </label>
+                  <input
+                    type="date"
+                    value={asOfDateInput}
+                    onChange={(e) => setAsOfDateInput(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#14151a] border border-white/15 text-white font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none"
+                  />
+                </div>
+
+                {/* 3. TEST_MODE toggle */}
+                <div className="space-y-1.5">
+                  <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
+                    Environment TEST_MODE
+                  </label>
+                  <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={testModeActive}
+                      onChange={(e) => setTestModeActive(e.target.checked)}
+                      className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
+                    />
+                    <span className="font-mono-tech text-xs text-white">
+                      Send to seyidan03@gmail.com with [TEST]
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Action Button */}
+              <div className="pt-2 flex items-center justify-between flex-wrap gap-4">
+                <p className="font-body text-xs text-zinc-400">
+                  {dryRunMode
+                    ? 'Dry-run evaluates criteria against all active class albums and lists eligible graduates without emailing.'
+                    : 'Live mode dispatches up to 40 emails via Resend with signed unsubscribe tokens and records logs in D1.'}
+                </p>
+
+                <button
+                  type="button"
+                  id="run-reminder-check-btn"
+                  disabled={isRunningReminderCheck}
+                  onClick={async () => {
+                    setIsRunningReminderCheck(true);
+                    setReminderErrorMsg('');
+                    try {
+                      const res = await runReminderCheck({
+                        dryRun: dryRunMode,
+                        asOfDate: asOfDateInput,
+                      });
+                      setReminderCheckResult(res);
+                      const logsData = await fetchReminderLogs();
+                      setReminderLogsList(logsData.logs || []);
+                      setBouncesList(logsData.bounces || []);
+                    } catch (err: any) {
+                      setReminderErrorMsg(err.message || 'Reminder check failed');
+                    } finally {
+                      setIsRunningReminderCheck(false);
+                    }
+                  }}
+                  className="px-6 py-3 rounded-full bg-[#d4af37] hover:bg-[#e6c158] disabled:opacity-50 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95"
+                >
+                  <Send className="w-3.5 h-3.5 text-black" />
+                  <span>{isRunningReminderCheck ? 'Checking...' : 'Run reminder check'}</span>
+                </button>
+              </div>
+
+              {reminderErrorMsg && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{reminderErrorMsg}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Check Results View */}
+            {reminderCheckResult && (
+              <div className="p-6 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4 animate-fadeIn">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                  <div>
+                    <h4 className="font-syne font-bold text-base text-white">
+                      Reminder Check Results ({reminderCheckResult.dryRun ? 'Dry-Run Simulation' : 'Live Execution'})
+                    </h4>
+                    <p className="font-mono-tech text-xs text-zinc-400 mt-0.5">
+                      As of {reminderCheckResult.asOfDate} (Month: {reminderCheckResult.currentMonth}, Day: {reminderCheckResult.currentDay}, Year: {reminderCheckResult.currentYear})
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <span className="px-3 py-1 rounded-full bg-white/10 font-mono-tech text-xs text-white font-bold">
+                      {reminderCheckResult.totalCandidates} Total Eligible
+                    </span>
+                    <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-mono-tech text-xs font-bold border border-emerald-500/30">
+                      {reminderCheckResult.dryRun ? `${reminderCheckResult.candidates?.length || 0} Would Receive` : `${reminderCheckResult.sentCount} Dispatched`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Candidate Table */}
+                {reminderCheckResult.candidates?.length === 0 ? (
+                  <p className="font-body text-xs text-zinc-400 py-4 text-center">
+                    No graduating class albums matched the reminder anniversary date for day {reminderCheckResult.currentDay} of month {reminderCheckResult.currentMonth}. Try simulating a different date (e.g. December).
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left font-mono-tech text-xs">
+                      <thead>
+                        <tr className="border-b border-white/10 text-zinc-500 text-[10px] uppercase tracking-wider">
+                          <th className="py-2.5 px-3">Student Name</th>
+                          <th className="py-2.5 px-3">Email Address</th>
+                          <th className="py-2.5 px-3">Class Album</th>
+                          <th className="py-2.5 px-3">Convocation Month</th>
+                          <th className="py-2.5 px-3">Send Day (1-28)</th>
+                          <th className="py-2.5 px-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {reminderCheckResult.candidates.map((c: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-white/[0.02]">
+                            <td className="py-2.5 px-3 text-white font-medium">{c.studentName}</td>
+                            <td className="py-2.5 px-3 text-zinc-300">{c.studentEmail}</td>
+                            <td className="py-2.5 px-3 text-[#d4af37]">{c.classSetName}</td>
+                            <td className="py-2.5 px-3 text-zinc-400">Month {c.convocationMonth}</td>
+                            <td className="py-2.5 px-3 text-zinc-400">Day {c.sendDay}</td>
+                            <td className="py-2.5 px-3">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/15 text-emerald-400 font-bold border border-emerald-500/25">
+                                {reminderCheckResult.dryRun ? 'Eligible' : 'Sent'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Reliability & Bounce Inspection Section (Prompt B.5) */}
+            <div className="p-6 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <h4 className="font-syne font-bold text-base text-white">
+                    Reliability &amp; Email Failure Inspection (D1 Log)
+                  </h4>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-400 text-xs font-mono-tech font-bold">
+                  {bouncesList.length} Failed / Bounces
+                </span>
+              </div>
+
+              <p className="font-body text-xs text-zinc-400">
+                To guarantee reliability, KoHot checks D1 prior to every dispatch so no student receives duplicate reminders in the same calendar year. Any failures or bounces are recorded and queued for automatic retry on the next 15-minute cron run.
+              </p>
+
+              {bouncesList.length === 0 ? (
+                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono-tech flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>No bounced or failed emails recorded. All reminders delivered reliably.</span>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left font-mono-tech text-xs">
+                    <thead>
+                      <tr className="border-b border-white/10 text-zinc-500 text-[10px] uppercase">
+                        <th className="py-2 px-3">Student Email</th>
+                        <th className="py-2 px-3">Album</th>
+                        <th className="py-2 px-3">Year</th>
+                        <th className="py-2 px-3">Provider</th>
+                        <th className="py-2 px-3">Error / Bounce Cause</th>
+                        <th className="py-2 px-3">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {bouncesList.map((b, idx) => (
+                        <tr key={idx} className="hover:bg-white/[0.02]">
+                          <td className="py-2.5 px-3 text-white font-bold">{b.student_email}</td>
+                          <td className="py-2.5 px-3 text-zinc-300">{b.set_id}</td>
+                          <td className="py-2.5 px-3 text-zinc-400">{b.year}</td>
+                          <td className="py-2.5 px-3 uppercase text-amber-400">{b.provider}</td>
+                          <td className="py-2.5 px-3 text-red-400">{b.error_message || 'Bounce / rejected by provider'}</td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              Retry next run
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>

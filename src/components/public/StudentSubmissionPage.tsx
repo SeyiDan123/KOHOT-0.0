@@ -201,12 +201,17 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                 <ArrowLeft className="w-4 h-4" />
               </button>
             )}
-            <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onBackToHome}
+              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+              title="Return to KoHot Website"
+            >
               <span className="font-syne font-extrabold text-base tracking-tight text-slate-900 dark:text-white">KoHot</span>
               <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 text-[10px] font-mono-tech uppercase tracking-wider text-slate-600 dark:text-zinc-400 font-bold">
                 Graduate Entry
               </span>
-            </div>
+            </button>
           </div>
 
           <div className="flex items-center gap-2">
@@ -583,7 +588,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                       />
 
                       <SocialUrlInputField
-                        label="X"
+                        label="X (Twitter)"
                         prefix="x.com/"
                         value={twitterHandle}
                         onChange={setTwitterHandle}
@@ -651,8 +656,8 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
 
                 {/* Simulated Card matching DepartmentAlbumView 4:5 grid format */}
                 <div className="rounded-3xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 overflow-hidden shadow-xl text-slate-900 dark:text-white">
-                  {/* Photo with exact 4:5 aspect ratio */}
-                  <div className="relative w-full aspect-[4/5] bg-slate-100 dark:bg-neutral-950 overflow-hidden">
+                  {/* Photo with exact 1:1 aspect ratio */}
+                  <div className="relative w-full aspect-square bg-slate-100 dark:bg-neutral-950 overflow-hidden">
                     {photoDataUrl ? (
                       <img
                         src={photoDataUrl}

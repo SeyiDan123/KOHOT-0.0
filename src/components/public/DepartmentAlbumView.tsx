@@ -5,8 +5,10 @@ import {
   StudentProfile, 
   MemoryEvent, 
   AwardItem, 
-  VoiceItem 
+  VoiceItem,
+  UniversityDirectoryItem
 } from '../../types';
+import { getStoredUniversities } from '../../data/initialData';
 import { 
   Users, 
   Camera, 
@@ -131,6 +133,7 @@ interface DepartmentAlbumViewProps {
   }) => void;
   onMainDashboard?: () => void;
   showMainButton?: boolean;
+  universities?: UniversityDirectoryItem[];
 }
 
 export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
@@ -149,8 +152,28 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   onOpenOnboardingWithInvite,
   onMainDashboard,
   showMainButton,
+  universities,
 }) => {
   const isAlbumAdmin = Boolean(isAdmin);
+
+  // Reflect authentic university and department logos configured in the directory on owner dashboard
+  const directoryRef = useMemo(() => {
+    try {
+      const list = universities && universities.length > 0 ? universities : getStoredUniversities();
+      for (const u of list) {
+        const d = u.departments?.find(
+          (dept) => dept.id === currentSet.departmentId || dept.name.toLowerCase() === currentSet.departmentName.toLowerCase()
+        );
+        if (d) return { dept: d, uni: u };
+      }
+    } catch (e) {
+      // fallback
+    }
+    return null;
+  }, [universities, currentSet.departmentId, currentSet.departmentName]);
+
+  const effectiveDeptLogo = directoryRef?.dept.logoUrl || currentSet.departmentLogoUrl;
+  const effectiveUniLogo = directoryRef?.uni.logoUrl || currentSet.institutionLogoUrl;
 
   // Detect if entry is from physical Legacy Plaque QR code
   const isPlaqueMode = useMemo(() => {
@@ -632,38 +655,42 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           : 'bg-[#060709]/85 border-white/[0.08] text-white'
       }`}>
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4 relative">
-          {/* Left: All Albums navigation button with arrow */}
-          <button
-            id="back-to-home-btn"
-            onClick={onBackToGrid}
-            className={`flex items-center gap-2.5 transition-colors cursor-pointer group shrink-0 ${
-              isLightMode ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-300 hover:text-white'
-            }`}
-            title={
-              originView === 'layer0_master'
-                ? 'Return to Master Host Dashboard'
-                : 'Return to All Albums'
-            }
-          >
-            <div className={`w-8 h-8 rounded-full border flex items-center justify-center transition-all shrink-0 ${
-              isLightMode 
-                ? 'bg-slate-100 group-hover:bg-slate-200 border-slate-300 text-slate-800' 
-                : 'bg-white/5 group-hover:bg-white/10 border-white/10 text-zinc-300 group-hover:text-white'
-            }`}>
-              <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
-            </div>
-            <span className={`font-syne font-bold text-sm sm:text-base tracking-wide transition-colors ${
-              isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
-            }`}>
-              All Albums
-            </span>
-          </button>
+          {/* Left: All Albums navigation */}
+          <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
+            {/* All Albums Navigation */}
+            <button
+              id="back-to-home-btn"
+              onClick={onBackToGrid}
+              className={`flex items-center gap-2 transition-colors cursor-pointer group shrink-0 ${
+                isLightMode ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-300 hover:text-white'
+              }`}
+              title={
+                originView === 'layer0_master'
+                  ? 'Return to Master Host Dashboard'
+                  : 'Return to All Albums'
+              }
+            >
+              <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full border flex items-center justify-center transition-all shrink-0 ${
+                isLightMode 
+                  ? 'bg-slate-100 group-hover:bg-slate-200 border-slate-300 text-slate-800' 
+                  : 'bg-white/5 group-hover:bg-white/10 border-white/10 text-zinc-300 group-hover:text-white'
+              }`}>
+                <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 group-hover:-translate-x-0.5 transition-transform" />
+              </div>
+              <span className={`font-syne font-bold text-xs sm:text-sm tracking-wide transition-colors ${
+                isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
+              }`}>
+                All Albums
+              </span>
+            </button>
+          </div>
 
           {/* Center: The sticky transition buttons permanently centralized (Admin Only) */}
           {isAlbumAdmin && onManageAlbum && (
             <AlbumAdminSwitcher
               activeMode="preview"
               showMainButton={Boolean(showMainButton)}
+              showManageButton={true}
               onMainDashboard={onMainDashboard}
               onManageAlbum={handleManageAlbumWithScroll}
               onPreviewAlbum={() => {
@@ -813,50 +840,53 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             {/* University & Department Logos Side by Side at the Top of the Names */}
             <div className="flex flex-col items-center justify-center gap-2.5 mb-3 animate-slow-reveal text-center">
               <div className="flex items-center justify-center gap-3">
-                {/* University Logo */}
-                {currentSet.institutionLogoUrl && (
+                {/* University Logo (Reflecting Directory on Owner Dashboard) */}
+                {effectiveUniLogo && (
                   <div 
-                    className="w-11 h-11 sm:w-12 sm:h-12 rounded-full overflow-hidden border border-white/25 bg-black/60 shrink-0 p-0.5 shadow-lg"
+                    className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl overflow-hidden border-2 border-amber-500/40 bg-white p-1 shrink-0 shadow-lg flex items-center justify-center"
                     title={`University: ${currentSet.institutionName}`}
                   >
                     <img
-                      src={currentSet.institutionLogoUrl}
+                      src={effectiveUniLogo}
                       alt={currentSet.institutionName}
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover rounded-full"
+                      className="w-full h-full object-contain"
                     />
                   </div>
                 )}
 
-                {/* Department Logo */}
+                {/* Department Logo (Reflecting Directory on Owner Dashboard) */}
                 <div 
-                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-full overflow-hidden border border-amber-400/40 bg-black/60 shrink-0 p-0.5 shadow-lg flex items-center justify-center"
+                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl overflow-hidden border-2 border-amber-500/40 bg-white p-1 shrink-0 shadow-lg flex items-center justify-center"
                   title={`Department: ${currentSet.departmentName}`}
                 >
-                  {currentSet.departmentLogoUrl ? (
+                  {effectiveDeptLogo ? (
                     <img
-                      src={currentSet.departmentLogoUrl}
+                      src={effectiveDeptLogo}
                       alt={currentSet.departmentName}
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover rounded-full"
+                      className="w-full h-full object-contain"
                     />
                   ) : (
-                    <div className="w-full h-full rounded-full bg-gradient-to-br from-amber-500/25 to-amber-950/60 border border-amber-400/30 flex items-center justify-center text-amber-300">
-                      <GraduationCap className="w-5 h-5 sm:w-6 sm:h-6 text-amber-300" />
+                    <div className="w-full h-full rounded-xl bg-amber-500/20 text-[#d4af37] flex items-center justify-center">
+                      <GraduationCap className="w-5 h-5 sm:w-6 sm:h-6 text-[#d4af37]" />
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Department and Institution Names Below Logos - Department First */}
-              <div className="text-center">
-                <p className="font-syne font-bold text-sm sm:text-base text-white tracking-wide">
+              {/* University Name Above, Department Name Below (University less prominent) */}
+              <div className="text-center space-y-0.5 pt-1">
+                <p className="font-syne font-semibold text-xs sm:text-sm text-zinc-300 tracking-wider uppercase">
+                  {currentSet.institutionName}
+                </p>
+                <p className="font-syne font-bold text-base sm:text-lg md:text-xl text-white tracking-wide">
                   {currentSet.departmentName.toUpperCase().startsWith('DEPARTMENT')
                     ? currentSet.departmentName
                     : `Department of ${currentSet.departmentName}`}
                 </p>
-                <p className="font-mono-tech text-xs text-zinc-300 mt-0.5">
-                  {currentSet.institutionName} • Class of {currentSet.graduationYear}
+                <p className="font-mono-tech text-[11px] text-[#d4af37] font-semibold mt-0.5">
+                  Class of {currentSet.graduationYear}
                 </p>
               </div>
             </div>
@@ -1183,14 +1213,14 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                   {/* Ambient sheen overlay on card hover */}
                   <div className="absolute inset-0 bg-gradient-to-b from-white/[0.04] via-transparent to-transparent opacity-0 group-hover/card:opacity-100 transition-opacity duration-300 pointer-events-none z-10" />
 
-                  {/* Photo Avatar */}
-                  <div className={`relative w-full aspect-[4/5] overflow-hidden ${
+                  {/* Photo Avatar (Square 1:1, object-cover) */}
+                  <div className={`relative w-full aspect-square overflow-hidden ${
                     isLightMode ? 'bg-slate-100' : 'bg-zinc-950'
                   }`}>
                     <GlazedImage
                       src={student.photoUrl}
                       alt={student.fullName}
-                      className="w-full h-full object-cover object-top filter contrast-[1.04] group-hover/card:scale-108 transition-transform duration-700 ease-out"
+                      className="w-full h-full object-cover object-center filter contrast-[1.04] group-hover/card:scale-108 transition-transform duration-700 ease-out"
                       containerClassName="w-full h-full"
                     />
                     {!isLightMode && (
@@ -1247,10 +1277,17 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                         </p>
                       )}
 
-                      {/* Social icons visible after name and nickname - reduced size, opens full view on click */}
-                      {student.socials && Object.values(student.socials).some(Boolean) && (
+                      {/* Social icons visible after name and nickname - includes email icon, opens full view on click */}
+                      {((student.socials && Object.values(student.socials).some(Boolean)) || student.email || student.instagramOrTwitter) && (
                         <div className="mt-1.5 pointer-events-none">
-                          <SocialIconsRow socials={student.socials} isLightMode={isLightMode} size="xs" interactive={false} />
+                          <SocialIconsRow
+                            socials={student.socials}
+                            instagramOrTwitter={student.instagramOrTwitter}
+                            email={student.email}
+                            isLightMode={isLightMode}
+                            size="xs"
+                            interactive={false}
+                          />
                         </div>
                       )}
                     </div>
@@ -2235,7 +2272,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         const lightboxElement = (
           <div 
             id="moments-fullscreen-lightbox"
-            className={`fixed inset-0 z-[9999] w-screen h-screen select-none flex flex-col justify-between overflow-hidden transition-colors duration-200 cursor-pointer ${
+            className={`fixed inset-0 z-[9999] w-screen h-screen select-none overflow-hidden transition-colors duration-200 cursor-pointer ${
               momentCardMode === 'light'
                 ? 'bg-white text-zinc-950'
                 : 'bg-[#000000] text-white'
@@ -2249,52 +2286,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               setMomentCardMode((prev) => (prev === 'light' ? 'dark' : 'light'));
             }}
           >
-            {/* Minimalist Arrow Navigation Left - Disappears on zoom */}
-            {lightboxMomentsList.length > 1 && momentZoomScale <= 1.05 && (
-              <button
-                type="button"
-                id="lightbox-prev-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMomentZoomScale(1);
-                  setMomentPanPos({ x: 0, y: 0 });
-                  handleLightboxPrev();
-                }}
-                className={`absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 z-[10000] w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-2xl border ${
-                  momentCardMode === 'light'
-                    ? 'bg-white/90 hover:bg-white text-zinc-900 border-zinc-300 shadow-zinc-300/40'
-                    : 'bg-black/60 hover:bg-black/80 text-white border-white/20'
-                }`}
-                aria-label="Previous photo"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-            )}
-
-            {/* Minimalist Arrow Navigation Right - Disappears on zoom */}
-            {lightboxMomentsList.length > 1 && momentZoomScale <= 1.05 && (
-              <button
-                type="button"
-                id="lightbox-next-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMomentZoomScale(1);
-                  setMomentPanPos({ x: 0, y: 0 });
-                  handleLightboxNext();
-                }}
-                className={`absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 z-[10000] w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-2xl border ${
-                  momentCardMode === 'light'
-                    ? 'bg-white/90 hover:bg-white text-zinc-900 border-zinc-300 shadow-zinc-300/40'
-                    : 'bg-black/60 hover:bg-black/80 text-white border-white/20'
-                }`}
-                aria-label="Next photo"
-              >
-                <ChevronRight className="w-6 h-6" />
-              </button>
-            )}
-
-            {/* Top Bar - Category Title at top left, X close icon at top right */}
-            <div className={`w-full px-5 sm:px-8 py-4 flex items-center justify-between gap-4 z-50 shrink-0 ${
+            {/* Top Bar Overlay - Absolute at top so photo occupies true vertical & horizontal center */}
+            <div className={`absolute top-0 inset-x-0 px-5 sm:px-8 py-4 flex items-center justify-between gap-4 z-50 pointer-events-auto ${
               momentCardMode === 'light'
                 ? 'bg-gradient-to-b from-white/95 via-white/60 to-transparent'
                 : 'bg-gradient-to-b from-black/85 via-black/45 to-transparent'
@@ -2323,7 +2316,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 )}
               </div>
 
-              {/* Close Button Only on Top Right - Icon only, no text cancel/close */}
+              {/* Close Button Only on Top Right - Icon only */}
               <div className="flex items-center gap-2">
                 <button
                   id="close-lightbox-btn"
@@ -2347,9 +2340,52 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               </div>
             </div>
 
-            {/* Fullscreen Photo Display Area - End-to-end sharp corners, pictures only, drag support */}
+            {/* Navigation Arrows: Positioned at the left and right middle points of the centralized picture */}
+            {lightboxMomentsList.length > 1 && momentZoomScale <= 1.05 && (
+              <button
+                type="button"
+                id="lightbox-prev-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMomentZoomScale(1);
+                  setMomentPanPos({ x: 0, y: 0 });
+                  handleLightboxPrev();
+                }}
+                className={`absolute left-3 sm:left-6 md:left-8 top-1/2 -translate-y-1/2 z-[10000] w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-2xl border ${
+                  momentCardMode === 'light'
+                    ? 'bg-white/90 hover:bg-white text-zinc-900 border-zinc-300 shadow-zinc-300/40'
+                    : 'bg-black/60 hover:bg-black/80 text-white border-white/20'
+                }`}
+                aria-label="Previous photo"
+              >
+                <ChevronLeft className="w-6 h-6" />
+              </button>
+            )}
+
+            {lightboxMomentsList.length > 1 && momentZoomScale <= 1.05 && (
+              <button
+                type="button"
+                id="lightbox-next-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMomentZoomScale(1);
+                  setMomentPanPos({ x: 0, y: 0 });
+                  handleLightboxNext();
+                }}
+                className={`absolute right-3 sm:right-6 md:right-8 top-1/2 -translate-y-1/2 z-[10000] w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-2xl border ${
+                  momentCardMode === 'light'
+                    ? 'bg-white/90 hover:bg-white text-zinc-900 border-zinc-300 shadow-zinc-300/40'
+                    : 'bg-black/60 hover:bg-black/80 text-white border-white/20'
+                }`}
+                aria-label="Next photo"
+              >
+                <ChevronRight className="w-6 h-6" />
+              </button>
+            )}
+
+            {/* Centralized Photo Display Area - Perfectly centered in viewport */}
             <div 
-              className="flex-1 w-full h-full flex items-center justify-center p-0 overflow-hidden relative select-none"
+              className="absolute inset-0 w-full h-full flex items-center justify-center p-4 sm:p-10 md:p-14 overflow-hidden select-none"
               onTouchStart={handleTouchStart}
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
@@ -2378,7 +2414,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 <img
                   src={currentMoment.url}
                   alt={currentMoment.title}
-                  className="w-full h-full object-contain rounded-none select-none drop-shadow-2xl pointer-events-none"
+                  className="max-w-full max-h-full object-contain rounded-none select-none drop-shadow-2xl pointer-events-none"
                   draggable={false}
                 />
               </div>

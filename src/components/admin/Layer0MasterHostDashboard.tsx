@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   UniversityDirectoryItem, 
   DepartmentItem,
@@ -62,21 +62,25 @@ import {
   Users,
   Camera,
   Sun,
-  Moon
+  Moon,
+  Search,
+  ChevronDown,
+  ChevronUp,
+  ChevronRight,
+  X
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
 import { DepartmentLegacyPlaqueModal } from './DepartmentLegacyPlaqueModal';
 import { EditDepartmentModal } from './EditDepartmentModal';
 import { EditUniversityModal } from './EditUniversityModal';
-import { MasterLegacyPlaquesSection } from './MasterLegacyPlaquesSection';
 import { MasterAnnualRemindersSection } from './MasterAnnualRemindersSection';
 import { MasterFoundingRequestsSection } from './MasterFoundingRequestsSection';
 import { MasterWebsiteStatsSection } from './MasterWebsiteStatsSection';
 import { MasterTestimonialsSection } from './MasterTestimonialsSection';
 import { MasterDisputesSection } from './MasterDisputesSection';
 import { MasterNextClassHandoffsSection } from './MasterNextClassHandoffsSection';
-import { MasterAlbumMediaSection } from './MasterAlbumMediaSection';
-import { MasterAlbumVisualsSection } from './MasterAlbumVisualsSection';
+import { MasterSupportInboxSection } from './MasterSupportInboxSection';
+import { fetchHostSupportMessages } from '../../utils/apiClient';
 import { DashboardProfileMenu } from '../common/DashboardProfileMenu';
 
 interface Layer0MasterHostDashboardProps {
@@ -119,10 +123,99 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   onSwitchRole,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'album_demos' | 'seeder' | 'founding_requests' | 'plaque' | 'reminders' | 'handoffs' | 'editor' | 'analytics' | 'requests' | 'testimonials' | 'disputes'
+    'album_demos' | 'seeder' | 'founding_requests' | 'support' | 'reminders' | 'handoffs' | 'editor' | 'analytics' | 'requests' | 'testimonials' | 'disputes'
   >('album_demos');
+  const [newSupportCount, setNewSupportCount] = useState<number>(0);
   const [editingDemoSetId, setEditingDemoSetId] = useState<string | null>(null);
   const [seedingSuccessMsg, setSeedingSuccessMsg] = useState('');
+
+  // Fetch count of new support messages for badge
+  useEffect(() => {
+    fetchHostSupportMessages().then((res) => {
+      if (res.success) {
+        setNewSupportCount(res.newCount);
+      }
+    });
+  }, [activeTab]);
+
+  // University Directory Search, Filter & Closable Pods State
+  const [directorySearchTerm, setDirectorySearchTerm] = useState('');
+  const [directoryUniFilter, setDirectoryUniFilter] = useState<string>('all');
+  const [expandedDirectoryUnis, setExpandedDirectoryUnis] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    universities.forEach((u, i) => {
+      // First 2 pods expanded by default, others collapsible
+      init[u.id] = i < 2;
+    });
+    return init;
+  });
+
+  const toggleDirectoryUniExpand = (uniId: string) => {
+    setExpandedDirectoryUnis((prev) => ({ ...prev, [uniId]: !prev[uniId] }));
+  };
+
+  // Context awareness and return rule (Request 2): return to exact spot clicked in institution directory
+  useEffect(() => {
+    try {
+      const rawSpot = sessionStorage.getItem('kohot_host_return_spot');
+      if (rawSpot) {
+        const spot = JSON.parse(rawSpot);
+        if (spot.tab) {
+          setActiveTab(spot.tab);
+        }
+        if (spot.uniId) {
+          setExpandedDirectoryUnis((prev) => ({ ...prev, [spot.uniId]: true }));
+        }
+        setTimeout(() => {
+          if (spot.elementId) {
+            const el = document.getElementById(spot.elementId);
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.classList.add('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
+              setTimeout(() => {
+                el.classList.remove('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
+              }, 2500);
+            } else if (typeof spot.scrollY === 'number') {
+              window.scrollTo({ top: spot.scrollY, behavior: 'smooth' });
+            }
+          } else if (typeof spot.scrollY === 'number') {
+            window.scrollTo({ top: spot.scrollY, behavior: 'smooth' });
+          }
+          sessionStorage.removeItem('kohot_host_return_spot');
+        }, 150);
+      }
+    } catch {}
+  }, []);
+
+  const filteredDirectoryUniversities = useMemo(() => {
+    let list = universities;
+
+    if (directoryUniFilter !== 'all') {
+      list = list.filter((u) => u.id === directoryUniFilter);
+    }
+    if (directorySearchTerm.trim()) {
+      const q = directorySearchTerm.toLowerCase().trim();
+      list = list.filter((u) => {
+        const matchesUni = u.name.toLowerCase().includes(q) || u.shortCode.toLowerCase().includes(q);
+        const matchesDept = (u.departments || []).some(
+          (d) => d.name.toLowerCase().includes(q) || 
+                 (d.code && d.code.toLowerCase().includes(q)) || 
+                 (d.faculty && d.faculty.toLowerCase().includes(q))
+        );
+        return matchesUni || matchesDept;
+      });
+    }
+
+    // Sort: Current institutions (isPriority) at the top, then by orderNumber/existing order
+    return [...list].sort((a, b) => {
+      const aPriority = a.isPriority ? 1 : 0;
+      const bPriority = b.isPriority ? 1 : 0;
+      if (aPriority !== bPriority) {
+        return bPriority - aPriority;
+      }
+      return (a.orderNumber || 99) - (b.orderNumber || 99);
+    });
+  }, [universities, directoryUniFilter, directorySearchTerm]);
   
   // Modals State
   const [selectedDeptForPlaque, setSelectedDeptForPlaque] = useState<{ dept: DepartmentItem; uni: UniversityDirectoryItem } | null>(null);
@@ -140,6 +233,8 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   const [newUniWebsite, setNewUniWebsite] = useState('');
   const [newUniFaculty, setNewUniFaculty] = useState('');
   const [newUniDepartments, setNewUniDepartments] = useState('');
+  const [newUniInstitutionType, setNewUniInstitutionType] = useState<'university' | 'polytechnic' | 'college_of_education'>('university');
+  const [newUniIsPriority, setNewUniIsPriority] = useState<boolean>(false);
 
   // New Department Modal Form State
   const [newDeptName, setNewDeptName] = useState('');
@@ -341,8 +436,11 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     reader.readAsDataURL(file);
   };
 
+  // Live Department Class Albums (Demo albums are strictly isolated in Album Demos)
+  const liveSets = useMemo(() => sets.filter((s) => !s.id.startsWith('crownfield-')), [sets]);
+
   // Analytics Metrics
-  const totalActiveImages = calculateTotalImages(sets);
+  const totalActiveImages = calculateTotalImages(liveSets);
   const globalCap = contentOverride.globalMaxImageCap || 300;
   const usagePercentage = Math.min(100, Math.round((totalActiveImages / globalCap) * 100));
 
@@ -403,6 +501,8 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       logoUrl: newUniLogoUrl.trim(),
       motto: newUniMotto.trim() || 'Excellence & Integrity',
       officialWebsite: newUniWebsite.trim() || 'https://edu.ng',
+      institutionType: newUniInstitutionType,
+      isPriority: newUniIsPriority,
       departments: deptItems,
       faculties: [
         {
@@ -420,8 +520,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     setNewUniWebsite('');
     setNewUniFaculty('');
     setNewUniDepartments('');
+    setNewUniInstitutionType('university');
+    setNewUniIsPriority(false);
     setNewUniOrderNumber(universities.length + 2);
-    setSeedingSuccessMsg(`Successfully added University #${newUniItem.orderNumber} ${newUniItem.name}!`);
+    setSeedingSuccessMsg(`Successfully added Institution #${newUniItem.orderNumber} ${newUniItem.name}!`);
     setTimeout(() => setSeedingSuccessMsg(''), 4000);
   };
 
@@ -595,7 +697,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Back to Owner Dashboard (Album Demos)</span>
+                <span>Back to Host Dashboard (Album Demos)</span>
               </button>
               <span className="text-[#d4af37] font-mono-tech text-xs hidden md:inline">
                 • Editing Demo: {targetSet.classSetName} ({targetSet.departmentName}, {targetSet.institutionName})
@@ -650,18 +752,11 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           ? 'bg-white/95 border-zinc-300 text-black shadow-sm' 
           : 'bg-[#18181b]/95 border-zinc-800 text-white'
       }`}>
-        {/* Left: KoHot Brand Logo & Owner Title and Name */}
+        {/* Left: Host Title and Name (No links back to public site) */}
         <div className="flex items-center gap-3.5 min-w-0">
-          <BrandLogo
-            logoUrl={contentOverride?.websiteLogoUrl}
-            brandName={contentOverride?.brandName || 'KOHOT'}
-            textSize="text-sm sm:text-base"
-            textColor={isLightMode ? 'text-black' : 'text-white'}
-          />
-          <span className={isLightMode ? 'text-zinc-400 font-mono-tech text-xs' : 'text-zinc-600 font-mono-tech text-xs'}>|</span>
           <div className="min-w-0 leading-tight">
             <div className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-bold">
-              Owner
+              Host
             </div>
             <div className="font-syne font-bold text-xs sm:text-sm truncate text-white">
               {displayedOwnerName}
@@ -673,7 +768,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         <div className="flex items-center gap-3 shrink-0">
           <DashboardProfileMenu
             currentUser={currentUser}
-            roleTitle="Master Host / Owner"
+            roleTitle="Master Host"
             onLogout={() => onSwitchRole('visitor')}
             notifications={[
               {
@@ -737,7 +832,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            <span>University Directory</span>
+            <span>Institutions Directory ({universities.length})</span>
           </button>
 
           <button
@@ -759,21 +854,21 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           </button>
 
           <button
-            id="tab-plaque-btn"
-            onClick={() => setActiveTab('plaque')}
+            id="tab-support-inbox-btn"
+            onClick={() => setActiveTab('support')}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
-              activeTab === 'plaque'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
+              activeTab === 'support'
+                ? 'bg-[#d4af37] text-black font-semibold shadow'
                 : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
             }`}
           >
-            <QrCode className="w-3.5 h-3.5 text-[#d4af37]" />
-            <span>Legacy Plaques</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono-tech font-bold ${
-              isLightMode ? 'bg-zinc-100 text-black' : 'bg-white/10 text-zinc-300'
-            }`}>
-              {sets.length}
-            </span>
+            <Inbox className="w-3.5 h-3.5 text-blue-400" />
+            <span>Support</span>
+            {newSupportCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold animate-pulse">
+                {newSupportCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -895,10 +990,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                       Platform Demos Showcase
                     </span>
                     <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[11px] font-mono-tech font-semibold">
-                      4 Classes • Ascending Order • 100% Populated
+                      4 Classes • 2026 → 2023 • 100% Populated
                     </span>
                   </div>
-                  <h2 className="font-syne font-extrabold text-2xl sm:text-3xl tracking-tight">
+                  <h2 className="font-syne font-bold text-xl sm:text-2xl text-white tracking-tight">
                     Department of Public Law, Crownfield University
                   </h2>
                   <p className={`font-body text-xs sm:text-sm leading-relaxed ${isLightMode ? 'text-slate-600' : 'text-zinc-400'}`}>
@@ -925,13 +1020,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               </div>
             </div>
 
-            {/* 4 Demo Classes in Ascending Order (2023, 2024, 2025, 2026) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Crownfield University cards listed top to bottom: 2026, 2025, 2024, 2023 */}
+            <div className="flex flex-col gap-6">
               {[
-                { year: 2023, defaultId: 'crownfield-law-2023', name: 'Trailblazers — Class of 2023', slogan: 'First to Dare, First to Lead', status: 'Founding Class (Legacy Anchor)' },
-                { year: 2024, defaultId: 'crownfield-law-2024', name: 'Phoenix — Class of 2024', slogan: 'Rising with Tenacity, Reigning in Justice', status: 'Bar Advocacy Cohort' },
-                { year: 2025, defaultId: 'crownfield-law-2025', name: 'Frontiers — Class of 2025', slogan: 'Breaking Boundaries, Shaping Horizons', status: 'Judicial Reform Pioneers' },
                 { year: 2026, defaultId: 'crownfield-law-2026', name: 'Apex — Class of 2026', slogan: 'At the Pinnacle of Honor', status: 'Valedictory Graduating Set' },
+                { year: 2025, defaultId: 'crownfield-law-2025', name: 'Frontiers — Class of 2025', slogan: 'Breaking Boundaries, Shaping Horizons', status: 'Judicial Reform Pioneers' },
+                { year: 2024, defaultId: 'crownfield-law-2024', name: 'Phoenix — Class of 2024', slogan: 'Rising with Tenacity, Reigning in Justice', status: 'Bar Advocacy Cohort' },
+                { year: 2023, defaultId: 'crownfield-law-2023', name: 'Trailblazers — Class of 2023', slogan: 'First to Dare, First to Lead', status: 'Founding Class (Legacy Anchor)' },
               ].map((meta) => {
                 const liveSet = sets.find((s) => s.id === meta.defaultId) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === meta.defaultId);
                 if (!liveSet) return null;
@@ -1084,11 +1179,11 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   <div className="flex items-center gap-2.5">
                     <Building2 className="w-5 h-5 text-[#d4af37]" />
                     <h3 className="font-syne font-bold text-lg text-white">
-                      University Directory ({universities.length} Universities)
+                      Institutions Directory ({universities.length})
                     </h3>
                   </div>
                   <p className="font-body text-xs text-zinc-400 mt-1 max-w-2xl leading-relaxed">
-                    <span className="text-white font-semibold">University → Department → Class</span> structure. Governed exclusively by the Master Host.
+                    <span className="text-white font-semibold">Institution → Department → Class</span> structure. Governed exclusively by the Master Host.
                   </p>
                 </div>
 
@@ -1099,7 +1194,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                     className="px-4 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-tech text-xs tracking-wider uppercase font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5 text-black" />
-                    <span>{isAddUniOpen ? 'Close Form' : '+ Add New University'}</span>
+                    <span>{isAddUniOpen ? 'Close Form' : '+ Add New Institution'}</span>
                   </button>
 
                   <span className="text-xs font-mono-tech text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-full flex items-center gap-1.5 hidden md:inline-flex">
@@ -1109,6 +1204,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 </div>
               </div>
 
+
               {seedingSuccessMsg && (
                 <div className="p-4 rounded-2xl bg-white/[0.04] border border-emerald-500/30 text-emerald-400 text-xs font-mono-tech flex items-center gap-2.5">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -1116,13 +1212,67 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 </div>
               )}
 
+              {/* Search Bar & University Filter - Quick finding of University or Department */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={directorySearchTerm}
+                    onChange={(e) => setDirectorySearchTerm(e.target.value)}
+                    placeholder="Search university or department by name, code, or faculty..."
+                    className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-500 font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none"
+                  />
+                  {directorySearchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setDirectorySearchTerm('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white p-0.5 rounded cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <select
+                    value={directoryUniFilter}
+                    onChange={(e) => setDirectoryUniFilter(e.target.value)}
+                    aria-label="Filter by institution"
+                    className="px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none cursor-pointer"
+                  >
+                    <option value="all">All Institutions ({universities.length})</option>
+                    {universities.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.shortCode} - {u.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allExpanded: Record<string, boolean> = {};
+                      const shouldExpand = Object.values(expandedDirectoryUnis).some((v) => !v);
+                      universities.forEach((u) => {
+                        allExpanded[u.id] = shouldExpand;
+                      });
+                      setExpandedDirectoryUnis(allExpanded);
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10 font-mono-tech text-xs cursor-pointer transition-colors"
+                  >
+                    {Object.values(expandedDirectoryUnis).some((v) => !v) ? 'Expand All' : 'Collapse All'}
+                  </button>
+                </div>
+              </div>
+
               {/* Upload / Add New University Form (Toggleable) */}
               {isAddUniOpen && (
                 <div className="p-6 rounded-2xl bg-[#08090e] border border-[#d4af37]/30 space-y-4">
                   <div className="flex items-center justify-between pb-3 border-b border-white/10">
                     <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
                       <Plus className="w-4 h-4 text-[#d4af37]" />
-                      <span>Add New University to Directory</span>
+                      <span>Add New Institution to Directory</span>
                     </h4>
                     <button
                       type="button"
@@ -1136,7 +1286,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   <form onSubmit={handleAddNewUniversitySeed} className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-body">
                     <div className="sm:col-span-2">
                       <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        University Full Name *
+                        Institution Full Name *
                       </label>
                       <input
                         required
@@ -1164,6 +1314,35 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
                     <div>
                       <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                        Institution Type
+                      </label>
+                      <select
+                        value={newUniInstitutionType}
+                        onChange={(e) => setNewUniInstitutionType(e.target.value as any)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white font-mono-tech focus:border-white/40 focus:outline-none"
+                      >
+                        <option value="university">University</option>
+                        <option value="polytechnic">Polytechnic</option>
+                        <option value="college_of_education">College of Education</option>
+                      </select>
+                    </div>
+
+                    <div className="flex flex-col justify-end">
+                      <label className="flex items-center gap-2 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={newUniIsPriority}
+                          onChange={(e) => setNewUniIsPriority(e.target.checked)}
+                          className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
+                        />
+                        <span className="font-mono-tech text-[11px] text-zinc-300">
+                          Currently working with (Priority)
+                        </span>
+                      </label>
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
                         Batch Order Number
                       </label>
                       <input
@@ -1183,7 +1362,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                         aspectRatio="1:1"
                         maxDimension={400}
                         required
-                        helperText="Drag & drop or click to upload the official university crest"
+                        helperText="Drag & drop or click to upload the official institution crest"
                       />
                     </div>
 
@@ -1262,28 +1441,51 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                         type="submit"
                         className="px-5 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-semibold font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer shadow-md"
                       >
-                        Upload &amp; Save University
+                        Upload &amp; Save Institution
                       </button>
                     </div>
                   </form>
                 </div>
               )}
 
-              {/* Numbered Universities 3-Layer Hierarchy */}
+              {/* Numbered Universities 3-Layer Hierarchy with Closable Pods & Search */}
               <div className="space-y-6">
-                {universities
-                  .sort((a, b) => (a.orderNumber || 99) - (b.orderNumber || 99))
-                  .map((uni, uniIdx) => {
-                    const uniOrder = uni.orderNumber || (uniIdx + 1);
-                    const formattedOrder = String(uniOrder).padStart(2, '0');
-                    const departmentsList = uni.departments || [];
-
-                    // Calculate total sets under this university
-                    const uniSetsCount = sets.filter(
-                      (s) => s.institutionId === uni.id ||
-                             s.institutionName.toLowerCase().includes(uni.shortCode.toLowerCase()) ||
-                             s.institutionName.toLowerCase().includes(uni.name.toLowerCase())
-                    ).length;
+                {filteredDirectoryUniversities.length === 0 ? (
+                  <div className="py-12 text-center rounded-2xl bg-white/[0.02] border border-white/10 space-y-3">
+                    <Building2 className="w-8 h-8 text-zinc-500 mx-auto" />
+                    <p className="font-syne font-bold text-sm text-white">No Universities or Departments Found</p>
+                    <p className="font-mono-tech text-xs text-zinc-400">
+                      No directory matches for "{directorySearchTerm}". Try clearing your search query or selecting another university.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDirectorySearchTerm('');
+                        setDirectoryUniFilter('all');
+                      }}
+                      className="px-4 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer"
+                    >
+                      Clear Search &amp; Filters
+                    </button>
+                  </div>
+                ) : (
+                  filteredDirectoryUniversities.map((uni, uniIdx) => {
+                    const cardNumber = uniIdx + 1;
+                    const formattedOrder = String(cardNumber).padStart(2, '0');
+                    const isExpanded = expandedDirectoryUnis[uni.id] !== false;
+                    const q = directorySearchTerm.toLowerCase().trim();
+                    const departmentsList = [...(uni.departments || [])]
+                      .sort((a, b) => a.name.localeCompare(b.name))
+                      .filter((d) => {
+                        if (!q) return true;
+                        return (
+                          d.name.toLowerCase().includes(q) ||
+                          (d.code && d.code.toLowerCase().includes(q)) ||
+                          (d.faculty && d.faculty.toLowerCase().includes(q)) ||
+                          uni.name.toLowerCase().includes(q) ||
+                          uni.shortCode.toLowerCase().includes(q)
+                        );
+                      });
 
                     return (
                       <div
@@ -1294,13 +1496,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                         {/* University Header Bar (Layer 1) */}
                         <div className="p-5 sm:p-6 bg-gradient-to-r from-white/[0.04] to-transparent border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
                           <div className="flex items-start gap-4">
-                            {/* University Number Badge */}
+                            {/* Institution Number Badge */}
                             <div className="flex flex-col items-center justify-center w-12 h-12 rounded-xl bg-white/10 border border-white/20 text-white shrink-0 font-mono-tech font-bold">
-                              <span className="text-[10px] text-zinc-400">UNI</span>
+                              <span className="text-[10px] text-zinc-400">INST</span>
                               <span className="text-base text-[#d4af37]">#{formattedOrder}</span>
                             </div>
 
-                            {/* University Crest */}
+                            {/* Institution Crest */}
                             <div className="w-12 h-12 rounded-xl overflow-hidden bg-black border border-white/15 shrink-0 flex items-center justify-center p-1">
                               <img
                                 src={uni.logoUrl}
@@ -1310,7 +1512,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                               />
                             </div>
 
-                            {/* University Info */}
+                            {/* Institution Info */}
                             <div className="min-w-0">
                               <div className="flex items-center gap-2.5 flex-wrap">
                                 <h4 className="font-syne font-bold text-base text-white tracking-tight">
@@ -1319,14 +1521,17 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                 <span className="text-[10px] font-mono-tech text-black bg-white font-bold px-2 py-0.5 rounded-full">
                                   {uni.shortCode}
                                 </span>
+                                {uni.isPriority && (
+                                  <span className="text-[10px] font-mono-tech font-bold px-2 py-0.5 rounded-full bg-[#d4af37] text-black shadow-xs">
+                                    Current
+                                  </span>
+                                )}
                               </div>
                               <p className="text-xs text-zinc-400 font-serif-body italic mt-0.5">
                                 "{uni.motto || 'In Deed and in Truth'}"
                               </p>
                               <div className="flex items-center gap-3 text-[11px] font-mono-tech text-zinc-400 mt-1.5 flex-wrap">
                                 <span className="text-white font-semibold">{departmentsList.length} Departments</span>
-                                <span>•</span>
-                                <span className="text-[#d4af37]">{uniSetsCount} Class Albums</span>
                                 <span>•</span>
                                 <span>{uni.location || 'Accredited Campus'}</span>
                                 {uni.officialWebsite && (
@@ -1355,7 +1560,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                               className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs font-semibold border border-white/15 flex items-center gap-1.5 transition-all cursor-pointer"
                             >
                               <Edit3 className="w-3.5 h-3.5 text-zinc-300" />
-                              <span>Edit University</span>
+                              <span>Edit Institution</span>
                             </button>
 
                             <button
@@ -1367,6 +1572,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                   setAddingDeptUniId(uni.id);
                                   setNewDeptFaculty(uni.faculties?.[0]?.facultyName || 'Faculty of Sciences');
                                   setNewDeptLogoUrl(uni.logoUrl);
+                                  if (!isExpanded) toggleDirectoryUniExpand(uni.id);
                                 }
                               }}
                               className="px-3.5 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-mono-tech text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
@@ -1374,8 +1580,22 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                               <FolderPlus className="w-3.5 h-3.5 text-black" />
                               <span>{addingDeptUniId === uni.id ? 'Cancel' : '+ Add Department'}</span>
                             </button>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleDirectoryUniExpand(uni.id)}
+                              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 transition-all cursor-pointer flex items-center justify-center"
+                              title={isExpanded ? 'Collapse Pod' : 'Expand Pod'}
+                              aria-label={isExpanded ? 'Collapse Pod' : 'Expand Pod'}
+                            >
+                              {isExpanded ? <ChevronUp className="w-4 h-4 text-zinc-300" /> : <ChevronDown className="w-4 h-4 text-zinc-300" />}
+                            </button>
                           </div>
                         </div>
+
+                        {/* Collapsible University Pod Body */}
+                        {isExpanded && (
+                          <>
 
                         {/* Inline Add Department Form */}
                         {addingDeptUniId === uni.id && (
@@ -1450,7 +1670,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
                                 <div className="sm:col-span-2">
                                   <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                                    Department Hero Caption (Owner Curated)
+                                    Department Hero Caption (Host Curated)
                                   </label>
                                   <textarea
                                     rows={2}
@@ -1625,9 +1845,11 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                         </div>
                                       </div>
 
-                                      <span className="text-[10px] font-mono-tech bg-[#d4af37]/15 text-[#d4af37] border border-[#d4af37]/30 px-2 py-0.5 rounded-full shrink-0">
-                                        {deptSets.length} {deptSets.length === 1 ? 'Cohort' : 'Cohorts'}
-                                      </span>
+                                      {dept.code && (
+                                        <span className="text-[10px] font-mono-tech bg-white/10 text-zinc-300 border border-white/15 px-2 py-0.5 rounded-full shrink-0">
+                                          {dept.code}
+                                        </span>
+                                      )}
                                     </div>
 
                                     {/* Hero Artwork Preview & Caption */}
@@ -1661,9 +1883,30 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                           <span>Edit Details &amp; Hero</span>
                                         </button>
 
+                                        <button
+                                          onClick={() => setSelectedDeptForPlaque({ dept, uni })}
+                                          className="px-3 py-1.5 rounded-lg bg-[#d4af37]/15 hover:bg-[#d4af37]/25 text-[#d4af37] font-mono-tech text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer border border-[#d4af37]/30"
+                                          title="View Department Architectural Legacy Plaque"
+                                        >
+                                          <Award className="w-3 h-3 text-[#d4af37]" />
+                                          <span>Legacy Plaque</span>
+                                        </button>
+
                                         {onViewDepartmentLegacyWall && (
                                           <button
-                                            onClick={() => onViewDepartmentLegacyWall(dept.id, uni.id)}
+                                            id={`view-legacy-wall-${dept.id}-btn`}
+                                            onClick={() => {
+                                              try {
+                                                sessionStorage.setItem("kohot_host_return_spot", JSON.stringify({
+                                                  tab: "seeder",
+                                                  elementId: `department-compartment-${dept.id}`,
+                                                  uniId: uni.id,
+                                                  deptId: dept.id,
+                                                  scrollY: window.scrollY
+                                                }));
+                                              } catch {}
+                                              onViewDepartmentLegacyWall(dept.id, uni.id);
+                                            }}
                                             className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer border border-white/10"
                                             title="View Public Department Legacy Wall"
                                           >
@@ -1673,65 +1916,6 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                         )}
                                       </div>
                                     </div>
-
-                                    {/* =========================================================================
-                                        LAYER 3: YEARLY CLASS SET ALBUMS UNDER THIS DEPARTMENT
-                                        "Only I can view the 3 layers institutional directory directory...
-                                        They can only see the different years albums of their department called legacy wall"
-                                        ========================================================================= */}
-                                    <div className="pt-3 border-t border-white/10 space-y-2">
-                                      <div className="flex items-center justify-between text-[11px] font-mono-tech">
-                                        <span className="text-zinc-400 flex items-center gap-1.5">
-                                          <GraduationCap className="w-3.5 h-3.5 text-[#d4af37]" />
-                                          <span className="text-white font-bold">Class Albums:</span> ({deptSets.length})
-                                        </span>
-                                        {deptSets.length > 0 && (
-                                          <span className="text-zinc-400 text-[10px]">
-                                            {deptSets.reduce((a, b) => a + (b.students?.length || 0), 0)} Profiles
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      {deptSets.length === 0 ? (
-                                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-[11px] text-zinc-500 font-mono-tech">
-                                          No class albums registered yet for {dept.name}.
-                                        </div>
-                                      ) : (
-                                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                                          {deptSets
-                                            .sort((a, b) => b.graduationYear - a.graduationYear)
-                                            .map((s) => (
-                                              <div
-                                                key={s.id}
-                                                id={`admin-set-row-${s.id}`}
-                                                className="p-2.5 rounded-xl bg-black/60 border border-white/10 hover:border-white/20 flex items-center justify-between gap-2 text-xs"
-                                              >
-                                                <div className="flex items-center gap-2 min-w-0">
-                                                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono-tech font-bold ${
-                                                    s.graduationYear === 2026 ? 'bg-[#d4af37] text-black' : 'bg-white/10 text-white'
-                                                  }`}>
-                                                    Class of {s.graduationYear}
-                                                  </span>
-                                                  <span className="font-syne font-semibold text-white truncate text-xs">
-                                                    {s.classSetName}
-                                                  </span>
-                                                  <span className="text-[10px] font-mono-tech text-zinc-400 hidden sm:inline">
-                                                    ({s.students?.length || 0} Profiles)
-                                                  </span>
-                                                </div>
-
-                                                <button
-                                                  onClick={() => onViewDepartmentAlbum(s.id)}
-                                                  className="px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[10px] shrink-0 transition-colors cursor-pointer flex items-center gap-1"
-                                                >
-                                                  <span>View Album</span>
-                                                  <ExternalLink className="w-2.5 h-2.5" />
-                                                </button>
-                                              </div>
-                                            ))}
-                                        </div>
-                                      )}
-                                    </div>
                                   </div>
                                 );
                               })}
@@ -1739,9 +1923,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                             </div>
                           )}
                         </div>
+                          </>
+                        )}
                       </div>
                     );
-                  })}
+                  })
+                )}
               </div>
             </div>
 
@@ -3084,19 +3271,17 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         )}
 
         {/* =========================================================================
-            6. LEGACY PLAQUE SYSTEM (Universal 10x12 Acrylic Specs & QR Archive)
+            7. ANNUAL RELIVE REMINDERS & ALUMNI EMAIL REGISTRY
             ========================================================================= */}
-        {activeTab === 'plaque' && (
-          <MasterLegacyPlaquesSection
-            universities={universities}
-            sets={sets}
-            onViewDepartmentAlbum={onViewDepartmentAlbum}
-            onOpenDepartmentPlaqueModal={(dept, uni) => setSelectedDeptForPlaque({ dept, uni })}
-          />
+        {/* =========================================================================
+            SUPPORT INBOX MODULE (Prompt B)
+            ========================================================================= */}
+        {activeTab === 'support' && (
+          <MasterSupportInboxSection isLightMode={isLightMode} />
         )}
 
         {/* =========================================================================
-            7. ANNUAL RELIVE REMINDERS & ALUMNI EMAIL REGISTRY
+            COMMUNICATIONS / ANNUAL REMINDERS (Prompt B)
             ========================================================================= */}
         {activeTab === 'reminders' && (
           <MasterAnnualRemindersSection

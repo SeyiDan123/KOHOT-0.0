@@ -32,6 +32,8 @@ export interface UniversityDirectoryItem {
   logoUrl: string;
   officialWebsite: string;
   motto?: string;
+  institutionType?: 'university' | 'polytechnic' | 'college_of_education';
+  isPriority?: boolean;
   departments: DepartmentItem[]; // Departments organized as direct subsets of this university
   faculties?: {
     facultyName: string;

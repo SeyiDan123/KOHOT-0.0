@@ -29,22 +29,21 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
   imageSrc,
   onClose,
   onApplyCrop,
-  initialAspectRatio = '4:5',
+  initialAspectRatio = '1:1',
   title,
   helperText,
   isProfileSubmission = false,
 }) => {
   useStaticBackdropScrollLock(isOpen);
 
-  // Normalize target aspect ratio: 4:5 portrait for profiles, 1:1 square for awards/avatars, 16:9 for landscape
+  // Normalize target aspect ratio: 1:1 square for profile portraits and avatar badges, 16:9 / 21:9 for banners
   const targetAspect = (() => {
-    if (isProfileSubmission) return 4 / 5;
+    if (isProfileSubmission) return 1;
     const str = String(initialAspectRatio).toLowerCase();
-    if (str === 'portrait' || str === '4:5') return 4 / 5;
-    if (str === 'square' || str === '1:1') return 1;
+    if (str === 'square' || str === '1:1' || str === 'portrait' || str === '4:5') return 1;
     if (str === 'landscape' || str === '16:9') return 16 / 9;
     if (str === '21:9') return 21 / 9;
-    return 4 / 5; // Default standard portrait frame
+    return 1; // Default clean 1:1 square
   })();
 
   const [zoom, setZoom] = useState<number>(1);

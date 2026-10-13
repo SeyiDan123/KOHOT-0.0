@@ -5,6 +5,7 @@ import { X, Upload, CheckCircle2, Sparkles, Image as ImageIcon, ArrowRight, Crow
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import { ImageCropModal } from '../common/ImageCropModal';
 import { UniversalModal } from '../common/UniversalModal';
+import { SocialUrlInputField } from '../common/SocialUrlInputField';
 
 interface FrictionlessSubmitModalProps {
   currentSet: ClassSet;
@@ -25,7 +26,9 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
   const [quote, setQuote] = useState('');
   const [bio, setBio] = useState('');
   const [email, setEmail] = useState('');
-  const [socialHandle, setSocialHandle] = useState('');
+  const [instagramHandle, setInstagramHandle] = useState('');
+  const [tiktokHandle, setTiktokHandle] = useState('');
+  const [twitterHandle, setTwitterHandle] = useState('');
   const [linkedinHandle, setLinkedinHandle] = useState('');
   const [photoDataUrl, setPhotoDataUrl] = useState('');
   const [compressionInfo, setCompressionInfo] = useState<CompressionResult | null>(null);
@@ -89,11 +92,12 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
       quote: quote.trim() || undefined,
       bio: bio.trim() || undefined,
       email: email.trim() || undefined,
-      instagramOrTwitter: socialHandle.trim() || undefined,
+      instagramOrTwitter: (instagramHandle.trim() || twitterHandle.trim()) || undefined,
       socials: {
-        instagram: socialHandle.trim() || undefined,
+        instagram: instagramHandle.trim() || undefined,
+        tiktok: tiktokHandle.trim() || undefined,
+        twitter: twitterHandle.trim() || undefined,
         linkedin: linkedinHandle.trim() || undefined,
-        twitter: socialHandle.trim() || undefined,
       },
       approved: true, // Appears immediately live on the album
       approvedAt: Date.now(),
@@ -305,32 +309,44 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
                 </p>
               </div>
 
-              {/* Social Handles (Instagram & LinkedIn) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold mb-1">
-                    Instagram or X Handle
-                  </label>
-                  <input
-                    id="submit-social-input"
-                    type="text"
-                    value={socialHandle}
-                    onChange={(e) => setSocialHandle(e.target.value)}
-                    placeholder="@yourhandle"
-                    className="w-full px-4 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 focus:border-[#d4af37] focus:ring-2 focus:ring-[#d4af37]/20 focus:outline-none text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 font-mono-tech shadow-xs"
-                  />
+              {/* Social Handles with fixed prefix format */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
+                    Social Media Profiles
+                  </span>
+                  <span className="font-mono-tech text-[10px] text-slate-500 dark:text-zinc-400">
+                    Type username only
+                  </span>
                 </div>
-                <div>
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold mb-1">
-                    LinkedIn Handle or URL
-                  </label>
-                  <input
-                    id="submit-linkedin-input"
-                    type="text"
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <SocialUrlInputField
+                    label="Instagram"
+                    prefix="instagram.com/"
+                    value={instagramHandle}
+                    onChange={setInstagramHandle}
+                    placeholder="username"
+                  />
+                  <SocialUrlInputField
+                    label="TikTok"
+                    prefix="tiktok.com/@"
+                    value={tiktokHandle}
+                    onChange={setTiktokHandle}
+                    placeholder="username"
+                  />
+                  <SocialUrlInputField
+                    label="X (Twitter)"
+                    prefix="x.com/"
+                    value={twitterHandle}
+                    onChange={setTwitterHandle}
+                    placeholder="username"
+                  />
+                  <SocialUrlInputField
+                    label="LinkedIn"
+                    prefix="linkedin.com/in/"
                     value={linkedinHandle}
-                    onChange={(e) => setLinkedinHandle(e.target.value)}
-                    placeholder="e.g. linkedin.com/in/username"
-                    className="w-full px-4 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 focus:border-[#d4af37] focus:ring-2 focus:ring-[#d4af37]/20 focus:outline-none text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 font-mono-tech shadow-xs"
+                    onChange={setLinkedinHandle}
+                    placeholder="username"
                   />
                 </div>
               </div>

@@ -24,6 +24,10 @@ export const EditUniversityModal: React.FC<EditUniversityModalProps> = ({
   const [logoUrl, setLogoUrl] = useState(university.logoUrl);
   const [motto, setMotto] = useState(university.motto || '');
   const [officialWebsite, setOfficialWebsite] = useState(university.officialWebsite);
+  const [institutionType, setInstitutionType] = useState<'university' | 'polytechnic' | 'college_of_education'>(
+    university.institutionType || 'university'
+  );
+  const [isPriority, setIsPriority] = useState<boolean>(university.isPriority || false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   useEffect(() => {
@@ -34,6 +38,8 @@ export const EditUniversityModal: React.FC<EditUniversityModalProps> = ({
     setLogoUrl(university.logoUrl);
     setMotto(university.motto || '');
     setOfficialWebsite(university.officialWebsite);
+    setInstitutionType(university.institutionType || 'university');
+    setIsPriority(university.isPriority || false);
     setSavedSuccess(false);
   }, [university, isOpen]);
 
@@ -52,6 +58,8 @@ export const EditUniversityModal: React.FC<EditUniversityModalProps> = ({
       logoUrl: logoUrl.trim(),
       motto: motto.trim(),
       officialWebsite: officialWebsite.trim(),
+      institutionType,
+      isPriority,
     };
 
     onSaveUniversity(updated);
@@ -145,6 +153,37 @@ export const EditUniversityModal: React.FC<EditUniversityModalProps> = ({
                 placeholder="e.g. UNILAG"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none font-mono-tech uppercase"
               />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                Institution Type
+              </label>
+              <select
+                value={institutionType}
+                onChange={(e) => setInstitutionType(e.target.value as any)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-mono-tech focus:border-white/40 focus:outline-none"
+              >
+                <option value="university">University</option>
+                <option value="polytechnic">Polytechnic</option>
+                <option value="college_of_education">College of Education</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col justify-end">
+              <label className="flex items-center gap-2 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={isPriority}
+                  onChange={(e) => setIsPriority(e.target.checked)}
+                  className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
+                />
+                <span className="font-mono-tech text-[11px] text-zinc-300">
+                  Currently working with (Priority)
+                </span>
+              </label>
             </div>
           </div>
 

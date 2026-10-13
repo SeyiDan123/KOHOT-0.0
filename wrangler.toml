@@ -1,0 +1,36 @@
+name = "kohot-app"
+main = "worker/index.ts"
+compatibility_date = "2024-04-01"
+
+# Serve Vite static assets from dist folder
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+# Cloudflare D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "kohot-production-d1"
+database_id = "kohot-production-d1-id"
+
+# Environment Variables
+[vars]
+HOST_EMAIL = "seyidan03@gmail.com"
+STANDARD_PRICE_NGN = "50000"
+STANDARD_PRICE_KOBO = "5000000"
+EMAIL_PROVIDER = "resend"
+EMAIL_FROM = "notifications@kohot.app"
+DAILY_SEND_CAP = "90"
+TEST_MODE = "false"
+TEST_EMAIL = "seyidan03@gmail.com"
+
+# Cron trigger: every 15 minutes
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Note on Secrets to set via `wrangler secret put <NAME>`:
+# 1. PAYSTACK_SECRET_KEY
+# 2. SESSION_SECRET
+# 3. GOOGLE_CLIENT_ID
+# 4. RESEND_API_KEY
+

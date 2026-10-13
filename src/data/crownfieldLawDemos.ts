@@ -273,11 +273,41 @@ function generateStudentsForSet(setId: string, year: number): StudentProfile[] {
     bio: seed.bio,
     email: `${seed.handle.replace('@', '')}.${year}@crownfield.edu.ng`,
     instagramOrTwitter: seed.handle,
-    socials: {
-      linkedin: `https://linkedin.com/in/${seed.handle.replace('@', '')}`,
-      instagram: seed.handle,
-      twitter: seed.handle,
-    },
+    socials: (() => {
+      const h = seed.handle.replace('@', '');
+      const mode = (idx + year) % 4;
+      if (mode === 0) {
+        // 2 socials: LinkedIn and X (Twitter)
+        return {
+          linkedin: `https://linkedin.com/in/${h}`,
+          twitter: seed.handle,
+        };
+      } else if (mode === 1) {
+        // 3 socials: LinkedIn, Instagram, X (Twitter)
+        return {
+          linkedin: `https://linkedin.com/in/${h}`,
+          instagram: seed.handle,
+          twitter: seed.handle,
+        };
+      } else if (mode === 2) {
+        // 4 socials: LinkedIn, Instagram, X (Twitter), Facebook
+        return {
+          linkedin: `https://linkedin.com/in/${h}`,
+          instagram: seed.handle,
+          twitter: seed.handle,
+          facebook: `https://facebook.com/${h}`,
+        };
+      } else {
+        // 5 socials: LinkedIn, Instagram, X (Twitter), TikTok, Facebook
+        return {
+          linkedin: `https://linkedin.com/in/${h}`,
+          instagram: seed.handle,
+          twitter: seed.handle,
+          tiktok: `@${h}`,
+          facebook: `https://facebook.com/${h}`,
+        };
+      }
+    })(),
     whatsappNumber: `+234803${(idx + 1).toString().padStart(7, '4')}`,
     isClassRep: seed.position?.includes('Class Representative') || false,
     approved: true,

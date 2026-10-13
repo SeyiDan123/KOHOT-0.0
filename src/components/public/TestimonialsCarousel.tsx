@@ -67,7 +67,7 @@ export const TestimonialsCarousel: React.FC = () => {
       <div className="max-w-7xl mx-auto relative z-10">
         {/* Section Header - SLOW-MOTION: Titles first (1250ms), then Captions (1350ms) */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-14 gap-6">
-          <div className="max-w-2xl space-y-3">
+          <div className="max-w-2xl space-y-3 text-left">
             <ScrollReveal delayMs={0} durationMs={1250}>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-slate-900 dark:text-white mb-2 shadow-xs">
                 <Sparkles className="w-3.5 h-3.5 text-amber-600" />
@@ -75,7 +75,7 @@ export const TestimonialsCarousel: React.FC = () => {
                   THE LEGACY, IN THEIR WORDS
                 </span>
               </div>
-              <h2 className="font-syne font-extrabold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight leading-tight">
+              <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
                 The Legacy, In Their Words
               </h2>
             </ScrollReveal>

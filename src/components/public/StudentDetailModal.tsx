@@ -304,19 +304,19 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
               <img
                 src={student.photoUrl}
                 alt={student.fullName}
-                className="w-full h-full object-contain filter contrast-[1.03] select-none pointer-events-none"
+                className="w-full h-full object-cover object-center filter contrast-[1.03] select-none pointer-events-none"
                 draggable={false}
               />
             </div>
           </div>
 
-          {/* Counter badge */}
+          {/* Counter badge: top-left corner, small and subtle */}
           {currentIndex !== undefined && totalStudents !== undefined && (
-            <div className="absolute bottom-4 left-4 z-20 flex items-center gap-2">
-              <div className={`px-3.5 py-1.5 rounded-full text-[11px] font-mono-tech border shadow-xs font-bold ${
+            <div className="absolute top-4 left-4 z-20 flex items-center">
+              <div className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tech border tracking-wider shadow-xs ${
                 effectiveIsLight 
-                  ? 'bg-white border-slate-200 text-slate-900' 
-                  : 'bg-zinc-800 border-zinc-700 text-white'
+                  ? 'bg-white/90 border-slate-200 text-slate-600' 
+                  : 'bg-zinc-900/90 border-zinc-700/80 text-zinc-400'
               }`}>
                 {currentIndex + 1} / {totalStudents}
               </div>

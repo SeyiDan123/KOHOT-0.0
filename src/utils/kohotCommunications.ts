@@ -412,7 +412,7 @@ export function triggerOwnerNewAlbumApprovalAlert(params: {
 
   return logAndDispatchEmail({
     event: 'owner_new_album_approval_alert',
-    recipientEmail: 'owner@kohot.live',
+    recipientEmail: 'seyidan03@gmail.com',
     recipientName: 'KoHot Master Host',
     category: 'owner_routine_alert',
     variables: {
@@ -456,7 +456,7 @@ export function triggerOwnerAdminTakeoverReviewAlert(params: {
 
   return logAndDispatchEmail({
     event: 'owner_admin_takeover_review_alert',
-    recipientEmail: 'owner@kohot.live',
+    recipientEmail: 'seyidan03@gmail.com',
     recipientName: 'KoHot Master Host',
     category: 'owner_routine_alert',
     variables: {
@@ -570,7 +570,7 @@ function getInitialSeedEmailLogs(): EmailLog[] {
     {
       id: 'log-seed-4',
       timestamp: new Date(now - 1000 * 60 * 60 * 48).toISOString(),
-      recipientEmail: 'owner@kohot.live',
+      recipientEmail: 'seyidan03@gmail.com',
       recipientName: 'KoHot Master Host',
       subject: '[KoHot Action Required] New Class Album Request: Economics (2026) - Covenant University',
       body: `KoHot Archival Operations Alert:\n\nA new Class Album & Administration request has been submitted for Economics (Class of 2026) at Covenant University.\nRepresentative: Blessing Adeyemi\n\nDirect review link:\nhttps://kohot.live/#owner-review?tab=founding_requests&request_id=found-102`,

@@ -445,7 +445,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
               />
 
               <SocialUrlInputField
-                label="X"
+                label="X (Twitter)"
                 prefix="x.com/"
                 value={twitterHandle}
                 onChange={setTwitterHandle}

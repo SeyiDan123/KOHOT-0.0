@@ -186,7 +186,7 @@ export const EditDepartmentModal: React.FC<EditDepartmentModalProps> = ({
           <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/15 space-y-2">
             <div className="flex items-center justify-between mb-1">
               <span className="text-[10px] font-mono-tech text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full">
-                Strictly Master Owner Control
+                Strictly Master Host Control
               </span>
             </div>
             <ImageDropzone
@@ -208,7 +208,7 @@ export const EditDepartmentModal: React.FC<EditDepartmentModalProps> = ({
                 <span>Department Caption / Institutional Narrative *</span>
               </label>
               <span className="text-[10px] font-mono-tech text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full">
-                Strictly Master Owner
+                Strictly Master Host
               </span>
             </div>
             <textarea

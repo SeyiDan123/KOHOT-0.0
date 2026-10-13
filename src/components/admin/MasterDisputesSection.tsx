@@ -53,11 +53,11 @@ export const MasterDisputesSection: React.FC = () => {
           status: newStatus,
           decision,
           decisionDate: new Date().toISOString().replace('T', ' ').slice(0, 16),
-          reviewer: 'KoHot Owner Desk',
+          reviewer: 'KoHot Host Desk',
           resolutionNotes: decisionNotesInput.trim() || d.resolutionNotes || (
-            decision === 'Approved' ? 'Administration change request reviewed and approved by Owner.' :
+            decision === 'Approved' ? 'Administration change request reviewed and approved by Host.' :
             decision === 'Rejected' ? 'Administration request reviewed and declined after verification.' :
-            'Request is currently under structured Owner review.'
+            'Request is currently under structured Host review.'
           ),
         };
       }
@@ -352,7 +352,7 @@ export const MasterDisputesSection: React.FC = () => {
                 {isExpanded && (
                   <div className="p-4 rounded-2xl bg-[#10121a] border border-white/15 space-y-3 mt-3 animate-fadeIn">
                     <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-zinc-400 font-semibold">
-                      Record Owner Decision &amp; Verification Reason
+                      Record Host Decision &amp; Verification Reason
                     </label>
                     <textarea
                       rows={3}

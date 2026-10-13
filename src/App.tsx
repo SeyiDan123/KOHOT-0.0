@@ -24,6 +24,8 @@ import {
   getStoredContentOverride, 
   saveStoredContentOverride 
 } from './data/initialData';
+import { CROWNFIELD_PUBLIC_LAW_SETS } from './data/crownfieldLawDemos';
+import { alertHostFoundingRegistration } from './utils/apiClient';
 import { DepartmentAlbumView } from './components/public/DepartmentAlbumView';
 import { AlbumsGrid } from './components/public/AlbumsGrid';
 import { LandingPage } from './components/public/LandingPage';
@@ -182,24 +184,25 @@ function resolveCurrentRoute(currentSets: ClassSet[], currentUnis: UniversityDir
     };
   }
 
-  // 3. Department Legacy Plaque QR Scan or Link: #dept-[deptId] or ?dept=... or /dept/... or ?plaque=... or ?scan=...
-  if (hash.includes('dept-') || search.includes('dept') || pathname.includes('/dept') || search.includes('plaque') || search.includes('scan')) {
+  // 3. Department Legacy Plaque QR Scan or Link: #dept-[deptId], #department/[deptId], ?dept=..., /dept/..., ?plaque=..., ?scan=...
+  if (hash.includes('dept') || hash.includes('department') || search.includes('dept') || search.includes('department') || pathname.includes('/dept') || search.includes('plaque') || search.includes('scan')) {
     let deptId: string | null = null;
-    const pathMatch = pathname.match(/\/dept\/([a-zA-Z0-9_-]+)/);
-    if (hash.includes('dept-')) {
-      deptId = hash.replace(/^#/, '').replace(/^dept-/, '');
+    const hashMatch = hash.match(/#(?:dept-|department\/)([a-zA-Z0-9_-]+)/);
+    const pathMatch = pathname.match(/\/(?:dept|department)\/([a-zA-Z0-9_-]+)/);
+    if (hashMatch && hashMatch[1]) {
+      deptId = hashMatch[1];
     } else if (pathMatch && pathMatch[1]) {
       deptId = pathMatch[1];
     } else {
       const params = new URLSearchParams(search);
-      deptId = params.get('dept') || params.get('plaque') || params.get('scan');
+      deptId = params.get('dept') || params.get('department') || params.get('plaque') || params.get('scan');
     }
 
     if (deptId) {
       const parentUni = currentUnis.find((u) =>
         u.departments?.some((d) => d.id === deptId || d.code.toLowerCase() === deptId?.toLowerCase())
       );
-      const targetSet = currentSets.find((s) => s.departmentId === deptId);
+      const targetSet = currentSets.find((s) => s.departmentId === deptId || s.departmentName?.toLowerCase().trim() === deptId?.toLowerCase().trim());
       // If arriving via Next Class Relay Baton Invitation, directly showcase the Department Legacy Wall
       if (search.includes('next_class_invite')) {
         return {
@@ -489,6 +492,19 @@ export default function App() {
     const updatedReqs = [req, ...foundingRequests];
     handleUpdateFoundingRequests(updatedReqs);
 
+    // Alert Host via email: "New registration awaiting approval" with department and institution
+    alertHostFoundingRegistration({
+      universityId: req.universityId,
+      universityName: req.universityName,
+      departmentId: req.departmentId,
+      departmentName: req.departmentName,
+      classYear: req.classYear,
+      classSetName: req.classSetName,
+      applicantName: req.applicantName,
+      applicantEmail: req.applicantEmail,
+      applicantPhone: req.applicantPhone,
+    });
+
     // Update university department legacy status to 'pending_verification' to hold competing claims
     const updatedUnis = universities.map((u) => {
       if (u.id !== req.universityId) return u;
@@ -749,9 +765,10 @@ export default function App() {
   const handleSelectRole = (role: UserRole) => {
     if (role === 'master_host') {
       const masterUser: UserAccount = {
-        id: 'usr-master',
-        email: 'host@kohot.app',
-        fullName: 'Master Host Administrator',
+        id: 'usr-host',
+        email: 'seyidan03@gmail.com',
+        fullName: 'Seyi Dan',
+        phone: '09036872687',
         role: 'master_host',
         masterToken: 'KOHOT-ROOT-2025',
       };
@@ -791,11 +808,12 @@ export default function App() {
             contentOverride={contentOverride}
             currentUser={currentUser}
             onSelectSet={(id) => {
-              const target = sets.find((s) => s.id === id);
+              const target = sets.find((s) => s.id === id) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === id);
+              const isCrownfield = id.toLowerCase().includes('crownfield') || target?.institutionId === 'crownfield';
               const label = target?.departmentName 
                 ? (target.departmentName.toLowerCase().startsWith('department of') ? target.departmentName : `Department of ${target.departmentName}`)
-                : (target?.classSetName || 'Department of Computer Science');
-              const inst = target?.institutionName || 'University Of Ilorin';
+                : (isCrownfield ? 'Department of Public Law' : (target?.classSetName || 'Department of Computer Science'));
+              const inst = target?.institutionName || (isCrownfield ? 'Crownfield University (CU)' : 'University of Lagos');
               setTransitionLabel(label);
               setTransitionInstitution(inst);
               setIsTransitioning(true);
@@ -904,7 +922,8 @@ export default function App() {
                 onBackToGrid={() => {
                   setInviteContext(null);
                   if (currentSet.departmentId) setSelectedDepartmentId(currentSet.departmentId);
-                  if (currentSet.universityId) setSelectedUniversityId(currentSet.universityId);
+                  const effectiveUniId = currentSet.institutionId || (currentSet as any).universityId;
+                  if (effectiveUniId) setSelectedUniversityId(effectiveUniId);
                   setActiveView('albums_grid');
                   window.history.pushState(null, '', currentSet.departmentId ? `#department/${currentSet.departmentId}` : '#legacy-wall');
                   window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
@@ -930,7 +949,8 @@ export default function App() {
                 onMainDashboard={() => {
                   setActiveView('layer0_master');
                 }}
-                showMainButton={Boolean(isMasterHost && albumOriginView === 'layer0_master')}
+                showMainButton={Boolean(isMasterHost || albumOriginView === 'layer0_master' || currentSet.id.startsWith('crownfield-law'))}
+                universities={universities}
                 onReturnToMyAlbum={() => {
                   if (currentUser?.assignedSetId) {
                     setSelectedSetId(currentUser.assignedSetId);
@@ -989,6 +1009,8 @@ export default function App() {
               window.history.pushState(null, '', '#home');
               window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
             }}
+            showMainButton={Boolean(currentUser?.role === 'master_host' || albumOriginView === 'layer0_master' || selectedDepartmentId === 'dept-crownfield-public-law')}
+            onMainDashboard={() => setActiveView('layer0_master')}
           />
         )}
 
@@ -1026,7 +1048,7 @@ export default function App() {
                 onMainDashboard={() => {
                   setActiveView('layer0_master');
                 }}
-                showMainButton={Boolean(albumOriginView === 'layer0_master' || currentUser?.role === 'master_host')}
+                showMainButton={Boolean(albumOriginView === 'layer0_master' || currentUser?.role === 'master_host' || activeSetForRep.id.startsWith('crownfield-law'))}
               />
             );
           })()
@@ -1035,9 +1057,10 @@ export default function App() {
         {activeView === 'layer0_master' && (
           <Layer0MasterHostDashboard
             currentUser={currentUser || {
-              id: 'usr-master',
-              email: 'host@kohot.app',
-              fullName: 'Master Host Overseer',
+              id: 'usr-host',
+              email: 'seyidan03@gmail.com',
+              fullName: 'Seyi Dan',
+              phone: '09036872687',
               role: 'master_host',
               masterToken: 'KOHOT-ROOT-2025',
             }}
@@ -1071,6 +1094,7 @@ export default function App() {
             onViewDepartmentLegacyWall={(deptId, uniId) => {
               setSelectedDepartmentId(deptId);
               if (uniId) setSelectedUniversityId(uniId);
+              setAlbumOriginView('layer0_master');
               const targetSet = sets.find((s) => s.departmentId === deptId);
               const deptName = targetSet?.departmentName || 'Computer Science';
               setTransitionLabel(deptName.toLowerCase().startsWith('department of') ? deptName : `Department of ${deptName}`);
@@ -1098,6 +1122,7 @@ export default function App() {
         isOpen={isLoginOpen}
         onClose={() => setIsLoginOpen(false)}
         availableSets={sets}
+        foundingRequests={foundingRequests}
         onLoginSuccess={handleLoginSuccess}
       />
 

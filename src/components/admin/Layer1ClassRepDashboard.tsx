@@ -20,6 +20,7 @@ import { AlbumAdminSwitcher } from '../common/AlbumAdminSwitcher';
 import { ImageCropModal, CropAspectRatio } from '../common/ImageCropModal';
 import { ProfilePocketPickerModal } from '../common/ProfilePocketPickerModal';
 import { UniversalModal } from '../common/UniversalModal';
+import { SocialUrlInputField } from '../common/SocialUrlInputField';
 import { getYouTubeThumbnailUrl } from '../../utils/youtube';
 import { getAwardVisualConfig } from '../../utils/awardVisuals';
 import { getTheme, applyTheme } from '../../utils/theme';
@@ -1803,15 +1804,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           ? 'bg-white/95 border-zinc-300 text-black shadow-sm' 
           : 'bg-[#18181b]/90 border-zinc-800 text-white'
       }`}>
-        {/* Left: KoHot Brand Logo & Album Admin Title and Name */}
+        {/* Left: Album Admin Title and Name (No links back to public site) */}
         <div className="flex items-center gap-3.5 min-w-0">
-          <BrandLogo
-            logoUrl={contentOverride?.websiteLogoUrl}
-            brandName={contentOverride?.brandName || 'KOHOT'}
-            textSize="text-xs sm:text-sm"
-            textColor={isLightMode ? 'text-black' : 'text-white'}
-          />
-          <span className={isLightMode ? 'text-zinc-400 font-mono-tech text-xs' : 'text-zinc-600 font-mono-tech text-xs'}>|</span>
           <div className="min-w-0 leading-tight">
             <div className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-bold">
               Album Admin
@@ -1825,7 +1819,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         {/* Center: Centralized Sticky Manage Album & Preview Album Switcher (Permanently Centered) */}
         <AlbumAdminSwitcher
           activeMode="manage"
-          showMainButton={false}
+          showMainButton={Boolean(showMainButton)}
           onMainDashboard={onMainDashboard}
           onManageAlbum={() => {
             // Already on manage album dashboard, keep user here
@@ -1839,7 +1833,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             currentUser={currentUser}
             roleTitle="Class Album Admin"
             onLogout={() => onSwitchRole('visitor')}
-            onGoToWebsite={onBackToLanding}
             currentSet={currentSet}
             onUpdateSet={onUpdateSet}
             onAdminTransferred={() => onSwitchRole('visitor')}
@@ -2479,7 +2472,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                         <img
                           src={newStudentPhotoUrl}
                           alt="Preview"
-                          className="w-14 h-18 rounded-lg object-cover border border-white/20 filter grayscale-[20%]"
+                          className="w-14 h-14 aspect-square rounded-lg object-cover border border-white/20 filter grayscale-[20%]"
                         />
                         <span className="text-xs text-zinc-400 font-mono-tech">Photo preview ready</span>
                       </div>
@@ -2488,7 +2481,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                         onClick={() => {
                           triggerCropForImage(
                             newStudentPhotoUrl,
-                            '4:5',
+                            '1:1',
                             `Crop Portrait: ${newStudentName || 'New Classmate'}`,
                             (croppedUrl) => {
                               setNewStudentPhotoUrl(croppedUrl);
@@ -2671,7 +2664,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                         key={student.id}
                         className="rounded-2xl bg-[#0c0d14] border border-white/10 overflow-hidden p-3.5 flex flex-col justify-between group hover:border-white/25 transition-all"
                       >
-                        <div className="relative aspect-[3/4] rounded-xl overflow-hidden mb-3 bg-black">
+                        <div className="relative aspect-square rounded-xl overflow-hidden mb-3 bg-black">
                           <img
                             src={student.photoUrl}
                             alt={student.fullName}
@@ -3091,79 +3084,58 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
                 {/* YouTube */}
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-2 font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                    <Youtube className="w-3.5 h-3.5 text-red-500" />
-                    <span>YouTube Channel</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={socials.youtube || ''}
-                    onChange={(e) => setSocials({ ...socials, youtube: e.target.value })}
-                    placeholder="https://youtube.com/@department"
-                    className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs font-mono-tech placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
-                  />
-                </div>
+                <SocialUrlInputField
+                  label="YouTube Channel"
+                  prefix="youtube.com/@"
+                  value={socials.youtube ? socials.youtube.replace(/^https?:\/\/(www\.)?youtube\.com\/@?/i, '') : ''}
+                  onChange={(val) => setSocials({ ...socials, youtube: val ? `https://youtube.com/@${val}` : '' })}
+                  placeholder="channel"
+                  icon={<Youtube className="w-3.5 h-3.5 text-red-500" />}
+                />
 
                 {/* Instagram */}
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-2 font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                    <Instagram className="w-3.5 h-3.5 text-pink-500" />
-                    <span>Instagram Handle</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={socials.instagram || ''}
-                    onChange={(e) => setSocials({ ...socials, instagram: e.target.value })}
-                    placeholder="@department_alumni or https://instagram.com/..."
-                    className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs font-mono-tech placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
-                  />
-                </div>
+                <SocialUrlInputField
+                  label="Instagram Handle"
+                  prefix="instagram.com/"
+                  value={socials.instagram ? socials.instagram.replace(/^https?:\/\/(www\.)?instagram\.com\/?/i, '').replace(/^@/, '') : ''}
+                  onChange={(val) => setSocials({ ...socials, instagram: val ? `@${val}` : '' })}
+                  placeholder="username"
+                  icon={<Instagram className="w-3.5 h-3.5 text-pink-500" />}
+                />
 
                 {/* X */}
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-2 font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
+                <SocialUrlInputField
+                  label="X (Twitter)"
+                  prefix="x.com/"
+                  value={socials.twitter ? socials.twitter.replace(/^https?:\/\/(www\.)?(twitter|x)\.com\/?/i, '').replace(/^@/, '') : ''}
+                  onChange={(val) => setSocials({ ...socials, twitter: val ? `@${val}` : '' })}
+                  placeholder="username"
+                  icon={
                     <svg viewBox="0 0 24 24" aria-hidden="true" className="w-3.5 h-3.5 fill-current text-white">
                       <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
                     </svg>
-                    <span>X</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={socials.twitter || ''}
-                    onChange={(e) => setSocials({ ...socials, twitter: e.target.value })}
-                    placeholder="@dept_set or https://x.com/..."
-                    className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs font-mono-tech placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
-                  />
-                </div>
+                  }
+                />
 
                 {/* LinkedIn */}
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-2 font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                    <Linkedin className="w-3.5 h-3.5 text-blue-400" />
-                    <span>LinkedIn Alumni Page</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={socials.linkedin || ''}
-                    onChange={(e) => setSocials({ ...socials, linkedin: e.target.value })}
-                    placeholder="https://linkedin.com/company/..."
-                    className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs font-mono-tech placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
-                  />
-                </div>
+                <SocialUrlInputField
+                  label="LinkedIn Alumni Page"
+                  prefix="linkedin.com/company/"
+                  value={socials.linkedin ? socials.linkedin.replace(/^https?:\/\/(www\.)?linkedin\.com\/(company|in)\/?/i, '') : ''}
+                  onChange={(val) => setSocials({ ...socials, linkedin: val ? `https://linkedin.com/company/${val}` : '' })}
+                  placeholder="page-name"
+                  icon={<Linkedin className="w-3.5 h-3.5 text-blue-400" />}
+                />
 
                 {/* Official Website */}
-                <div className="space-y-1.5 sm:col-span-2">
-                  <label className="flex items-center gap-2 font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                    <Globe className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Official Department Website / Portal</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={socials.website || ''}
-                    onChange={(e) => setSocials({ ...socials, website: e.target.value })}
-                    placeholder="https://dept.university.edu"
-                    className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs font-mono-tech placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
+                <div className="sm:col-span-2">
+                  <SocialUrlInputField
+                    label="Official Department Website / Portal"
+                    prefix="https://"
+                    value={socials.website ? socials.website.replace(/^https?:\/\//i, '') : ''}
+                    onChange={(val) => setSocials({ ...socials, website: val ? `https://${val}` : '' })}
+                    placeholder="dept.university.edu"
+                    icon={<Globe className="w-3.5 h-3.5 text-emerald-400" />}
                   />
                 </div>
               </div>

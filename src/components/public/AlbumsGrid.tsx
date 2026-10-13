@@ -46,6 +46,8 @@ interface AlbumsGridProps {
   onOpenDashboard: () => void;
   onLogout: () => void;
   onBackToLanding?: () => void;
+  showMainButton?: boolean;
+  onMainDashboard?: () => void;
   inviteContext?: {
     inviteCode: string;
     departmentId: string;
@@ -82,6 +84,8 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
   onOpenDashboard,
   onLogout,
   onBackToLanding,
+  showMainButton,
+  onMainDashboard,
   inviteContext: propInviteContext,
   onOpenOnboardingWithInvite,
 }) => {
@@ -128,16 +132,63 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     return list;
   }, [universities]);
 
-  // Check if viewing a specific unlisted department accessed via direct link
+  // Check if viewing a specific unlisted department accessed via direct link or navigation from an album
   const isDirectSharedDept = Boolean(controlledDeptId && controlledDeptId !== 'dept-crownfield-public-law');
 
-  const targetSharedUni = isDirectSharedDept
-    ? universities.find((u) => u.id === controlledUniId || u.departments?.some((d) => d.id === controlledDeptId)) || CROWNFIELD_UNIVERSITY
-    : CROWNFIELD_UNIVERSITY;
+  const targetSharedUni = useMemo<UniversityDirectoryItem>(() => {
+    if (!isDirectSharedDept) return CROWNFIELD_UNIVERSITY;
+    const foundUni = universities.find(
+      (u) => u.id === controlledUniId || u.departments?.some((d) => d.id === controlledDeptId)
+    );
+    if (foundUni) return foundUni;
+    const matchingSet = sets.find((s) => s.departmentId === controlledDeptId);
+    if (matchingSet) {
+      const fallbackDept: DepartmentItem = {
+        id: matchingSet.departmentId,
+        universityId: matchingSet.institutionId,
+        name: matchingSet.departmentName,
+        code: matchingSet.departmentName.slice(0, 3).toUpperCase(),
+        faculty: matchingSet.faculty || 'Faculty of Sciences',
+        heroImageUrl: '',
+        caption: matchingSet.classSlogan || `Official Department Legacy Wall for ${matchingSet.departmentName}`,
+        legacy_status: 'established',
+        logoUrl: matchingSet.departmentLogoUrl,
+        connectedClassAlbumIds: [matchingSet.id],
+      };
+      return {
+        id: matchingSet.institutionId,
+        name: matchingSet.institutionName,
+        shortCode: matchingSet.institutionName.slice(0, 4).toUpperCase(),
+        location: 'Nigeria',
+        logoUrl: matchingSet.institutionLogoUrl,
+        officialWebsite: '',
+        departments: [fallbackDept],
+      };
+    }
+    return CROWNFIELD_UNIVERSITY;
+  }, [isDirectSharedDept, controlledUniId, controlledDeptId, universities, sets]);
 
-  const targetSharedDept = isDirectSharedDept
-    ? targetSharedUni.departments?.find((d) => d.id === controlledDeptId) || CROWNFIELD_UNIVERSITY.departments[0]
-    : CROWNFIELD_UNIVERSITY.departments[0];
+  const targetSharedDept = useMemo<DepartmentItem>(() => {
+    if (!isDirectSharedDept) return CROWNFIELD_UNIVERSITY.departments[0];
+    const foundDept = targetSharedUni.departments?.find((d) => d.id === controlledDeptId);
+    if (foundDept) return foundDept;
+    const matchingSet = sets.find((s) => s.departmentId === controlledDeptId);
+    if (matchingSet) {
+      return {
+        id: matchingSet.departmentId,
+        universityId: matchingSet.institutionId,
+        name: matchingSet.departmentName,
+        code: matchingSet.departmentName.slice(0, 3).toUpperCase(),
+        faculty: matchingSet.faculty || 'Faculty of Sciences',
+        heroImageUrl: '',
+        caption: matchingSet.classSlogan || `Official Department Legacy Wall for ${matchingSet.departmentName}`,
+        legacy_status: 'established',
+        logoUrl: matchingSet.departmentLogoUrl,
+        connectedClassAlbumIds: [matchingSet.id],
+      };
+    }
+    return targetSharedUni.departments?.[0] || CROWNFIELD_UNIVERSITY.departments[0];
+  }, [isDirectSharedDept, targetSharedUni, controlledDeptId, sets]);
 
   const currentUniversity = targetSharedUni;
   const currentDepartment = targetSharedDept;
@@ -152,20 +203,32 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     setActiveDeptId(deptId);
   };
 
-  // Filtered sets: if accessed via direct class/dept share link, show that department's sets.
+  const isCrownfieldPublicLaw = !controlledDeptId || 
+    controlledDeptId === 'dept-crownfield-public-law' || 
+    controlledDeptId.toLowerCase().includes('crownfield') ||
+    controlledDeptId.toLowerCase().includes('public-law') ||
+    targetSharedDept.id === 'dept-crownfield-public-law' ||
+    targetSharedDept.name?.toLowerCase().includes('public law');
+
+  // Filtered sets: if accessed via direct class/dept share link or album navigation, show that department's sets.
   // Otherwise, public legacy wall demo strictly displays ONLY the 4 Crownfield Demo albums!
   const displayedSets = useMemo(() => {
-    if (isDirectSharedDept) {
-      return sets.filter((s) => s.departmentId === controlledDeptId).sort((a, b) => b.graduationYear - a.graduationYear);
+    if (isDirectSharedDept && !isCrownfieldPublicLaw) {
+      const deptSets = sets.filter((s) => {
+        if (s.departmentId === controlledDeptId) return true;
+        if (targetSharedDept.name && s.departmentName?.toLowerCase().trim() === targetSharedDept.name.toLowerCase().trim()) {
+          // If university matches or set institutionId matches
+          if (!targetSharedUni.id || s.institutionId === targetSharedUni.id) return true;
+        }
+        return false;
+      });
+      return deptSets.sort((a, b) => b.graduationYear - a.graduationYear);
     }
     const demoIds = ['crownfield-law-2026', 'crownfield-law-2025', 'crownfield-law-2024', 'crownfield-law-2023'];
-    const matched = sets.filter((s) => demoIds.includes(s.id));
-    if (matched.length === 4) {
-      return [...matched].sort((a, b) => b.graduationYear - a.graduationYear);
-    }
     const merged = demoIds.map((id) => sets.find((s) => s.id === id) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === id)!);
-    return merged.filter(Boolean).sort((a, b) => b.graduationYear - a.graduationYear);
-  }, [sets, isDirectSharedDept, controlledDeptId]);
+    const validMerged = merged.filter(Boolean).sort((a, b) => b.graduationYear - a.graduationYear);
+    return validMerged.length > 0 ? validMerged : CROWNFIELD_PUBLIC_LAW_SETS;
+  }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.name, targetSharedUni.id]);
 
   // Total student portraits archived in this selection
   const totalPortraits = useMemo(() => {
@@ -210,7 +273,9 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     };
   }, [propInviteContext, displayedSets]);
 
-  const departmentSets = displayedSets;
+  const departmentSets = (isCrownfieldPublicLaw && displayedSets.length === 0) 
+    ? CROWNFIELD_PUBLIC_LAW_SETS 
+    : displayedSets;
   const isAlbumAdmin = currentUser?.role === 'class_rep' || currentUser?.role === 'master_host';
   const isPlaqueOrSharedWall = Boolean(
     isDirectSharedDept ||
@@ -291,57 +356,36 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
           : 'bg-[#121214]/95 border-zinc-800 text-white'
       }`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 relative z-10">
-          {isPlaqueOrSharedWall || currentUser?.role === 'class_rep' ? (
-            <div
-              id="legacy-wall-top-kohot-badge"
-              className={`flex items-center gap-2.5 select-none ${
-                isLightMode ? 'text-slate-900' : 'text-white'
-              }`}
-            >
-              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center shadow-xs ${
-                isLightMode ? 'bg-slate-100 border-slate-200' : 'bg-white/10 border-white/20'
-              }`}>
-                <div className={`w-2.5 h-2.5 rotate-45 ${
-                  isLightMode ? 'bg-slate-900' : 'bg-white'
-                }`} />
-              </div>
-              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase ${
-                isLightMode ? 'text-slate-900' : 'text-white'
-              }`}>
-                KoHot
-              </span>
+          {/* Constant KoHot logo text shortcut to website */}
+          <button
+            id="legacy-wall-top-kohot-btn"
+            type="button"
+            onClick={() => {
+              if (onBackToLanding) {
+                onBackToLanding();
+              } else {
+                window.location.hash = '#home';
+              }
+              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+            }}
+            className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
+              isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
+            }`}
+            title="Return to KoHot Website"
+          >
+            <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
+              isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
+            }`}>
+              <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
+                isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
+              }`} />
             </div>
-          ) : (
-            <button
-              id="legacy-wall-top-kohot-btn"
-              type="button"
-              onClick={() => {
-                if (onBackToLanding) {
-                  onBackToLanding();
-                } else {
-                  window.location.hash = '#home';
-                }
-                window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-              }}
-              className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
-                isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
-              }`}
-              title="Return to KoHot Website"
-            >
-              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
-                isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
-              }`}>
-                <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
-                  isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
-                }`} />
-              </div>
-              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
-                isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
-              }`}>
-                KoHot
-              </span>
-            </button>
-          )}
+            <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
+              isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
+            }`}>
+              KoHot
+            </span>
+          </button>
 
           <div className="flex items-center gap-3">
             {/* Context-aware Light/Dark Mode Switcher */}
@@ -373,6 +417,9 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
             {isAlbumAdmin && (
               <AlbumAdminSwitcher
                 activeMode="preview"
+                showMainButton={Boolean(showMainButton)}
+                showManageButton={!showMainButton}
+                onMainDashboard={onMainDashboard}
                 onManageAlbum={onOpenDashboard}
                 onPreviewAlbum={() => {
                   if (departmentSets.length > 0) {
@@ -430,18 +477,18 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
               )}
             </div>
 
-            {/* Department and University Names */}
+            {/* Department and University Names: University name on top (less prominent), Department name below */}
             <div className="space-y-1 pt-1 animate-slide-up-fade" style={{ animationDelay: '100ms' }}>
-              <h1 className="text-xl sm:text-2xl md:text-3xl font-syne font-extrabold text-white tracking-tight leading-snug uppercase text-center">
+              <p className="font-syne font-semibold text-xs sm:text-sm text-zinc-400 tracking-wider uppercase text-center">
+                {universityDisplayName.toUpperCase()}
+              </p>
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-syne font-bold text-white tracking-tight leading-snug uppercase text-center">
                 {currentDepartment.name.toUpperCase().startsWith('DEPARTMENT OF')
                   ? currentDepartment.name.toUpperCase()
                   : currentDepartment.name.toUpperCase().startsWith('DEPARTMENT')
                     ? currentDepartment.name.toUpperCase()
                     : `DEPARTMENT OF ${currentDepartment.name.toUpperCase()}`}
               </h1>
-              <p className="font-syne font-semibold text-xs sm:text-sm text-zinc-400 tracking-wider uppercase text-center">
-                {universityDisplayName.toUpperCase()}
-              </p>
             </div>
           </div>
         </div>
@@ -503,7 +550,7 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
           )}
 
           {/* Grid of Yearly Set Albums */}
-          {departmentSets.length === 0 ? (
+          {departmentSets.length === 0 && !isCrownfieldPublicLaw ? (
             <div className="text-center py-20 space-y-4 bg-zinc-50 border border-zinc-200 rounded-3xl p-8 text-black">
               <GraduationCap className="w-12 h-12 text-[#b89728] mx-auto" />
               <div className="space-y-1">
@@ -940,10 +987,10 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
               onOpenOnboarding();
             }
           }}
-          className="fixed bottom-6 left-6 z-50 px-4 sm:px-5 py-3 rounded-full bg-slate-900 hover:bg-black dark:bg-[#18181b] dark:hover:bg-zinc-800 text-white font-syne font-bold text-xs uppercase tracking-wider shadow-2xl backdrop-blur-xl border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer flex items-center gap-2 group"
+          className="fixed bottom-6 right-20 z-50 px-4 sm:px-5 py-3 rounded-full bg-slate-900 hover:bg-black dark:bg-[#18181b] dark:hover:bg-zinc-800 text-white font-syne font-bold text-xs uppercase tracking-wider shadow-2xl backdrop-blur-xl border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer flex items-center gap-2 group"
           style={{
             position: 'fixed',
-            left: '1.5rem',
+            right: '5.25rem',
             bottom: '1.5rem',
           }}
           title="Create Class Album"

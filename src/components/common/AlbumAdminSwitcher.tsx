@@ -4,11 +4,12 @@ import { Sliders, Eye, LayoutDashboard } from 'lucide-react';
 interface AlbumAdminSwitcherProps {
   activeMode: 'main' | 'manage' | 'preview';
   onMainDashboard?: () => void;
-  onManageAlbum: () => void;
+  onManageAlbum?: () => void;
   onPreviewAlbum: () => void;
   albumLabel?: string;
   isViewingOtherAlbum?: boolean;
   showMainButton?: boolean;
+  showManageButton?: boolean;
 }
 
 export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
@@ -19,6 +20,7 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
   albumLabel,
   isViewingOtherAlbum = false,
   showMainButton = false,
+  showManageButton = true,
 }) => {
   const hasMain = Boolean(showMainButton);
 
@@ -47,7 +49,7 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
                 ? 'bg-white text-zinc-950 font-bold shadow-md'
                 : 'text-zinc-300 hover:text-white hover:bg-white/10 font-medium'
             }`}
-            title="Return to Owner Main Dashboard"
+            title="Return to Host Main Dashboard"
           >
             <LayoutDashboard className={`w-3.5 h-3.5 ${activeMode === 'main' ? 'text-zinc-950' : 'text-zinc-400'}`} />
             <span>Main</span>
@@ -55,24 +57,26 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
         )}
 
         {/* Toggle Option: Manage */}
-        <button
-          id="toggle-btn-manage-album"
-          type="button"
-          onClick={() => {
-            if (activeMode !== 'manage') {
-              onManageAlbum();
-            }
-          }}
-          className={`relative z-10 px-3.5 sm:px-4 py-1.5 rounded-full text-[11px] sm:text-xs font-mono-tech tracking-wider uppercase flex items-center gap-1.5 sm:gap-2 transition-all duration-200 cursor-pointer ${
-            activeMode === 'manage'
-              ? 'bg-white text-zinc-950 font-bold shadow-md'
-              : 'text-zinc-300 hover:text-white hover:bg-white/10 font-medium'
-          }`}
-          title="Switch to Manage Album dashboard"
-        >
-          <Sliders className={`w-3.5 h-3.5 ${activeMode === 'manage' ? 'text-zinc-950' : 'text-zinc-400'}`} />
-          <span>Manage</span>
-        </button>
+        {showManageButton && (
+          <button
+            id="toggle-btn-manage-album"
+            type="button"
+            onClick={() => {
+              if (activeMode !== 'manage' && onManageAlbum) {
+                onManageAlbum();
+              }
+            }}
+            className={`relative z-10 px-3.5 sm:px-4 py-1.5 rounded-full text-[11px] sm:text-xs font-mono-tech tracking-wider uppercase flex items-center gap-1.5 sm:gap-2 transition-all duration-200 cursor-pointer ${
+              activeMode === 'manage'
+                ? 'bg-white text-zinc-950 font-bold shadow-md'
+                : 'text-zinc-300 hover:text-white hover:bg-white/10 font-medium'
+            }`}
+            title="Switch to Manage Album dashboard"
+          >
+            <Sliders className={`w-3.5 h-3.5 ${activeMode === 'manage' ? 'text-zinc-950' : 'text-zinc-400'}`} />
+            <span>Manage</span>
+          </button>
+        )}
 
         {/* Toggle Option: Preview */}
         <button
