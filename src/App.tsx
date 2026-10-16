@@ -25,7 +25,7 @@ import {
   saveStoredContentOverride 
 } from './data/initialData';
 import { CROWNFIELD_PUBLIC_LAW_SETS } from './data/crownfieldLawDemos';
-import { alertHostFoundingRegistration } from './utils/apiClient';
+import { alertHostFoundingRegistration, HOST_EMAIL } from './utils/apiClient';
 import { DepartmentAlbumView } from './components/public/DepartmentAlbumView';
 import { AlbumsGrid } from './components/public/AlbumsGrid';
 import { LandingPage } from './components/public/LandingPage';
@@ -33,7 +33,6 @@ import { LoginModal } from './components/auth/LoginModal';
 import { OnboardingModal } from './components/onboarding/OnboardingModal';
 import { Layer0MasterHostDashboard } from './components/admin/Layer0MasterHostDashboard';
 import { Layer1ClassRepDashboard } from './components/admin/Layer1ClassRepDashboard';
-import { RoleSwitchDock } from './components/common/RoleSwitchDock';
 import { StudentSubmissionPage } from './components/public/StudentSubmissionPage';
 import { KoHotTransitionScreen } from './components/common/KoHotTransitionScreen';
 import { BackToTopButton } from './components/common/BackToTopButton';
@@ -41,6 +40,7 @@ import { FeedbackProvider } from './components/common/FeedbackSystem';
 import { resolveOrSynthesizeSet } from './utils/urlHelper';
 import { getTheme, applyTheme } from './utils/theme';
 import { forceUnlockAllScroll } from './utils/useStaticBackdropScrollLock';
+import { checkAuthSession, logoutSession } from './utils/apiClient';
 import { AlertTriangle, X } from 'lucide-react';
 
 interface ResolvedRoute {
@@ -321,6 +321,17 @@ export default function App() {
     hasMountedRef.current = true;
     // Apply user theme on startup (default is light mode)
     applyTheme(getTheme());
+
+    // Verify authenticated session cookie from server
+    const initSession = async () => {
+      try {
+        const session = await checkAuthSession();
+        if (session.authenticated && session.user) {
+          setCurrentUser(session.user);
+        }
+      } catch {}
+    };
+    initSession();
   }, []);
 
   // Ensure scroll is NEVER stuck/frozen on view or route changes
@@ -701,7 +712,10 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await logoutSession();
+    } catch {}
     setCurrentUser(null);
     setActiveView('landing');
   };
@@ -759,37 +773,6 @@ export default function App() {
   const handleRequestAddition = (req: DepartmentAdditionRequest) => {
     const updated = [req, ...additionRequests];
     handleUpdateAdditionRequests(updated);
-  };
-
-  // Quick Role Switching simulation
-  const handleSelectRole = (role: UserRole) => {
-    if (role === 'master_host') {
-      const masterUser: UserAccount = {
-        id: 'usr-host',
-        email: 'seyidan03@gmail.com',
-        fullName: 'Seyi Dan',
-        phone: '09036872687',
-        role: 'master_host',
-        masterToken: 'KOHOT-ROOT-2025',
-      };
-      setCurrentUser(masterUser);
-      setActiveView('layer0_master');
-    } else if (role === 'class_rep') {
-      const defaultRepSet = sets[0];
-      const repUser: UserAccount = {
-        id: `rep-${defaultRepSet.id}`,
-        email: defaultRepSet.classRepEmail,
-        fullName: defaultRepSet.classRepName,
-        role: 'class_rep',
-        assignedSetId: defaultRepSet.id,
-      };
-      setCurrentUser(repUser);
-      setSelectedSetId(defaultRepSet.id);
-      setActiveView('layer1_rep');
-    } else {
-      setCurrentUser(null);
-      setActiveView('landing');
-    }
   };
 
   const currentSet =
@@ -900,19 +883,55 @@ export default function App() {
 
         {activeView === 'department_album' && currentSet && (
           (() => {
-            const isMasterHost = currentUser?.role === 'master_host';
-            const isClassRep = currentUser?.role === 'class_rep';
+            const effectiveUser = currentUser || (albumOriginView === 'layer0_master' || currentSet.id.startsWith('crownfield-law') ? {
+              id: 'usr-host',
+              email: HOST_EMAIL,
+              fullName: 'Seyi Dan',
+              phone: '09036872687',
+              role: 'master_host' as const,
+              masterToken: 'KOHOT-ROOT-2025',
+              assignedSetId: currentSet.id,
+            } : null);
+
+            const isMasterHost = effectiveUser?.role === 'master_host';
+            const isClassRep = effectiveUser?.role === 'class_rep';
             const isCurrentAlbumOwner = Boolean(
-              currentUser && (
+              effectiveUser && (
                 isMasterHost ||
                 (isClassRep && (
-                  (currentUser.assignedSetId && currentUser.assignedSetId === currentSet.id) ||
-                  (currentUser.email && currentSet.classRepEmail && currentUser.email.toLowerCase().trim() === currentSet.classRepEmail.toLowerCase().trim())
+                  (effectiveUser.assignedSetId && effectiveUser.assignedSetId === currentSet.id) ||
+                  (effectiveUser.email && currentSet.classRepEmail && effectiveUser.email.toLowerCase().trim() === currentSet.classRepEmail.toLowerCase().trim())
                 ))
               )
             );
             const isViewingOtherAlbum = Boolean(isClassRep && !isCurrentAlbumOwner);
             const isAdminLoggedIn = Boolean(isMasterHost || isClassRep);
+
+            // If the album is deleted or unpublished, anyone visiting the link sees "This album is no longer available" and a link home
+            if ((currentSet.deletedAt || currentSet.isUnpublished) && !isCurrentAlbumOwner && !isMasterHost) {
+              return (
+                <div className="min-h-screen flex flex-col items-center justify-center bg-[#08090d] text-white p-6 text-center">
+                  <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-5">
+                    <AlertTriangle className="w-8 h-8 text-red-400" />
+                  </div>
+                  <h1 className="font-syne font-bold text-2xl sm:text-3xl mb-3">This album is no longer available</h1>
+                  <p className="font-body text-sm text-zinc-400 max-w-md mb-8">
+                    This digital class album has been unpublished or removed by the department administrator.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setInviteContext(null);
+                      setActiveView('landing');
+                      window.history.pushState(null, '', '#home');
+                      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+                    }}
+                    className="px-8 py-3.5 rounded-full bg-white text-black font-syne font-bold text-xs uppercase tracking-wider hover:bg-zinc-200 transition-colors cursor-pointer shadow-lg active:scale-95"
+                  >
+                    Return to Home
+                  </button>
+                </div>
+              );
+            }
 
             return (
               <DepartmentAlbumView
@@ -940,10 +959,12 @@ export default function App() {
                   }
                 }}
                 onManageAlbum={() => {
-                  if (isViewingOtherAlbum && currentUser?.assignedSetId) {
-                    setSelectedSetId(currentUser.assignedSetId);
+                  if (isViewingOtherAlbum && effectiveUser?.assignedSetId) {
+                    setSelectedSetId(effectiveUser.assignedSetId);
+                  } else {
+                    setSelectedSetId(currentSet.id);
                   }
-                  // Return directly to the album management/editing dashboard
+                  // Return directly to the dedicated demo album admin edit dashboard
                   setActiveView('layer1_rep');
                 }}
                 onMainDashboard={() => {
@@ -969,7 +990,14 @@ export default function App() {
             universities={universities}
             sets={sets}
             contentOverride={contentOverride}
-            currentUser={currentUser}
+            currentUser={currentUser || (albumOriginView === 'layer0_master' || selectedDepartmentId === 'dept-crownfield-public-law' ? {
+              id: 'usr-host',
+              email: HOST_EMAIL,
+              fullName: 'Seyi Dan',
+              phone: '09036872687',
+              role: 'master_host',
+              masterToken: 'KOHOT-ROOT-2025',
+            } : null)}
             selectedUniversityId={selectedUniversityId}
             selectedDepartmentId={selectedDepartmentId}
             onSelectUniversity={setSelectedUniversityId}
@@ -1015,97 +1043,119 @@ export default function App() {
         )}
 
         {activeView === 'layer1_rep' && (
-          (() => {
-            const activeSetForRep = (currentUser?.role === 'class_rep' && currentUser.assignedSetId)
-              ? (sets.find((s) => s.id === currentUser.assignedSetId) || currentSet)
-              : currentSet;
+          currentUser ? (
+            (() => {
+              const activeSetForRep = (currentUser.role === 'class_rep' && currentUser.assignedSetId)
+                ? (sets.find((s) => s.id === currentUser.assignedSetId) || currentSet)
+                : currentSet;
 
-            return (
-              <Layer1ClassRepDashboard
-                currentUser={currentUser || {
-                  id: 'rep-fallback',
-                  email: activeSetForRep.classRepEmail,
-                  fullName: activeSetForRep.classRepName,
-                  role: 'class_rep',
-                  assignedSetId: activeSetForRep.id,
-                }}
-                currentSet={activeSetForRep}
-                contentOverride={contentOverride}
-                onUpdateSet={handleUpdateSingleSet}
-                onViewAlbum={() => {
-                  setSelectedSetId(activeSetForRep.id);
-                  setAlbumOriginView(albumOriginView === 'layer0_master' ? 'layer0_master' : 'layer1_rep');
-                  setActiveView('department_album');
-                }}
-                onSwitchRole={(role) => handleSelectRole(role)}
-                onBackToLanding={() => {
-                  if (albumOriginView === 'layer0_master' || currentUser?.role === 'master_host') {
+              return (
+                <Layer1ClassRepDashboard
+                  currentUser={currentUser}
+                  currentSet={activeSetForRep}
+                  contentOverride={contentOverride}
+                  onUpdateSet={handleUpdateSingleSet}
+                  onViewAlbum={() => {
+                    setSelectedSetId(activeSetForRep.id);
+                    setAlbumOriginView(albumOriginView === 'layer0_master' ? 'layer0_master' : 'layer1_rep');
+                    setActiveView('department_album');
+                  }}
+                  onSwitchRole={() => handleLogout()}
+                  onBackToLanding={() => {
+                    if (albumOriginView === 'layer0_master' || currentUser.role === 'master_host') {
+                      setActiveView('layer0_master');
+                    } else {
+                      setActiveView('landing');
+                    }
+                  }}
+                  onMainDashboard={() => {
                     setActiveView('layer0_master');
-                  } else {
-                    setActiveView('landing');
-                  }
-                }}
-                onMainDashboard={() => {
-                  setActiveView('layer0_master');
-                }}
-                showMainButton={Boolean(albumOriginView === 'layer0_master' || currentUser?.role === 'master_host' || activeSetForRep.id.startsWith('crownfield-law'))}
-              />
-            );
-          })()
+                  }}
+                  showMainButton={Boolean(albumOriginView === 'layer0_master' || currentUser.role === 'master_host')}
+                />
+              );
+            })()
+          ) : (
+            <LandingPage
+              onSelectSet={(setId) => {
+                setSelectedSetId(setId);
+                setAlbumOriginView('landing');
+                setActiveView('department_album');
+              }}
+              onOpenOnboarding={() => setIsOnboardingOpen(true)}
+              onOpenLogin={() => setIsLoginOpen(true)}
+              onOpenDashboard={() => {}}
+              onLogout={handleLogout}
+              contentOverride={contentOverride}
+              currentUser={null}
+              universities={universities}
+            />
+          )
         )}
 
         {activeView === 'layer0_master' && (
-          <Layer0MasterHostDashboard
-            currentUser={currentUser || {
-              id: 'usr-host',
-              email: 'seyidan03@gmail.com',
-              fullName: 'Seyi Dan',
-              phone: '09036872687',
-              role: 'master_host',
-              masterToken: 'KOHOT-ROOT-2025',
-            }}
-            universities={universities}
-            sets={sets}
-            transactions={transactions}
-            additionRequests={additionRequests}
-            foundingRequests={foundingRequests}
-            contentOverride={contentOverride}
-            onUpdateUniversities={handleUpdateUniversities}
-            onUpdateContentOverride={handleUpdateContentOverride}
-            onUpdateAdditionRequests={handleUpdateAdditionRequests}
-            onApproveFoundingRequest={handleApproveFoundingRequest}
-            onRejectFoundingRequest={handleRejectFoundingRequest}
-            onViewDepartmentAlbum={(id) => {
-              const selected = sets.find((s) => s.id === id);
-              if (selected) {
-                if (selected.institutionId) setSelectedUniversityId(selected.institutionId);
-                if (selected.departmentId) setSelectedDepartmentId(selected.departmentId);
-              }
-              setSelectedSetId(id);
-              setAlbumOriginView('layer0_master');
-              setActiveView('department_album');
-            }}
-            onEditDemoAlbum={(id) => {
-              setSelectedSetId(id);
-              setAlbumOriginView('layer0_master');
-              setActiveView('layer1_rep');
-            }}
-            onUpdateSingleSet={handleUpdateSingleSet}
-            onViewDepartmentLegacyWall={(deptId, uniId) => {
-              setSelectedDepartmentId(deptId);
-              if (uniId) setSelectedUniversityId(uniId);
-              setAlbumOriginView('layer0_master');
-              const targetSet = sets.find((s) => s.departmentId === deptId);
-              const deptName = targetSet?.departmentName || 'Computer Science';
-              setTransitionLabel(deptName.toLowerCase().startsWith('department of') ? deptName : `Department of ${deptName}`);
-              setTransitionInstitution(targetSet?.institutionName || 'University Of Ilorin');
-              setIsTransitioning(true);
-              setTimeout(() => {
-                setActiveView('albums_grid');
-              }, 3000);
-            }}
-            onSwitchRole={(role) => handleSelectRole(role)}
-          />
+          currentUser && currentUser.role === 'master_host' ? (
+            <Layer0MasterHostDashboard
+              currentUser={currentUser}
+              universities={universities}
+              sets={sets}
+              transactions={transactions}
+              additionRequests={additionRequests}
+              foundingRequests={foundingRequests}
+              contentOverride={contentOverride}
+              onUpdateUniversities={handleUpdateUniversities}
+              onUpdateContentOverride={handleUpdateContentOverride}
+              onUpdateAdditionRequests={handleUpdateAdditionRequests}
+              onApproveFoundingRequest={handleApproveFoundingRequest}
+              onRejectFoundingRequest={handleRejectFoundingRequest}
+              onViewDepartmentAlbum={(id) => {
+                const selected = sets.find((s) => s.id === id);
+                if (selected) {
+                  if (selected.institutionId) setSelectedUniversityId(selected.institutionId);
+                  if (selected.departmentId) setSelectedDepartmentId(selected.departmentId);
+                }
+                setSelectedSetId(id);
+                setAlbumOriginView('layer0_master');
+                setActiveView('department_album');
+              }}
+              onEditDemoAlbum={(id) => {
+                setSelectedSetId(id);
+                setAlbumOriginView('layer0_master');
+                setActiveView('layer1_rep');
+              }}
+              onUpdateSingleSet={handleUpdateSingleSet}
+              onViewDepartmentLegacyWall={(deptId, uniId) => {
+                setSelectedDepartmentId(deptId);
+                if (uniId) setSelectedUniversityId(uniId);
+                setAlbumOriginView('layer0_master');
+                const targetUni = universities.find((u) => u.id === uniId || u.departments?.some((d) => d.id === deptId));
+                const targetDept = targetUni?.departments?.find((d) => d.id === deptId);
+                const deptName = targetDept?.name || 'Academic Department';
+                setTransitionLabel(deptName.toLowerCase().startsWith('department of') ? deptName : `Department of ${deptName}`);
+                setTransitionInstitution(targetUni?.name || 'Academic Institution');
+                setIsTransitioning(true);
+                setTimeout(() => {
+                  setActiveView('albums_grid');
+                }, 1500);
+              }}
+              onSwitchRole={() => handleLogout()}
+            />
+          ) : (
+            <LandingPage
+              onSelectSet={(setId) => {
+                setSelectedSetId(setId);
+                setAlbumOriginView('landing');
+                setActiveView('department_album');
+              }}
+              onOpenOnboarding={() => setIsOnboardingOpen(true)}
+              onOpenLogin={() => setIsLoginOpen(true)}
+              onOpenDashboard={() => {}}
+              onLogout={handleLogout}
+              contentOverride={contentOverride}
+              currentUser={null}
+              universities={universities}
+            />
+          )
         )}
       </main>
 

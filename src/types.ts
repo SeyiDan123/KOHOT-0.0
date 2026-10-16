@@ -50,6 +50,7 @@ export interface StudentProfile {
   leaderOrder?: number; // Custom admin-assigned hierarchy order (1, 2, 3...)
   photoUrl: string; // High-fidelity WebP compressed portrait
   rawPhotoUrl?: string; // Original uncropped image preserved across edits
+  cropSettings?: CropSettings;
   originalSizeKb?: number;
   compressedSizeKb?: number;
   quote?: string;
@@ -340,6 +341,19 @@ export interface ClassSet {
   universityName?: string;
   departmentCode?: string;
   legacyFooterUrl?: string;
+  // Safe Deleting & Unpublishing
+  deletedAt?: string; // Soft delete timestamp (ISO string). Hidden everywhere, kept 30 days.
+  deletedBy?: string; // User email who soft deleted
+  isUnpublished?: boolean; // Whether the album has been unpublished
+  unpublishedAt?: string;
+  unpublishedBy?: string;
+  deletionRequest?: {
+    requestedAt: string;
+    requestedBy: string;
+    requestedByEmail: string;
+    reason: string;
+    status: 'pending' | 'approved' | 'rejected';
+  };
 }
 
 export interface PlaquePrivacySettings {
@@ -792,6 +806,14 @@ export interface EmailTemplate {
   availableVariables: string[];
 }
 
+export interface CropSettings {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zoom?: number;
+}
+
 export interface UserAccount {
   id: string;
   email: string;
@@ -801,6 +823,8 @@ export interface UserAccount {
   masterToken?: string; // For master_host
   phone?: string;
   avatarUrl?: string;
+  rawAvatarUrl?: string;
+  avatarCropSettings?: CropSettings;
 }
 
 export interface NextClassInviteContext {

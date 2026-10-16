@@ -163,7 +163,7 @@ export const DepartmentAnnualRemindersModal: React.FC<DepartmentAnnualRemindersM
     document.body.removeChild(link);
   };
 
-  const handleSimulateSetBlast = (set: ClassSet, count: number) => {
+  const handleTriggerSetBlast = (set: ClassSet, count: number) => {
     setIsSendingBlast(true);
     setTimeout(() => {
       setIsSendingBlast(false);
@@ -467,7 +467,7 @@ export const DepartmentAnnualRemindersModal: React.FC<DepartmentAnnualRemindersM
                               </button>
 
                               <button
-                                onClick={() => handleSimulateSetBlast(set, setSubscribedCount)}
+                                onClick={() => handleTriggerSetBlast(set, setSubscribedCount)}
                                 disabled={isSendingBlast}
                                 className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-mono-tech text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-md disabled:opacity-50"
                               >
@@ -568,7 +568,7 @@ export const DepartmentAnnualRemindersModal: React.FC<DepartmentAnnualRemindersM
                                       </td>
                                       <td className="py-2.5 px-3 text-right">
                                         <button
-                                          onClick={() => showToast(`Sent mock notification to ${g.fullName} (${g.email})`)}
+                                          onClick={() => showToast(`Sent test notification to ${g.fullName} (${g.email})`)}
                                           className="text-[11px] text-zinc-400 hover:text-emerald-400 hover:underline cursor-pointer"
                                         >
                                           Test Send

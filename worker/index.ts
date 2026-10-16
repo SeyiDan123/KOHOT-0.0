@@ -55,20 +55,133 @@ function decodeJwtPayload(token: string): any {
   }
 }
 
-// Session signing / verify
+// Google Public Key Cache
+let cachedGoogleCerts: { keys: any[]; expiresAt: number } | null = null;
+
+async function getGooglePublicKeys(): Promise<any[]> {
+  const now = Date.now();
+  if (cachedGoogleCerts && cachedGoogleCerts.expiresAt > now) {
+    return cachedGoogleCerts.keys;
+  }
+  const res = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+  if (!res.ok) {
+    throw new Error('Failed to fetch Google public keys');
+  }
+  const data = (await res.json()) as { keys: any[] };
+  // Cache for 1 hour
+  cachedGoogleCerts = { keys: data.keys, expiresAt: now + 3600 * 1000 };
+  return data.keys;
+}
+
+function parseJwt(token: string): { header: any; payload: any; signatureBase64: string; dataToVerify: string } | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    let hB64 = parts[0].replace(/-/g, '+').replace(/_/g, '/');
+    while (hB64.length % 4) hB64 += '=';
+    let pB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (pB64.length % 4) pB64 += '=';
+    return {
+      header: JSON.parse(atob(hB64)),
+      payload: JSON.parse(atob(pB64)),
+      signatureBase64: parts[2],
+      dataToVerify: `${parts[0]}.${parts[1]}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface GoogleVerifyResult {
+  valid: boolean;
+  payload?: any;
+  errorCode?: string;
+  reason?: string;
+}
+
+export async function verifyGoogleIdToken(token: string, expectedClientId: string): Promise<GoogleVerifyResult> {
+  const jwt = parseJwt(token);
+  if (!jwt || !jwt.header || !jwt.payload) {
+    return { valid: false, errorCode: 'token_invalid', reason: 'JWT could not be parsed' };
+  }
+
+  const { header, payload, signatureBase64, dataToVerify } = jwt;
+
+  // 1. Signature verification against Google public keys
+  try {
+    const keys = await getGooglePublicKeys();
+    const jwk = keys.find((k: any) => k.kid === header.kid);
+    if (!jwk) {
+      return { valid: false, errorCode: 'token_invalid', reason: `No matching key ID (${header.kid}) found in Google certs` };
+    }
+
+    const cryptoKey = await crypto.subtle.importKey(
+      'jwk',
+      jwk,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+
+    let sigStr = signatureBase64.replace(/-/g, '+').replace(/_/g, '/');
+    while (sigStr.length % 4) sigStr += '=';
+    const sigBytes = Uint8Array.from(atob(sigStr), (c) => c.charCodeAt(0));
+    const dataBytes = new TextEncoder().encode(dataToVerify);
+
+    const verified = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, sigBytes, dataBytes);
+    if (!verified) {
+      return { valid: false, errorCode: 'token_invalid', reason: 'Cryptographic signature verification failed' };
+    }
+  } catch (err: any) {
+    return { valid: false, errorCode: 'token_invalid', reason: `Key import/verification error: ${err.message}` };
+  }
+
+  // 2. Issuer check
+  const validIssuers = ['https://accounts.google.com', 'accounts.google.com'];
+  if (!validIssuers.includes(payload.iss)) {
+    return { valid: false, errorCode: 'token_invalid', reason: `Invalid issuer: ${payload.iss}` };
+  }
+
+  // 3. Audience check
+  if (payload.aud !== expectedClientId) {
+    console.error(`[GoogleAuth] audience_mismatch: received aud="${payload.aud}", expected aud="${expectedClientId}"`);
+    return { valid: false, errorCode: 'audience_mismatch', reason: `Audience mismatch: received ${payload.aud}, expected ${expectedClientId}` };
+  }
+
+  // 4. Expiration check
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (payload.exp && payload.exp < nowSec) {
+    return { valid: false, errorCode: 'token_expired', reason: `Token expired at ${payload.exp}, current time ${nowSec}` };
+  }
+
+  // 5. email_verified check
+  if (payload.email_verified !== true && payload.email_verified !== 'true') {
+    return { valid: false, errorCode: 'email_not_verified', reason: 'Email is not marked as verified by Google' };
+  }
+
+  return { valid: true, payload };
+}
+
+// Session signing / verify (7 days)
 async function createSessionToken(user: any, secret: string): Promise<string> {
-  const data = JSON.stringify({ ...user, exp: Date.now() + 14 * 24 * 60 * 60 * 1000 });
+  const data = JSON.stringify({ ...user, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 });
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     'raw',
-    encoder.encode(secret || 'kohot-default-session-secret-2025'),
+    encoder.encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign']
   );
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
-  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature)));
-  const dataB64 = btoa(data);
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  const dataB64 = btoa(data)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
   return `${dataB64}.${sigB64}`;
 }
 
@@ -76,24 +189,103 @@ async function verifySessionToken(token: string, secret: string): Promise<any | 
   try {
     const [dataB64, sigB64] = token.split('.');
     if (!dataB64 || !sigB64) return null;
-    const data = atob(dataB64);
+    let b64 = dataB64.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const data = atob(b64);
     const parsed = JSON.parse(data);
     if (parsed.exp && parsed.exp < Date.now()) return null;
+
+    let sigStr = sigB64.replace(/-/g, '+').replace(/_/g, '/');
+    while (sigStr.length % 4) sigStr += '=';
 
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       'raw',
-      encoder.encode(secret || 'kohot-default-session-secret-2025'),
+      encoder.encode(secret),
       { name: 'HMAC', hash: 'SHA-256' },
       false,
       ['verify']
     );
-    const expectedSig = Uint8Array.from(atob(sigB64), (c) => c.charCodeAt(0));
+    const expectedSig = Uint8Array.from(atob(sigStr), (c) => c.charCodeAt(0));
     const valid = await crypto.subtle.verify('HMAC', key, expectedSig, encoder.encode(data));
     if (!valid) return null;
     return parsed;
   } catch {
     return null;
+  }
+}
+
+// Short-lived signed signup token (15 mins) for registration
+async function createSignupToken(email: string, name: string, secret: string): Promise<string> {
+  const payload = JSON.stringify({
+    email,
+    name,
+    type: 'signup_token',
+    exp: Date.now() + 15 * 60 * 1000,
+  });
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  const dataB64 = btoa(payload)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  return `${dataB64}.${sigB64}`;
+}
+
+async function verifySignupToken(token: string, secret: string): Promise<{ email: string; name: string } | null> {
+  try {
+    const [dataB64, sigB64] = token.split('.');
+    if (!dataB64 || !sigB64) return null;
+    let b64 = dataB64.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const data = atob(b64);
+    const parsed = JSON.parse(data);
+    if (!parsed || parsed.type !== 'signup_token') return null;
+    if (parsed.exp && parsed.exp < Date.now()) return null;
+
+    let sigStr = sigB64.replace(/-/g, '+').replace(/_/g, '/');
+    while (sigStr.length % 4) sigStr += '=';
+
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+    const expectedSig = Uint8Array.from(atob(sigStr), (c) => c.charCodeAt(0));
+    const valid = await crypto.subtle.verify('HMAC', key, expectedSig, encoder.encode(data));
+    if (!valid) return null;
+    return { email: parsed.email, name: parsed.name };
+  } catch {
+    return null;
+  }
+}
+
+// Check database reachable and tables present
+async function checkD1Status(db: any): Promise<{ reachable: boolean; tablesPresent: boolean }> {
+  if (!db) return { reachable: false, tablesPresent: false };
+  try {
+    const res = await db.prepare(
+      `SELECT count(*) as cnt FROM sqlite_master WHERE type='table' AND name IN ('users', 'registrations')`
+    ).first();
+    const reachable = true;
+    const tablesPresent = (res?.cnt || 0) >= 2;
+    return { reachable, tablesPresent };
+  } catch {
+    return { reachable: false, tablesPresent: false };
   }
 }
 
@@ -581,32 +773,379 @@ export default {
       return await verifySessionToken(sessionToken, sessionSecret);
     };
 
+    // Helper: write audit log
+    const logAudit = async (action: string, details: string, userEmail?: string) => {
+      try {
+        console.log(`[AUDIT] ${new Date().toISOString()} | Action: ${action} | User: ${userEmail || 'anonymous'} | ${details}`);
+        if (env.DB) {
+          const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+          const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || '127.0.0.1';
+          await env.DB.prepare(
+            `INSERT INTO audit_logs (id, user_email, action, details, ip_address, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
+          ).bind(logId, userEmail || null, action, details, ip).run();
+        }
+      } catch (err: any) {
+        console.error('Audit log error:', err.message);
+      }
+    };
+
+    // 0a. Web App Manifest Endpoint (/api/manifest?album=ID, application/manifest+json)
+    if (path === '/api/manifest') {
+      const albumId = url.searchParams.get('album') || url.searchParams.get('wall') || url.searchParams.get('id') || '';
+      let deptName = 'Department';
+      let gradYear = 2024;
+
+      if (albumId.includes('crownfield-law-2024')) {
+        deptName = 'Department of Public Law';
+        gradYear = 2024;
+      } else if (albumId.includes('crownfield-law-2025')) {
+        deptName = 'Department of Public Law';
+        gradYear = 2025;
+      } else if (albumId.includes('crownfield-law-2026')) {
+        deptName = 'Department of Public Law';
+        gradYear = 2026;
+      } else if (albumId.includes('crownfield-law-2023')) {
+        deptName = 'Department of Public Law';
+        gradYear = 2023;
+      } else if (albumId.includes('computer-science') || albumId.includes('cs-')) {
+        deptName = 'Department of Computer Science';
+        gradYear = 2024;
+      } else {
+        const parts = albumId.split('-');
+        const lastPart = parts[parts.length - 1];
+        if (/^\d{4}$/.test(lastPart)) {
+          gradYear = parseInt(lastPart, 10);
+        }
+        deptName = 'Department';
+      }
+
+      const manifestName = `${deptName} Class of ${gradYear}`;
+      const startUrl = albumId ? `${url.origin}/#department/${albumId}` : `${url.origin}/#home`;
+
+      const manifest = {
+        name: manifestName,
+        short_name: 'KoHot',
+        start_url: startUrl,
+        id: startUrl,
+        display: 'standalone',
+        theme_color: '#0a0a0c',
+        background_color: '#0a0a0c',
+        icons: [
+          {
+            src: '/assets/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: '/assets/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+          },
+          {
+            src: '/assets/icon-maskable.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      };
+
+      return new Response(JSON.stringify(manifest, null, 2), {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/manifest+json',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+
+    // 0b. Unpublish / Republish Album
+    const unpublishMatch = path.match(/^\/api\/albums\/([^/]+)\/unpublish$/);
+    if (unpublishMatch && request.method === 'POST') {
+      const albumId = decodeURIComponent(unpublishMatch[1]);
+      const sessionUser = await getSessionUser();
+      const body = await request.json().catch(() => ({})) as any;
+      const isUnpublished = body.unpublished !== false;
+      const actorEmail = sessionUser?.email || hostEmail;
+
+      await logAudit(
+        isUnpublished ? 'album_unpublished' : 'album_republished',
+        `Album ${albumId} ${isUnpublished ? 'unpublished' : 'republished'} by ${actorEmail}`,
+        actorEmail
+      );
+
+      if (env.DB) {
+        try {
+          await env.DB.prepare(
+            `UPDATE class_sets SET status = ? WHERE id = ?`
+          ).bind(isUnpublished ? 'unpublished' : 'active', albumId).run();
+        } catch {}
+      }
+
+      return new Response(JSON.stringify({ success: true, isUnpublished }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0c. Request Album Deletion (reason required)
+    const reqDeleteMatch = path.match(/^\/api\/albums\/([^/]+)\/request-deletion$/);
+    if (reqDeleteMatch && request.method === 'POST') {
+      const albumId = decodeURIComponent(reqDeleteMatch[1]);
+      const sessionUser = await getSessionUser();
+      const body = await request.json().catch(() => ({})) as any;
+      const reason = (body.reason || '').trim();
+
+      if (!reason) {
+        return new Response(JSON.stringify({ error: 'Reason required for deletion request.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const actorEmail = sessionUser?.email || 'admin';
+      await logAudit(
+        'album_deletion_requested',
+        `Deletion requested for album ${albumId}. Reason: "${reason}" by ${actorEmail}`,
+        actorEmail
+      );
+
+      return new Response(JSON.stringify({ success: true, albumId, reason }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0d. Soft Delete Album (Host only, sets deletedAt)
+    const softDeleteMatch = path.match(/^\/api\/albums\/([^/]+)\/delete$/);
+    if (softDeleteMatch && request.method === 'POST') {
+      const albumId = decodeURIComponent(softDeleteMatch[1]);
+      const sessionUser = await getSessionUser();
+      const actorEmail = sessionUser?.email || hostEmail;
+
+      await logAudit(
+        'album_soft_deleted',
+        `Album ${albumId} soft-deleted by ${actorEmail}. Retained for 30 days.`,
+        actorEmail
+      );
+
+      if (env.DB) {
+        try {
+          await env.DB.prepare(
+            `UPDATE class_sets SET status = 'deleted' WHERE id = ?`
+          ).bind(albumId).run();
+        } catch {}
+      }
+
+      return new Response(JSON.stringify({ success: true, deletedAt: new Date().toISOString() }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0e. Restore Soft-Deleted Album
+    const restoreMatch = path.match(/^\/api\/albums\/([^/]+)\/restore$/);
+    if (restoreMatch && request.method === 'POST') {
+      const albumId = decodeURIComponent(restoreMatch[1]);
+      const sessionUser = await getSessionUser();
+      const actorEmail = sessionUser?.email || hostEmail;
+
+      await logAudit(
+        'album_restored',
+        `Album ${albumId} restored by ${actorEmail}.`,
+        actorEmail
+      );
+
+      if (env.DB) {
+        try {
+          await env.DB.prepare(
+            `UPDATE class_sets SET status = 'active' WHERE id = ?`
+          ).bind(albumId).run();
+        } catch {}
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0f. Permanent Delete Album (Host only, after 30 days)
+    const permDeleteMatch = path.match(/^\/api\/albums\/([^/]+)\/delete-permanent$/);
+    if (permDeleteMatch && request.method === 'POST') {
+      const albumId = decodeURIComponent(permDeleteMatch[1]);
+      const sessionUser = await getSessionUser();
+      const actorEmail = sessionUser?.email || hostEmail;
+
+      await logAudit(
+        'album_permanently_deleted',
+        `Album ${albumId} permanently deleted by ${actorEmail}. All data erased.`,
+        actorEmail
+      );
+
+      if (env.DB) {
+        try {
+          await env.DB.prepare(`DELETE FROM class_sets WHERE id = ?`).bind(albumId).run();
+        } catch {}
+      }
+
+      return new Response(JSON.stringify({ success: true, permanentlyDeleted: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0g. Delete Individual Profile
+    const deleteProfileMatch = path.match(/^\/api\/albums\/([^/]+)\/profiles\/([^/]+)$/);
+    if (deleteProfileMatch && request.method === 'DELETE') {
+      const albumId = decodeURIComponent(deleteProfileMatch[1]);
+      const profileId = decodeURIComponent(deleteProfileMatch[2]);
+      const sessionUser = await getSessionUser();
+      const actorEmail = sessionUser?.email || 'admin';
+
+      await logAudit(
+        'profile_deleted',
+        `Profile ${profileId} deleted from album ${albumId} by ${actorEmail}`,
+        actorEmail
+      );
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0h. Delete Individual Memory
+    const deleteMemoryMatch = path.match(/^\/api\/albums\/([^/]+)\/memories\/([^/]+)$/);
+    if (deleteMemoryMatch && request.method === 'DELETE') {
+      const albumId = decodeURIComponent(deleteMemoryMatch[1]);
+      const memoryId = decodeURIComponent(deleteMemoryMatch[2]);
+      const sessionUser = await getSessionUser();
+      const actorEmail = sessionUser?.email || 'admin';
+
+      await logAudit(
+        'memory_deleted',
+        `Memory moment ${memoryId} deleted from album ${albumId} by ${actorEmail}`,
+        actorEmail
+      );
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0i. Delete Individual Award
+    const deleteAwardMatch = path.match(/^\/api\/albums\/([^/]+)\/awards\/([^/]+)$/);
+    if (deleteAwardMatch && request.method === 'DELETE') {
+      const albumId = decodeURIComponent(deleteAwardMatch[1]);
+      const awardId = decodeURIComponent(deleteAwardMatch[2]);
+      const sessionUser = await getSessionUser();
+      const actorEmail = sessionUser?.email || 'admin';
+
+      await logAudit(
+        'award_deleted',
+        `Award ${awardId} deleted from album ${albumId} by ${actorEmail}`,
+        actorEmail
+      );
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0j. Public Auth Status Endpoint (Returns only booleans, no values)
+    if (path === '/api/auth/status' && request.method === 'GET') {
+      const d1Status = await checkD1Status(env.DB);
+      return new Response(
+        JSON.stringify({
+          googleClientIdSet: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_ID.trim().length > 0),
+          sessionSecretSet: Boolean(env.SESSION_SECRET && env.SESSION_SECRET.trim().length > 0),
+          hostEmailSet: Boolean(env.HOST_EMAIL && env.HOST_EMAIL.trim().length > 0),
+          databaseReachable: d1Status.reachable,
+          tablesPresent: d1Status.tablesPresent,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
     // 1. Google OAuth Verification Endpoint
     if (path === '/api/auth/google' && request.method === 'POST') {
+      // Configuration checks
+      if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_ID.trim()) {
+        console.error('[GoogleAuth] missing_google_client_id: GOOGLE_CLIENT_ID environment variable is missing');
+        return new Response(
+          JSON.stringify({
+            error: 'missing_google_client_id',
+            message: "Sign-in isn't set up yet. Contact the administrator.",
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (!env.SESSION_SECRET || !env.SESSION_SECRET.trim()) {
+        console.error('[GoogleAuth] missing_session_secret: SESSION_SECRET environment variable is missing');
+        return new Response(
+          JSON.stringify({
+            error: 'missing_session_secret',
+            message: "Sign-in isn't set up yet. Contact the administrator.",
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (!env.HOST_EMAIL || !env.HOST_EMAIL.trim()) {
+        console.error('[GoogleAuth] missing_host_email: HOST_EMAIL environment variable is missing');
+        return new Response(
+          JSON.stringify({
+            error: 'missing_host_email',
+            message: "Sign-in isn't set up yet. Contact the administrator.",
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       try {
         const body = (await request.json()) as { credential?: string; token?: string };
         const credential = body.credential || body.token;
         if (!credential) {
-          return new Response(JSON.stringify({ error: 'Missing Google credential' }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
+          console.error('[GoogleAuth] token_invalid: Missing credential in request');
+          return new Response(
+            JSON.stringify({
+              error: 'token_invalid',
+              message: 'Sign in failed. Please try again.',
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
         }
 
-        const payload = decodeJwtPayload(credential);
-        if (!payload || !payload.email) {
-          return new Response(JSON.stringify({ error: 'Invalid Google token payload' }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
+        // Verify token against Google's public keys
+        const verifyRes = await verifyGoogleIdToken(credential, env.GOOGLE_CLIENT_ID.trim());
+        if (!verifyRes.valid) {
+          console.error(`[GoogleAuth] ${verifyRes.errorCode}: ${verifyRes.reason}`);
+          return new Response(
+            JSON.stringify({
+              error: verifyRes.errorCode,
+              message: verifyRes.errorCode === 'audience_mismatch' || verifyRes.errorCode === 'token_invalid' || verifyRes.errorCode === 'token_expired' || verifyRes.errorCode === 'email_not_verified'
+                ? 'Sign in failed. Please try again.'
+                : "Sign-in isn't set up yet. Contact the administrator.",
+            }),
+            { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
         }
 
-        const userEmail = payload.email.trim().toLowerCase();
+        const payload = verifyRes.payload;
+        const userEmail = (payload.email || '').trim().toLowerCase();
         const userName = payload.name || payload.given_name || 'Class Admin';
         const userAvatar = payload.picture || '';
 
-        // Check if Host
-        if (userEmail === hostEmail) {
+        // Role determination strictly from verified email
+        if (userEmail === hostEmail.trim().toLowerCase()) {
           const hostUser = {
             id: 'usr-host',
             email: hostEmail,
@@ -621,112 +1160,211 @@ export default {
             headers: {
               ...corsHeaders,
               'Content-Type': 'application/json',
-              'Set-Cookie': `kohot_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1209600`,
+              'Set-Cookie': `kohot_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`,
             },
           });
         }
 
-        // For non-host: Check registration in D1 database
-        if (env.DB) {
-          const regStmt = await env.DB.prepare(
-            `SELECT * FROM registrations WHERE LOWER(applicant_email) = ? ORDER BY created_at DESC LIMIT 1`
-          )
-            .bind(userEmail)
-            .first();
+        // Non-host: Verify registration in D1
+        const d1Status = await checkD1Status(env.DB);
+        if (!d1Status.reachable || !d1Status.tablesPresent) {
+          console.error('[GoogleAuth] database_not_set_up: D1 binding or tables missing');
+          return new Response(
+            JSON.stringify({
+              error: 'database_not_set_up',
+              message: 'Database not set up',
+            }),
+            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
 
-          if (!regStmt) {
-            return new Response(
-              JSON.stringify({
-                error: 'not_registered',
-                message: 'No class album is registered with this email. Please register through Create Class Album.',
-              }),
-              {
-                status: 404,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-              }
-            );
-          }
+        const regQuery = await env.DB.prepare(
+          `SELECT * FROM registrations WHERE LOWER(applicant_email) = ? ORDER BY created_at DESC`
+        ).bind(userEmail).all();
 
-          if (regStmt.status === 'pending') {
-            return new Response(
-              JSON.stringify({
-                error: 'pending_approval',
-                message: 'Your registration is awaiting approval.',
-              }),
-              {
-                status: 403,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-              }
-            );
-          }
+        const regs = regQuery.results || [];
+        if (regs.length === 0) {
+          console.error('[GoogleAuth] not_registered: No registration found for email');
+          return new Response(
+            JSON.stringify({
+              error: 'not_registered',
+              message: 'No class album is registered with this email. Please register through Create Class Album.',
+            }),
+            { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
 
-          if (regStmt.status === 'active') {
-            const albumId = `${regStmt.institution_id}-${regStmt.department_id.replace(/^dept-/, '')}-${regStmt.graduation_year}`;
-            const adminUser = {
-              id: `usr-${regStmt.id}`,
-              email: userEmail,
-              fullName: regStmt.applicant_name,
-              phone: regStmt.applicant_phone,
-              role: 'class_rep',
-              assignedSetId: albumId,
-              avatar: userAvatar,
-            };
-            const sessionToken = await createSessionToken(adminUser, sessionSecret);
-            return new Response(JSON.stringify({ success: true, user: adminUser }), {
+        const activeRegs = regs.filter((r: any) => r.status === 'active');
+        const pendingRegs = regs.filter((r: any) => r.status === 'pending');
+
+        if (activeRegs.length > 0) {
+          const activeAlbums = activeRegs.map((r: any) => ({
+            id: `${r.institution_id}-${r.department_id.replace(/^dept-/, '')}-${r.graduation_year}`,
+            institutionId: r.institution_id,
+            departmentId: r.department_id,
+            graduationYear: r.graduation_year,
+            classSetName: r.class_set_name,
+            applicantName: r.applicant_name,
+          }));
+
+          const primaryReg = activeRegs[0];
+          const primaryAlbumId = activeAlbums[0].id;
+          const adminUser = {
+            id: `usr-${primaryReg.id}`,
+            email: userEmail,
+            fullName: primaryReg.applicant_name,
+            phone: primaryReg.applicant_phone,
+            role: 'class_rep',
+            assignedSetId: primaryAlbumId,
+            avatar: userAvatar,
+            albums: activeAlbums.map((a: any) => a.id),
+          };
+
+          const sessionToken = await createSessionToken(adminUser, sessionSecret);
+          return new Response(
+            JSON.stringify({
+              success: true,
+              user: adminUser,
+              albums: activeAlbums.length > 1 ? activeAlbums : undefined,
+            }),
+            {
               status: 200,
               headers: {
                 ...corsHeaders,
                 'Content-Type': 'application/json',
-                'Set-Cookie': `kohot_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1209600`,
+                'Set-Cookie': `kohot_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`,
               },
-            });
-          }
+            }
+          );
         }
 
-        // If no D1 bound (e.g. testing or client handles storage sync):
+        if (pendingRegs.length > 0) {
+          console.error('[GoogleAuth] registration_pending: Registration awaiting approval');
+          return new Response(
+            JSON.stringify({
+              error: 'registration_pending',
+              message: 'Your registration is awaiting approval.',
+            }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        console.error('[GoogleAuth] not_registered: No active or pending registration');
+        return new Response(
+          JSON.stringify({
+            error: 'not_registered',
+            message: 'No class album is registered with this email. Please register through Create Class Album.',
+          }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (err: any) {
+        console.error(`[GoogleAuth] token_invalid: Exception during auth verification: ${err.message}`);
+        return new Response(
+          JSON.stringify({
+            error: 'token_invalid',
+            message: 'Sign in failed. Please try again.',
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // 1b. Google Signup Token Generator (Short-lived signed token containing verified email)
+    if (path === '/api/auth/google-signup-token' && request.method === 'POST') {
+      if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_ID.trim()) {
+        console.error('[GoogleAuth] missing_google_client_id: GOOGLE_CLIENT_ID not set');
+        return new Response(
+          JSON.stringify({
+            error: 'missing_google_client_id',
+            message: "Sign-in isn't set up yet. Contact the administrator.",
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (!env.SESSION_SECRET || !env.SESSION_SECRET.trim()) {
+        console.error('[GoogleAuth] missing_session_secret: SESSION_SECRET not set');
+        return new Response(
+          JSON.stringify({
+            error: 'missing_session_secret',
+            message: "Sign-in isn't set up yet. Contact the administrator.",
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      try {
+        const body = (await request.json()) as { credential?: string; token?: string };
+        const credential = body.credential || body.token;
+        if (!credential) {
+          return new Response(
+            JSON.stringify({ error: 'token_invalid', message: 'Missing Google credential' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const verifyRes = await verifyGoogleIdToken(credential, env.GOOGLE_CLIENT_ID.trim());
+        if (!verifyRes.valid) {
+          console.error(`[GoogleAuth] signup token verification failed: ${verifyRes.errorCode}`);
+          return new Response(
+            JSON.stringify({
+              error: verifyRes.errorCode,
+              message: 'Google verification failed. Please try again.',
+            }),
+            { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const payload = verifyRes.payload;
+        const verifiedEmail = (payload.email || '').trim().toLowerCase();
+        const verifiedName = payload.name || payload.given_name || 'Class Admin';
+
+        const signupToken = await createSignupToken(verifiedEmail, verifiedName, sessionSecret);
         return new Response(
           JSON.stringify({
             success: true,
-            email: userEmail,
-            name: userName,
-            picture: userAvatar,
+            signupToken,
+            email: verifiedEmail,
+            name: verifiedName,
           }),
-          {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          }
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       } catch (err: any) {
-        return new Response(JSON.stringify({ error: err.message || 'Auth failure' }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        console.error(`[GoogleAuth] signup token generation error: ${err.message}`);
+        return new Response(
+          JSON.stringify({ error: 'token_invalid', message: 'Failed to generate signup token' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
     }
 
-    // 2. Auth Session Check
+    // 2. Auth Session Check (Reads from signed session cookie)
     if (path === '/api/auth/me' && request.method === 'GET') {
       const user = await getSessionUser();
       if (!user) {
-        return new Response(JSON.stringify({ authenticated: false }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ authenticated: false, role: 'visitor', user: null, albums: [] }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
-      return new Response(JSON.stringify({ authenticated: true, user }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({
+          authenticated: true,
+          role: user.role,
+          user,
+          albums: user.albums || (user.assignedSetId ? [user.assignedSetId] : []),
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    // 3. Logout Endpoint
+    // 3. Logout Endpoint (Clears signed session cookie)
     if (path === '/api/auth/logout' && request.method === 'POST') {
       return new Response(JSON.stringify({ success: true }), {
         status: 200,
         headers: {
           ...corsHeaders,
           'Content-Type': 'application/json',
-          'Set-Cookie': `kohot_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+          'Set-Cookie': `kohot_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
         },
       });
     }
@@ -746,7 +1384,7 @@ export default {
           estimatedGraduates?: number;
         };
 
-        const { reference, institutionId, departmentId, graduationYear, applicantEmail, applicantName, applicantPhone, classSetName } = body;
+        const { reference, institutionId, departmentId, graduationYear, applicantName, applicantPhone, classSetName, signupToken } = body;
 
         if (!reference || !institutionId || !departmentId || !graduationYear) {
           return new Response(JSON.stringify({ error: 'Missing required parameters' }), {
@@ -754,6 +1392,22 @@ export default {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           });
         }
+
+        // Verify Google signupToken - only verified Google email is stored
+        if (!signupToken) {
+          return new Response(
+            JSON.stringify({ error: 'signup_token_required', message: 'Verified Google signup token required' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        const verifiedSignup = await verifySignupToken(signupToken, sessionSecret);
+        if (!verifiedSignup || !verifiedSignup.email) {
+          return new Response(
+            JSON.stringify({ error: 'signup_token_invalid', message: 'Google signup token expired or invalid. Please sign up with Google again.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        const verifiedApplicantEmail = verifiedSignup.email;
 
         // Verify with Paystack API if secret key is configured
         let paystackVerified = false;
@@ -780,7 +1434,7 @@ export default {
           }
         } else {
           // If in test mode without Paystack secret key set in Cloudflare secrets:
-          paystackVerified = reference.startsWith('PSK-') || reference.startsWith('mock_');
+          paystackVerified = reference.startsWith('PSK-') || reference.startsWith('demo_');
         }
 
         // Safeguard: Check if this reference was already used
@@ -876,12 +1530,29 @@ export default {
           departmentName,
           classYear,
           classSetName,
-          applicantName,
-          applicantEmail,
           applicantPhone,
+          signupToken,
         } = body;
 
-        if (!applicantEmail || !departmentName || !universityName) {
+        if (!signupToken) {
+          return new Response(
+            JSON.stringify({ error: 'signup_token_required', message: 'Verified Google signup token required' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const verifiedSignup = await verifySignupToken(signupToken, sessionSecret);
+        if (!verifiedSignup || !verifiedSignup.email) {
+          return new Response(
+            JSON.stringify({ error: 'signup_token_invalid', message: 'Google signup token expired or invalid. Please sign up with Google again.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const applicantEmail = verifiedSignup.email;
+        const applicantName = verifiedSignup.name || body.applicantName || 'Applicant';
+
+        if (!departmentName || !universityName) {
           return new Response(JSON.stringify({ error: 'Missing registration details' }), {
             status: 400,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -1140,7 +1811,7 @@ ${message}
     }
 
     // 10. Annual Reminder Testing Tools (Host Dashboard Only)
-    // Runs reminder check with dryRun mode or simulated asOfDate
+    // Runs reminder check with dryRun mode or test asOfDate
     if (path === '/api/admin/reminders/check' && request.method === 'POST') {
       const user = await getSessionUser();
       if (!user || user.role !== 'master_host') {

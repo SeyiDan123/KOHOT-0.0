@@ -32,7 +32,7 @@ import {
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 import { AlbumAdminHelpModal } from '../admin/AlbumAdminHelpModal';
 import { PaystackModal } from '../common/PaystackModal';
-import { verifyPaystackPaymentOnServer, STANDARD_PRICE, HOST_EMAIL } from '../../utils/apiClient';
+import { verifyPaystackPaymentOnServer, STANDARD_PRICE, HOST_EMAIL, requestGoogleSignupToken } from '../../utils/apiClient';
 
 interface OnboardingModalProps {
   isOpen: boolean;
@@ -89,7 +89,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [adminEmail, setAdminEmail] = useState<string>('');
   const [adminPhone, setAdminPhone] = useState<string>('');
   const [isGoogleVerified, setIsGoogleVerified] = useState<boolean>(false);
+  const [signupToken, setSignupToken] = useState<string>('');
+  const [isVerifyingGoogle, setIsVerifyingGoogle] = useState<boolean>(false);
   const [activeUser, setActiveUser] = useState<UserAccount | null>(null);
+  const googleSignupBtnContainerRef = useRef<HTMLDivElement>(null);
 
   // Determine if this is a Subsequent Class Relay Handover path
   const isRelayMode = Boolean(inviteContext && inviteContext.inviteCode);
@@ -367,7 +370,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       requestedDepartment: reqDeptName.trim(),
       facultyName: reqFacultyName.trim() || 'General Faculty',
       requesterName: adminFullName.trim() || 'Prospective Class Rep',
-      requesterEmail: adminEmail.trim() || 'applicant@gmail.com',
+      requesterEmail: adminEmail.trim(),
       requesterPhone: adminPhone.trim() || '09030000000',
       status: 'Pending',
       timestamp: new Date().toISOString(),
@@ -378,18 +381,62 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     setTimeout(() => setAdditionSentToast(false), 4000);
   };
 
-  // Google Sign-In Simulation / Direct Auth at Step 1
-  const handleVerifyGoogle = (email: string, name?: string) => {
-    const trimmed = email.trim().toLowerCase();
-    if (!trimmed || !trimmed.includes('@')) {
-      setValidationError('Please enter a valid Google email address.');
-      return;
-    }
-    setAdminEmail(trimmed);
-    setAdminFullName(name || adminFullName || trimmed.split('@')[0].replace(/[._]/g, ' ').toUpperCase());
-    setIsGoogleVerified(true);
-    setValidationError(null);
-  };
+  // Real Google Identity Services (GSI) Button Integration at Step 1
+  useEffect(() => {
+    if (!isOpen || currentStep !== 1 || isGoogleVerified) return;
+
+    const googleClientId =
+      (typeof process !== 'undefined' && process.env?.GOOGLE_CLIENT_ID) ||
+      (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
+      '';
+
+    let timer: any;
+    const setupGoogleBtn = () => {
+      if (typeof window !== 'undefined' && (window as any).google?.accounts?.id && googleSignupBtnContainerRef.current) {
+        try {
+          (window as any).google.accounts.id.initialize({
+            client_id: googleClientId,
+            callback: async (response: any) => {
+              if (response?.credential) {
+                setIsVerifyingGoogle(true);
+                setValidationError(null);
+                const res = await requestGoogleSignupToken(response.credential);
+                setIsVerifyingGoogle(false);
+                if (res.success && res.signupToken && res.email) {
+                  setSignupToken(res.signupToken);
+                  setAdminEmail(res.email);
+                  if (res.name) {
+                    setAdminFullName(res.name);
+                  }
+                  setIsGoogleVerified(true);
+                } else {
+                  console.error('[GoogleSignup error]', res.error, res.message);
+                  setValidationError(res.message || 'Google verification failed. Please try again.');
+                }
+              }
+            },
+          });
+          googleSignupBtnContainerRef.current.innerHTML = '';
+          (window as any).google.accounts.id.renderButton(googleSignupBtnContainerRef.current, {
+            theme: 'outline',
+            size: 'large',
+            type: 'standard',
+            shape: 'pill',
+            text: 'signup_with',
+            width: 280,
+          });
+        } catch (e) {
+          console.error('[GoogleSignup button render error]', e);
+        }
+      } else {
+        timer = setTimeout(setupGoogleBtn, 300);
+      }
+    };
+    setupGoogleBtn();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [isOpen, currentStep, isGoogleVerified]);
 
   // Step Navigations
   const goToNextStep = () => {
@@ -549,6 +596,23 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       submissionDate: nowIso.split('T')[0],
     };
 
+    // Forward to server endpoint with verified signupToken
+    fetch('/api/registrations/founding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        universityId: currentUni.id,
+        universityName: currentUni.name,
+        departmentId: selectedDepartmentId,
+        departmentName: selectedDepartmentName,
+        classYear: Number(graduationYear),
+        classSetName: effectiveSetName,
+        applicantName: effectiveAdmin.fullName,
+        applicantPhone: (repPhone || adminPhone).trim(),
+        signupToken,
+      }),
+    }).catch(() => {});
+
     setTimeout(() => {
       onSubmitFoundingRequest(foundingReq);
       setIsSubmitting(false);
@@ -574,6 +638,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         applicantPhone: (repPhone || adminPhone).trim(),
         classSetName: classSetName.trim() || `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`,
         estimatedGraduates: Number(estimatedGraduates) || 100,
+        signupToken,
       });
 
       if (!verifyRes.success) {
@@ -890,45 +955,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </p>
                       </div>
                     ) : (
-                      <div className="space-y-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const sampleEmail = 'admin.classrep@gmail.com';
-                            handleVerifyGoogle(sampleEmail, 'Class Representative');
-                          }}
-                          className="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-2xl bg-white hover:bg-slate-50 dark:bg-[#1a1b22] dark:hover:bg-[#22232c] border border-slate-300 dark:border-white/20 text-slate-900 dark:text-white font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-xs active:scale-[0.99]"
-                        >
-                          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                            <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-                            <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
-                            <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
-                            <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
-                          </svg>
-                          <span>Sign in with Google</span>
-                        </button>
-
-                        <div className="pt-2 text-center">
-                          <span className="text-[10px] font-mono-tech text-slate-400 dark:text-zinc-500 uppercase">
-                            or enter your Google email
-                          </span>
-                          <div className="flex gap-2 mt-1.5">
-                            <input
-                              type="email"
-                              value={adminEmail}
-                              onChange={(e) => setAdminEmail(e.target.value)}
-                              placeholder="e.g. rep.name@gmail.com"
-                              className="flex-1 px-3.5 py-2 rounded-xl bg-white dark:bg-white/5 border border-slate-300 dark:border-white/10 text-xs font-mono-tech text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-[#d4af37]"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleVerifyGoogle(adminEmail)}
-                              className="px-4 py-2 rounded-xl bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer"
-                            >
-                              Verify
-                            </button>
+                      <div className="space-y-3 py-2 flex flex-col items-center">
+                        {isVerifyingGoogle && (
+                          <div className="flex items-center gap-2 text-xs font-mono-tech text-amber-500 animate-pulse">
+                            <Clock className="w-3.5 h-3.5 animate-spin" />
+                            <span>Verifying Google Account...</span>
                           </div>
-                        </div>
+                        )}
+                        <div ref={googleSignupBtnContainerRef} id="official-google-signup-btn-container" className="flex justify-center" />
                       </div>
                     )}
 
@@ -1377,7 +1411,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         type="email"
                         value={backupEmail}
                         onChange={(e) => setBackupEmail(e.target.value)}
-                        placeholder="backup@gmail.com"
+                        placeholder="backup@department.edu"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none focus:border-[#d4af37]"
                       />
                     </div>

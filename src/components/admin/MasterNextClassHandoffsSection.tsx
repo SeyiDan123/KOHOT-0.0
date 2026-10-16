@@ -396,8 +396,8 @@ export const MasterNextClassHandoffsSection: React.FC<MasterNextClassHandoffsSec
             <tbody className="divide-y divide-white/5 font-mono-tech">
               {filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-zinc-500 font-body">
-                    No department cohorts found matching criteria.
+                  <td colSpan={6} className="p-8 text-center text-zinc-500 font-mono-tech text-xs">
+                    No live department cohorts registered yet. Demo albums are strictly managed in the dedicated Album Demos section.
                   </td>
                 </tr>
               ) : (

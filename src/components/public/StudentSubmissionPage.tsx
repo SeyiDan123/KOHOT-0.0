@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ClassSet, StudentProfile } from '../../types';
+import { ClassSet, StudentProfile, CropSettings } from '../../types';
 import { compressImageToWebP, CompressionResult, fileToUniversalDataUrl } from '../../utils/imageCompressor';
 import { 
   Upload, 
@@ -15,7 +15,9 @@ import {
   Crop,
   Instagram,
   Linkedin,
-  Facebook
+  Facebook,
+  Calendar,
+  ExternalLink
 } from 'lucide-react';
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import { updateSocialMetaTags } from '../../utils/metaTags';
@@ -23,6 +25,8 @@ import { SocialIconsRow } from '../common/SocialIconsRow';
 import { ImageCropModal } from '../common/ImageCropModal';
 import { isValidEmail } from '../../utils/emailValidator';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
+import { generateGoogleCalendarUrl, downloadIcsCalendarFile } from '../../utils/calendarHelper';
+import { getAlbumUrl } from '../../utils/urlHelper';
 
 interface StudentSubmissionPageProps {
   currentSet: ClassSet;
@@ -56,9 +60,12 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   const [compressionInfo, setCompressionInfo] = useState<CompressionResult | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [showRemindOptions, setShowRemindOptions] = useState(false);
   const [submittedStudent, setSubmittedStudent] = useState<StudentProfile | null>(null);
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [rawPhotoToCrop, setRawPhotoToCrop] = useState('');
+  const [rawPhotoUrl, setRawPhotoUrl] = useState('');
+  const [cropSettings, setCropSettings] = useState<CropSettings | undefined>(undefined);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -75,17 +82,25 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
 
   const processSelectedFile = async (file: File) => {
     try {
-      const dataUrl = await fileToUniversalDataUrl(file);
-      if (dataUrl) {
-        setRawPhotoToCrop(dataUrl);
-        setIsCropModalOpen(true);
-      }
+      // Keep original image resized to compression limit (no larger)
+      const result = await compressImageToWebP(file, 1200, 0.90);
+      setRawPhotoUrl(result.dataUrl);
+      setRawPhotoToCrop(result.dataUrl);
+      setCropSettings(undefined);
+      setIsCropModalOpen(true);
     } catch (err) {
       console.error('Error reading gallery file:', err);
+      const fallbackUrl = await fileToUniversalDataUrl(file);
+      if (fallbackUrl) {
+        setRawPhotoUrl(fallbackUrl);
+        setRawPhotoToCrop(fallbackUrl);
+        setCropSettings(undefined);
+        setIsCropModalOpen(true);
+      }
     }
   };
 
-  const handleApplyCrop = async (croppedDataUrl: string) => {
+  const handleApplyCrop = async (croppedDataUrl: string, newSettings?: CropSettings) => {
     setIsCompressing(true);
     try {
       const fetchRes = await fetch(croppedDataUrl);
@@ -95,11 +110,14 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       const result = await compressImageToWebP(file, 800, 0.88);
       setCompressionInfo(result);
       setPhotoDataUrl(result.dataUrl);
+      if (newSettings) setCropSettings(newSettings);
     } catch (err) {
       console.error('Compression error:', err);
       setPhotoDataUrl(croppedDataUrl);
+      if (newSettings) setCropSettings(newSettings);
     } finally {
       setIsCompressing(false);
+      setIsCropModalOpen(false);
     }
   };
 
@@ -162,6 +180,8 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       nickname: nickname.trim() || undefined,
       position: trimmedPos || 'Member',
       photoUrl: photoDataUrl,
+      rawPhotoUrl: rawPhotoUrl || rawPhotoToCrop || photoDataUrl,
+      cropSettings: cropSettings,
       originalSizeKb: compressionInfo?.originalSizeKb,
       compressedSizeKb: compressionInfo?.compressedSizeKb,
       quote: quote.trim() || undefined,
@@ -332,7 +352,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
               </p>
             </div>
 
-            <div className="pt-2">
+            <div className="pt-2 flex flex-col items-center gap-3 w-full max-w-xs mx-auto">
               <button
                 type="button"
                 onClick={() => {
@@ -342,10 +362,59 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                     onViewAlbum();
                   }
                 }}
-                className="inline-flex items-center gap-2 text-xs font-mono-tech uppercase tracking-widest text-white bg-slate-900 hover:bg-black dark:bg-white dark:hover:bg-slate-100 dark:text-slate-900 py-3.5 px-8 rounded-full transition-all cursor-pointer shadow-md active:scale-95 font-bold"
+                className="w-full inline-flex items-center justify-center gap-2 text-xs font-mono-tech uppercase tracking-widest text-white bg-slate-900 hover:bg-black dark:bg-white dark:hover:bg-slate-100 dark:text-slate-900 py-3.5 px-6 rounded-full transition-all cursor-pointer shadow-md active:scale-95 font-bold"
               >
                 <span>View Class Album &rarr;</span>
               </button>
+
+              {/* Remind me yearly button */}
+              <button
+                type="button"
+                onClick={() => setShowRemindOptions(!showRemindOptions)}
+                className="w-full inline-flex items-center justify-center gap-2 text-xs font-mono-tech uppercase tracking-wider text-amber-950 bg-amber-400 hover:bg-amber-300 py-3 px-6 rounded-full transition-all cursor-pointer shadow-sm active:scale-95 font-bold"
+              >
+                <Calendar className="w-4 h-4 text-amber-950" />
+                <span>Remind Me Yearly</span>
+              </button>
+
+              {showRemindOptions && (
+                <div className="w-full p-3 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 space-y-2 text-left animate-fadeIn shadow-lg">
+                  <div className="text-[10px] font-mono-tech text-slate-500 uppercase tracking-wider px-1">
+                    Add yearly relive reminder:
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = generateGoogleCalendarUrl({
+                        departmentName: currentSet.departmentName,
+                        graduationYear: currentSet.graduationYear,
+                        convocationDate: currentSet.convocationDate || currentSet.reminderSettings?.convocationDate,
+                        albumUrl: getAlbumUrl(currentSet.id),
+                      });
+                      window.open(url, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-xs font-mono-tech flex items-center justify-between text-slate-800 dark:text-slate-200 cursor-pointer transition-colors"
+                  >
+                    <span>Google Calendar</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadIcsCalendarFile({
+                        departmentName: currentSet.departmentName,
+                        graduationYear: currentSet.graduationYear,
+                        convocationDate: currentSet.convocationDate || currentSet.reminderSettings?.convocationDate,
+                        albumUrl: getAlbumUrl(currentSet.id),
+                      });
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-xs font-mono-tech flex items-center justify-between text-slate-800 dark:text-slate-200 cursor-pointer transition-colors"
+                  >
+                    <span>Apple / other (.ics)</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase">Download</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             <p className="text-xs font-mono-tech text-slate-400 tracking-wider">
@@ -414,7 +483,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setRawPhotoToCrop(photoDataUrl);
+                                  setRawPhotoToCrop(rawPhotoUrl || photoDataUrl);
                                   setIsCropModalOpen(true);
                                 }}
                                 className="px-2.5 py-1 rounded-full bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-800 dark:text-slate-200 font-mono-tech text-[10px] flex items-center gap-1 cursor-pointer transition-colors border border-slate-300 dark:border-neutral-700"
@@ -654,7 +723,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                   </p>
                 </div>
 
-                {/* Simulated Card matching DepartmentAlbumView 4:5 grid format */}
+                {/* Preview Card matching DepartmentAlbumView 4:5 grid format */}
                 <div className="rounded-3xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 overflow-hidden shadow-xl text-slate-900 dark:text-white">
                   {/* Photo with exact 1:1 aspect ratio */}
                   <div className="relative w-full aspect-square bg-slate-100 dark:bg-neutral-950 overflow-hidden">
@@ -763,6 +832,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
         <ImageCropModal
           isOpen={isCropModalOpen}
           imageSrc={rawPhotoToCrop}
+          initialCropSettings={cropSettings}
           onClose={() => setIsCropModalOpen(false)}
           onApplyCrop={handleApplyCrop}
           initialAspectRatio="1:1"

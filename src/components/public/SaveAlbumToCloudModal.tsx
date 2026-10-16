@@ -607,45 +607,6 @@ export const SaveAlbumToCloudModal: React.FC<SaveAlbumToCloudModalProps> = ({
                   <span>Save to Dropbox</span>
                 </button>
               </div>
-
-              {/* Apple iCloud */}
-              <div className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-2.5 shadow-xs ${
-                effectiveIsLight
-                  ? 'bg-white border-zinc-300 hover:border-zinc-400'
-                  : 'bg-[#202024] border-zinc-800 hover:border-zinc-700'
-              }`}>
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
-                    effectiveIsLight
-                      ? 'bg-zinc-100 text-zinc-800 border-zinc-300'
-                      : 'bg-zinc-800 text-zinc-300 border-zinc-700'
-                  }`}>
-                    <Cloud className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h4 className={`font-syne font-bold text-xs ${
-                      effectiveIsLight ? 'text-black' : 'text-white'
-                    }`}>iCloud Drive</h4>
-                    <p className="text-[10px] font-mono-tech text-zinc-500">
-                      Apple files &amp; iOS devices
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleSaveToICloud}
-                  className={`w-full py-2 px-3 rounded-xl font-mono-tech text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer border ${
-                    effectiveIsLight
-                      ? 'bg-zinc-100 hover:bg-zinc-200 text-black border-zinc-300'
-                      : 'bg-zinc-800 hover:bg-zinc-700 text-white border-zinc-700'
-                  }`}
-                >
-                  <FolderDown className="w-3.5 h-3.5 text-[#d4af37]" />
-                  <span>Save to iCloud</span>
-                </button>
-              </div>
-
             </div>
           </div>
 

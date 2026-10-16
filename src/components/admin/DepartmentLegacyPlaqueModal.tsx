@@ -476,7 +476,7 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
         {/* Scrollable Modal Content */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
 
-          {/* 10" x 12" Portrait Acrylic Plaque Visual Mockup (aspect-[10/12]) */}
+          {/* 10" x 12" Portrait Acrylic Plaque Visual Preview (aspect-[10/12]) */}
           <div className="flex justify-center">
             <div 
               ref={plaqueRef}

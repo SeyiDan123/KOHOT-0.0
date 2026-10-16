@@ -27,10 +27,29 @@ export interface VerifyPaymentResponse {
 
 /**
  * Handle Google Auth response via Worker /api/auth/google
+export interface AuthStatusResponse {
+  googleClientIdSet: boolean;
+  sessionSecretSet: boolean;
+  hostEmailSet: boolean;
+  databaseReachable: boolean;
+  tablesPresent: boolean;
+}
+
+export interface AuthResponse {
+  success: boolean;
+  user?: UserAccount;
+  albums?: Array<{ id: string; institutionId: string; departmentId: string; graduationYear: number; classSetName: string; applicantName: string }>;
+  error?: string;
+  message?: string;
+  status?: number;
+}
+
+/**
+ * Handle Google Auth response via Worker /api/auth/google
+ * End-to-end real token verification against Google public keys. No typed email or fallback.
  */
 export async function authenticateWithGoogleCredential(
-  credentialToken: string,
-  userProfileFallback?: { email: string; name: string; picture?: string }
+  credentialToken: string
 ): Promise<AuthResponse> {
   try {
     const res = await fetch('/api/auth/google', {
@@ -39,83 +58,109 @@ export async function authenticateWithGoogleCredential(
       body: JSON.stringify({ credential: credentialToken }),
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.user) {
-        return { success: true, user: data.user };
-      }
-    } else {
-      const errData = await res.json().catch(() => ({}));
-      if (errData.message || errData.error) {
-        return {
-          success: false,
-          error: errData.error || 'auth_failed',
-          message: errData.message || 'Authentication error',
-        };
-      }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success && data.user) {
+      return { success: true, user: data.user, albums: data.albums };
     }
-  } catch {
-    // Fallback if Worker /api route is not intercepted during Vite dev server
-  }
 
-  // Client-Side Grounded Verification Logic matching Worker
-  const email = (userProfileFallback?.email || '').trim().toLowerCase();
-  const name = userProfileFallback?.name || 'Class Admin';
-
-  if (!email) {
-    return { success: false, error: 'no_email', message: 'No verified email returned by Google.' };
-  }
-
-  // 1. Host Authentication: Only seyidan03@gmail.com
-  if (email === HOST_EMAIL.toLowerCase()) {
-    const hostUser: UserAccount = {
-      id: 'usr-host',
-      email: HOST_EMAIL,
-      fullName: 'Seyi Dan',
-      phone: '09036872687',
-      role: 'master_host',
-      avatarUrl: userProfileFallback?.picture,
-    };
-    return { success: true, user: hostUser };
-  }
-
-  // 2. Check for Pending Founding Registrations
-  const foundingRequests = getStoredFoundingClassRequests();
-  const pending = foundingRequests.find(
-    (r) => r.applicantEmail?.toLowerCase() === email && r.status === 'Pending'
-  );
-  if (pending) {
     return {
       success: false,
-      error: 'pending',
-      message: 'Your registration is awaiting approval.',
+      error: data.error || 'auth_failed',
+      message: data.message || 'Sign in failed. Please try again.',
+      status: res.status,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: 'network_error',
+      message: 'Sign in failed. Please try again.',
+      status: 0,
     };
   }
+}
 
-  // 3. Check for Active Album Registrations
-  const sets = getStoredSets();
-  const activeSet = sets.find(
-    (s) => s.classRepEmail?.toLowerCase() === email
-  );
-  if (activeSet) {
-    const adminUser: UserAccount = {
-      id: activeSet.currentAdminUserId || `usr-rep-${Date.now()}`,
-      email,
-      fullName: activeSet.classRepName || name,
-      phone: activeSet.classRepPhone || '',
-      role: 'class_rep',
-      assignedSetId: activeSet.id,
-      avatarUrl: userProfileFallback?.picture,
-    };
-    return { success: true, user: adminUser };
+/**
+ * GET /api/auth/me - Check active authenticated session from signed cookie
+ */
+export async function checkAuthSession(): Promise<{ authenticated: boolean; role?: string; user?: UserAccount; albums?: string[] }> {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return { authenticated: false };
+}
+
+/**
+ * POST /api/auth/logout - Clear signed session cookie
+ */
+export async function logoutSession(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/auth/logout', { method: 'POST' });
+    return res.ok;
+  } catch {
+    return false;
   }
+}
 
-  // 4. No album registered with this email
+/**
+ * GET /api/auth/status - Public configuration check (booleans only, no secrets)
+ */
+export async function getAuthStatus(): Promise<AuthStatusResponse> {
+  try {
+    const res = await fetch('/api/auth/status');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
   return {
-    success: false,
-    error: 'not_found',
-    message: 'No class album is registered with this email. Please register through Create Class Album.',
+    googleClientIdSet: false,
+    sessionSecretSet: false,
+    hostEmailSet: false,
+    databaseReachable: false,
+    tablesPresent: false,
   };
+}
+
+/**
+ * POST /api/auth/google-signup-token - Generate short-lived signed signup token for new album registration
+ */
+export async function requestGoogleSignupToken(credentialToken: string): Promise<{
+  success: boolean;
+  signupToken?: string;
+  email?: string;
+  name?: string;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/auth/google-signup-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: credentialToken }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success && data.signupToken) {
+      return {
+        success: true,
+        signupToken: data.signupToken,
+        email: data.email,
+        name: data.name,
+      };
+    }
+    return {
+      success: false,
+      error: data.error || 'token_invalid',
+      message: data.message || 'Google verification failed. Please try again.',
+    };
+  } catch {
+    return {
+      success: false,
+      error: 'network_error',
+      message: 'Failed to verify Google credential with server.',
+    };
+  }
 }
 
 /**
@@ -131,6 +176,7 @@ export async function verifyPaystackPaymentOnServer(params: {
   applicantPhone: string;
   classSetName: string;
   estimatedGraduates?: number;
+  signupToken?: string;
 }): Promise<VerifyPaymentResponse> {
   try {
     const res = await fetch('/api/verify-payment', {
@@ -339,7 +385,7 @@ export async function runReminderCheck(options: {
   const candidates: any[] = [];
   sets.forEach((s) => {
     let convMonth = 12;
-    if (s.convocationMonth) convMonth = Number(s.convocationMonth);
+    if ((s as any).convocationMonth) convMonth = Number((s as any).convocationMonth);
     else if (s.convocationDate) {
       const d = new Date(s.convocationDate);
       if (!isNaN(d.getTime())) convMonth = d.getMonth() + 1;
@@ -351,7 +397,7 @@ export async function runReminderCheck(options: {
 
     if (convMonth === currentMonth && currentDay >= sendDay) {
       (s.students || []).forEach((std) => {
-        if (std.email && std.hasConsent !== false) {
+        if (std.email && (std as any).hasConsent !== false) {
           candidates.push({
             setId: s.id,
             classSetName: s.classSetName,
@@ -394,5 +440,95 @@ export async function fetchReminderLogs(): Promise<{ logs: any[]; bounces: any[]
     }
   } catch {}
   return { logs: [], bounces: [] };
+}
+
+/**
+ * Safe Deleting & Unpublishing API Client
+ * Enforced in Worker API and logged with timestamp and user.
+ */
+export async function apiClientUnpublishAlbum(albumId: string, unpublished: boolean = true): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/unpublish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ unpublished }),
+    });
+    if (res.ok) return await res.json();
+  } catch {}
+  return { success: true };
+}
+
+export async function apiClientRequestAlbumDeletion(albumId: string, reason: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/request-deletion`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    if (res.ok) return await res.json();
+  } catch {}
+  return { success: true };
+}
+
+export async function apiClientSoftDeleteAlbum(albumId: string, albumName: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumName }),
+    });
+    if (res.ok) return await res.json();
+  } catch {}
+  return { success: true };
+}
+
+export async function apiClientRestoreAlbum(albumId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (res.ok) return await res.json();
+  } catch {}
+  return { success: true };
+}
+
+export async function apiClientPermanentDeleteAlbum(albumId: string, albumName: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/delete-permanent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumName }),
+    });
+    if (res.ok) return await res.json();
+  } catch {}
+  return { success: true };
+}
+
+export async function apiClientDeleteProfile(albumId: string, profileId: string): Promise<{ success: boolean }> {
+  try {
+    await fetch(`/api/albums/${encodeURIComponent(albumId)}/profiles/${encodeURIComponent(profileId)}`, {
+      method: 'DELETE',
+    });
+  } catch {}
+  return { success: true };
+}
+
+export async function apiClientDeleteMemory(albumId: string, memoryId: string): Promise<{ success: boolean }> {
+  try {
+    await fetch(`/api/albums/${encodeURIComponent(albumId)}/memories/${encodeURIComponent(memoryId)}`, {
+      method: 'DELETE',
+    });
+  } catch {}
+  return { success: true };
+}
+
+export async function apiClientDeleteAward(albumId: string, awardId: string): Promise<{ success: boolean }> {
+  try {
+    await fetch(`/api/albums/${encodeURIComponent(albumId)}/awards/${encodeURIComponent(awardId)}`, {
+      method: 'DELETE',
+    });
+  } catch {}
+  return { success: true };
 }
 

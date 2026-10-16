@@ -8,7 +8,6 @@ import {
 } from '../../types';
 import { INITIAL_UNIVERSITIES } from '../../data/initialData';
 import { CROWNFIELD_UNIVERSITY, CROWNFIELD_PUBLIC_LAW_SETS } from '../../data/crownfieldLawDemos';
-import { AlbumAdminSwitcher } from '../common/AlbumAdminSwitcher';
 import { AlbumAdminHelpModal, AlbumDisputeModal } from '../admin/AlbumAdminHelpModal';
 import { HelpModal } from './HelpModal';
 import { 
@@ -30,6 +29,7 @@ import {
   Moon
 } from 'lucide-react';
 import { getTheme, applyTheme } from '../../utils/theme';
+import { updateManifestTag } from '../../utils/metaTags';
 
 interface AlbumsGridProps {
   universities?: UniversityDirectoryItem[];
@@ -210,11 +210,16 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     targetSharedDept.id === 'dept-crownfield-public-law' ||
     targetSharedDept.name?.toLowerCase().includes('public law');
 
+  useEffect(() => {
+    updateManifestTag({ wall: controlledDeptId || 'legacy-wall' });
+  }, [controlledDeptId]);
+
   // Filtered sets: if accessed via direct class/dept share link or album navigation, show that department's sets.
   // Otherwise, public legacy wall demo strictly displays ONLY the 4 Crownfield Demo albums!
   const displayedSets = useMemo(() => {
     if (isDirectSharedDept && !isCrownfieldPublicLaw) {
       const deptSets = sets.filter((s) => {
+        if (s.deletedAt || s.isUnpublished || s.isPublished === false) return false;
         if (s.departmentId === controlledDeptId) return true;
         if (targetSharedDept.name && s.departmentName?.toLowerCase().trim() === targetSharedDept.name.toLowerCase().trim()) {
           // If university matches or set institutionId matches
@@ -226,8 +231,8 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     }
     const demoIds = ['crownfield-law-2026', 'crownfield-law-2025', 'crownfield-law-2024', 'crownfield-law-2023'];
     const merged = demoIds.map((id) => sets.find((s) => s.id === id) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === id)!);
-    const validMerged = merged.filter(Boolean).sort((a, b) => b.graduationYear - a.graduationYear);
-    return validMerged.length > 0 ? validMerged : CROWNFIELD_PUBLIC_LAW_SETS;
+    const validMerged = merged.filter((s) => s && !s.deletedAt && !s.isUnpublished && s.isPublished !== false).sort((a, b) => b.graduationYear - a.graduationYear);
+    return validMerged.length > 0 ? validMerged : CROWNFIELD_PUBLIC_LAW_SETS.filter((s) => !s.deletedAt && !s.isUnpublished);
   }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.name, targetSharedUni.id]);
 
   // Total student portraits archived in this selection
@@ -413,23 +418,6 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                 </>
               )}
             </button>
-
-            {isAlbumAdmin && (
-              <AlbumAdminSwitcher
-                activeMode="preview"
-                showMainButton={Boolean(showMainButton)}
-                showManageButton={!showMainButton}
-                onMainDashboard={onMainDashboard}
-                onManageAlbum={onOpenDashboard}
-                onPreviewAlbum={() => {
-                  if (departmentSets.length > 0) {
-                    onSelectSet(departmentSets[0].id);
-                  } else if (sets.length > 0) {
-                    onSelectSet(sets[0].id);
-                  }
-                }}
-              />
-            )}
           </div>
         </div>
       </header>

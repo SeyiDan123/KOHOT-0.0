@@ -11,14 +11,17 @@ import {
 } from 'lucide-react';
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 
+import { CropSettings } from '../../types';
+
 export type CropAspectRatio = 'free' | '1:1' | '4:5' | '16:9' | '21:9' | 'portrait' | 'square' | 'landscape';
 
 export interface ImageCropModalProps {
   isOpen: boolean;
   imageSrc: string;
   onClose: () => void;
-  onApplyCrop: (croppedDataUrl: string) => void;
+  onApplyCrop: (croppedDataUrl: string, cropSettings?: CropSettings) => void;
   initialAspectRatio?: CropAspectRatio | string;
+  initialCropSettings?: CropSettings;
   title?: string;
   helperText?: string;
   isProfileSubmission?: boolean;
@@ -30,6 +33,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
   onClose,
   onApplyCrop,
   initialAspectRatio = '1:1',
+  initialCropSettings,
   title,
   helperText,
   isProfileSubmission = false,
@@ -99,21 +103,39 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
     const dispH = Math.round(baseH);
     setDisplayedImgSize({ width: dispW, height: dispH });
 
-    // Initial frame firmly fits edge to edge on image
-    let fH = Math.min(baseH * 0.95, containerH - 32);
-    let fW = fH * targetAspect;
-    if (fW > Math.min(baseW * 0.95, containerW - 32)) {
-      fW = Math.min(baseW * 0.95, containerW - 32);
-      fH = fW / targetAspect;
+    // If saved crop settings exist, restore the exact position and size
+    if (initialCropSettings && initialCropSettings.width > 0 && initialCropSettings.height > 0) {
+      const restoredW = Math.round(initialCropSettings.width * dispW);
+      const restoredH = Math.round(initialCropSettings.height * dispH);
+      const leftInDisp = initialCropSettings.x * dispW;
+      const topInDisp = initialCropSettings.y * dispH;
+      const centerImgX = dispW / 2;
+      const centerImgY = dispH / 2;
+      const posX = leftInDisp + restoredW / 2 - centerImgX;
+      const posY = topInDisp + restoredH / 2 - centerImgY;
+
+      setFrameSize({ width: Math.max(60, restoredW), height: Math.max(60, restoredH) });
+      setFramePos({ x: posX, y: posY });
+      if (initialCropSettings.zoom) {
+        setZoom(initialCropSettings.zoom);
+      }
+    } else {
+      // Initial frame firmly fits edge to edge on image
+      let fH = Math.min(baseH * 0.95, containerH - 32);
+      let fW = fH * targetAspect;
+      if (fW > Math.min(baseW * 0.95, containerW - 32)) {
+        fW = Math.min(baseW * 0.95, containerW - 32);
+        fH = fW / targetAspect;
+      }
+
+      const finalW = Math.round(Math.max(fW, 100));
+      const finalH = Math.round(Math.max(fH, 100 / targetAspect));
+      setFrameSize({ width: finalW, height: finalH });
+
+      // Center frame initially
+      setFramePos({ x: 0, y: 0 });
     }
-
-    const finalW = Math.round(Math.max(fW, 100));
-    const finalH = Math.round(Math.max(fH, 100 / targetAspect));
-    setFrameSize({ width: finalW, height: finalH });
-
-    // Center frame initially
-    setFramePos({ x: 0, y: 0 });
-  }, [targetAspect]);
+  }, [targetAspect, initialCropSettings]);
 
   const clampFramePosition = (px: number, py: number, fW: number, fH: number, imgW: number, imgH: number) => {
     const maxX = Math.max(0, (imgW - fW) / 2);
@@ -315,20 +337,35 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
         ctx.restore();
       }
 
+      const currentCropSettings: CropSettings = {
+        x: nw > 0 ? naturalCropX / nw : 0,
+        y: nh > 0 ? naturalCropY / nh : 0,
+        width: nw > 0 ? naturalCropW / nw : 1,
+        height: nh > 0 ? naturalCropH / nh : 1,
+        zoom,
+      };
+
       const croppedDataUrl = canvas.toDataURL('image/webp', 0.90);
-      onApplyCrop(croppedDataUrl);
+      onApplyCrop(croppedDataUrl, currentCropSettings);
       onClose();
     } catch {
+      const currentCropSettings: CropSettings = {
+        x: nw > 0 ? naturalCropX / nw : 0,
+        y: nh > 0 ? naturalCropY / nh : 0,
+        width: nw > 0 ? naturalCropW / nw : 1,
+        height: nh > 0 ? naturalCropH / nh : 1,
+        zoom,
+      };
       try {
         const fallbackUrl = canvas.toDataURL('image/jpeg', 0.90);
-        onApplyCrop(fallbackUrl);
+        onApplyCrop(fallbackUrl, currentCropSettings);
         onClose();
       } catch {
-        onApplyCrop(imageSrc);
+        onApplyCrop(imageSrc, currentCropSettings);
         onClose();
       }
     }
-  }, [naturalSize, displayedImgSize, framePos, frameSize, targetAspect, rotation, onApplyCrop, onClose, imageSrc]);
+  }, [naturalSize, displayedImgSize, framePos, frameSize, targetAspect, rotation, zoom, onApplyCrop, onClose, imageSrc]);
 
   if (!isOpen || !imageSrc) return null;
 

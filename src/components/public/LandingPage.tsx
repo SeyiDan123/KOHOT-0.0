@@ -251,21 +251,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           ========================================================================= */}
       <section 
         id="hero" 
-        className="relative pt-16 pb-20 sm:pt-24 sm:pb-32 overflow-hidden bg-gradient-to-b from-white via-zinc-100/60 to-zinc-200/50 dark:from-[#121214] dark:via-[#18181b] dark:to-[#121214] border-b border-zinc-200/80 dark:border-zinc-800 text-zinc-900 dark:text-white transition-colors duration-300"
+        className="relative pt-16 pb-20 sm:pt-24 sm:pb-32 overflow-hidden bg-white dark:bg-[#121214] border-b border-zinc-200/80 dark:border-zinc-800 text-zinc-900 dark:text-white transition-colors duration-300"
       >
         {/* Background Graduation Pattern Texture */}
-        <GraduationPattern className="opacity-[0.07] dark:opacity-[0.20]" />
-
-
+        <GraduationPattern className="opacity-[0.06] dark:opacity-[0.20]" />
 
         <div className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-10 relative z-10 space-y-12 flex flex-col items-center justify-center">
           
           {/* Header Narrative */}
           <div className="flex flex-col items-center text-center max-w-4xl mx-auto space-y-6 sm:space-y-8">
-            {/* Main Headline - Heading remains deep charcoal/black in light mode, white in dark mode */}
+            {/* Main Headline - Increased font size */}
             <h1 
               id="hero-main-title"
-              className="font-syne font-extrabold text-3xl sm:text-5xl md:text-6xl lg:text-[4.75rem] text-zinc-900 dark:text-white tracking-tight leading-[1.08] max-w-4xl animate-slow-reveal"
+              className="font-syne font-bold text-4xl sm:text-6xl md:text-7xl lg:text-7xl text-zinc-900 dark:text-white tracking-tight leading-[1.08] max-w-4xl animate-slow-reveal"
             >
               <span className="block">{contentOverride?.heroHeadlineLine1 || 'Beautiful'}</span>
               <span className="block text-zinc-900 dark:text-white italic font-medium">{contentOverride?.heroHeadlineLine2 || 'graduate memories'}</span>
@@ -435,7 +433,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </span>
           </div>
 
-          <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-white tracking-tight leading-tight max-w-3xl drop-shadow-md">
+          <h2 className="font-syne font-bold text-3xl sm:text-4xl md:text-5xl text-white tracking-tight leading-tight max-w-3xl drop-shadow-md">
             Preserve your Legacy
           </h2>
 

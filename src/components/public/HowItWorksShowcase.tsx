@@ -167,9 +167,8 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
   return (
     <section 
       id="how-it-works" 
-      className="py-24 sm:py-32 px-6 sm:px-10 bg-slate-50 dark:bg-[#121214] border-t border-slate-200 dark:border-zinc-800 relative overflow-hidden text-slate-900 dark:text-white transition-colors duration-300"
+      className="py-24 sm:py-32 px-6 sm:px-10 bg-white dark:bg-[#121214] border-t border-slate-200 dark:border-zinc-800 relative overflow-hidden text-slate-900 dark:text-white transition-colors duration-300"
     >
-
 
       <div className="max-w-7xl mx-auto relative z-10">
         
@@ -181,7 +180,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 <Sparkles className="w-3.5 h-3.5 text-[#d4af37]" />
                 <span className="text-[#d4af37]">HOW IT WORKS</span>
               </div>
-              <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
+              <h2 className="font-syne font-bold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
                 From Your Class to a Legacy That Lasts
               </h2>
             </ScrollReveal>
@@ -227,7 +226,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
               {/* TOP VISUAL CONTAINER: Human, emotional UI preview */}
               <div className="relative h-[310px] sm:h-[330px] w-full overflow-hidden bg-slate-100/90 dark:bg-zinc-900 p-4 sm:p-5 flex items-center justify-center shrink-0">
                 
-                {/* STEP 06: ARCHITECTURAL WALL PLAQUE MOCKUP */}
+                {/* STEP 06: ARCHITECTURAL WALL PLAQUE PREVIEW */}
                 {s.type === 'plaque' ? (
                   <div className="w-full max-w-[280px] rounded-2xl bg-zinc-950 border-2 border-[#d4af37]/60 p-5 flex flex-col justify-between shadow-2xl relative h-[280px]">
                     {/* 4 Corner Accents */}
@@ -264,7 +263,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                     </div>
                   </div>
                 ) : (
-                  /* STEPS 01, 02, 03, 04, 05, 07: SMARTPHONE DISPLAY MOCKUP */
+                  /* STEPS 01, 02, 03, 04, 05, 07: SMARTPHONE DISPLAY PREVIEW */
                   <div className="w-full max-w-[270px] sm:max-w-[290px] h-[290px] rounded-[32px] bg-white p-2 border-2 border-zinc-200/90 shadow-xl relative flex flex-col overflow-hidden">
                     <div className="w-full h-full rounded-[24px] bg-[#fafafa] border border-zinc-200/70 p-3.5 flex flex-col justify-between overflow-hidden relative text-left">
                       
@@ -505,7 +504,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 A graduating class is not an isolated event, but one chapter in a department’s continuing story.
               </p>
               <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 font-normal max-w-3xl leading-relaxed mt-2">
-                Mounted permanently in your faculty corridor, the architectural metal Department Legacy Plaque links generations of classes together. Anyone scanning or tapping the physical plaque instantly accesses the living archive of graduating classes across decades.
+                Mounted permanently in your department corridor, the architectural acrylic Department Legacy Plaque links generations of classes together. Anyone scanning or tapping the physical plaque instantly accesses the living archive of graduating classes across decades.
               </p>
             </ScrollReveal>
           </div>
@@ -518,7 +517,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
               {/* Plaque Graphic (Physical Anchor on Campus Wall) */}
               <div className="lg:col-span-5 flex flex-col items-center text-center">
                 <div className="w-full max-w-xs rounded-2xl bg-zinc-950 border-2 border-[#d4af37]/60 p-6 shadow-2xl relative group">
-                  {/* Brass Corner Standoffs */}
+                  {/* Acrylic Corner Standoffs */}
                   <div className="absolute top-3 left-3 w-3 h-3 rounded-full bg-[#d4af37] border border-white/40 shadow" />
                   <div className="absolute top-3 right-3 w-3 h-3 rounded-full bg-[#d4af37] border border-white/40 shadow" />
                   <div className="absolute bottom-3 left-3 w-3 h-3 rounded-full bg-[#d4af37] border border-white/40 shadow" />
@@ -545,7 +544,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 </div>
 
                 <span className="font-mono-tech text-xs text-slate-500 dark:text-zinc-400 mt-4 font-medium">
-                  Physical Installation in Faculty Corridor
+                  Physical Installation in Department Corridor
                 </span>
               </div>
 
@@ -617,7 +616,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                   <Sparkles className="w-3.5 h-3.5" />
                   <span>The Complete Album Experience</span>
                 </div>
-                <h3 className="font-syne font-bold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight">
+                <h3 className="font-syne font-bold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight">
                   Everything Crafted for Your Graduating Class
                 </h3>
                 <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-300 max-w-3xl leading-relaxed">
@@ -630,7 +629,10 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {/* Feature 1: Admin Dashboard */}
               <ScrollReveal delayMs={150} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    01
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[#d4af37] flex items-center justify-center">
                       <LayoutDashboard className="w-6 h-6" />
@@ -650,7 +652,10 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
 
               {/* Feature 2: Dedicated Legacy Wall */}
               <ScrollReveal delayMs={200} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    02
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-blue-500 dark:text-blue-400 flex items-center justify-center">
                       <Layers className="w-6 h-6" />
@@ -668,29 +673,58 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 </div>
               </ScrollReveal>
 
-              {/* Feature 3: 1 Album per Set & Physical Plaque */}
-              <ScrollReveal delayMs={250} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+              {/* Feature 3: 1 Album Per Set */}
+              <ScrollReveal delayMs={240} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    03
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                      <QrCode className="w-6 h-6" />
+                      <BookOpen className="w-6 h-6" />
                     </div>
                     <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      1 Album Per Set &amp; Legacy Plaque
+                      1 Album Per Set
                     </h4>
                     <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      One immutable digital album tethered to a physical architectural brass plaque permanently installed in the department faculty corridor.
+                      One immutable digital album dedicated exclusively to each graduating cohort, keeping memories, graduates, and honors unmixed and permanently preserved.
                     </p>
                   </div>
                   <span className="font-mono-tech text-[10px] text-emerald-600 dark:text-emerald-400 uppercase tracking-wider font-semibold">
+                    Cohort Exclusivity
+                  </span>
+                </div>
+              </ScrollReveal>
+
+              {/* Feature 4: Department Legacy Plaque */}
+              <ScrollReveal delayMs={280} durationMs={700}>
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    04
+                  </div>
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[#d4af37] flex items-center justify-center">
+                      <QrCode className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                      Department Legacy Plaque
+                    </h4>
+                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                      A physical architectural acrylic plaque permanently installed in the department corridor, with a scannable QR gateway linking directly to your department archive.
+                    </p>
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase tracking-wider font-semibold">
                     Physical Campus Anchor
                   </span>
                 </div>
               </ScrollReveal>
 
-              {/* Feature 4: Profiles */}
+              {/* Feature 5: Profiles */}
               <ScrollReveal delayMs={300} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    05
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center">
                       <Users className="w-6 h-6" />
@@ -708,9 +742,12 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 </div>
               </ScrollReveal>
 
-              {/* Feature 5: Moments & Video Stream */}
+              {/* Feature 6: Moments & Video Stream */}
               <ScrollReveal delayMs={350} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    06
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center">
                       <Video className="w-6 h-6" />
@@ -728,9 +765,12 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 </div>
               </ScrollReveal>
 
-              {/* Feature 6: Honors & Awards */}
+              {/* Feature 7: Honors & Awards */}
               <ScrollReveal delayMs={400} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    07
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center">
                       <Award className="w-6 h-6" />
@@ -748,9 +788,12 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 </div>
               </ScrollReveal>
 
-              {/* Feature 7: Final Thoughts (Lecturers & Leaders) */}
+              {/* Feature 8: Final Thoughts */}
               <ScrollReveal delayMs={450} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    08
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
                       <Quote className="w-6 h-6" />
@@ -768,9 +811,12 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 </div>
               </ScrollReveal>
 
-              {/* Feature 8: Our Story */}
+              {/* Feature 9: Our Story */}
               <ScrollReveal delayMs={500} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 md:col-span-2 lg:col-span-2">
+                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 md:col-span-2 lg:col-span-2 relative">
+                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
+                    09
+                  </div>
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
                       <BookOpen className="w-6 h-6" />

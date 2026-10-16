@@ -36,3 +36,20 @@ export function updateSocialMetaTags(data: {
   setMeta('name', 'twitter:description', data.description);
   setMeta('name', 'twitter:image', data.imageUrl);
 }
+
+/**
+ * Injects or updates the dynamic Web App Manifest link for an album or legacy wall
+ */
+export function updateManifestTag(queryParam: { album?: string; wall?: string }) {
+  if (typeof document === 'undefined') return;
+  let link = document.querySelector('link[rel="manifest"]') as HTMLLinkElement | null;
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'manifest';
+    document.head.appendChild(link);
+  }
+  const param = queryParam.album
+    ? `album=${encodeURIComponent(queryParam.album)}`
+    : `wall=${encodeURIComponent(queryParam.wall || 'default')}`;
+  link.href = `/api/manifest?${param}`;
+}

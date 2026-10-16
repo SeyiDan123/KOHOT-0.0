@@ -308,7 +308,7 @@ export const HowItWorksSection: React.FC<HowItWorksSectionProps> = ({
               </div>
             </div>
 
-            {/* Right Column: Visual Stage Interactive Mockup Card */}
+            {/* Right Column: Visual Stage Interactive Preview Card */}
             <div className="lg:col-span-6 flex justify-center">
               <div className="w-full max-w-md rounded-2xl bg-[#08090e] border border-white/15 p-6 shadow-2xl relative overflow-hidden">
                 
@@ -344,7 +344,7 @@ export const HowItWorksSection: React.FC<HowItWorksSectionProps> = ({
                       </div>
                     </div>
 
-                    {/* Plaque Gift Mockup Banner */}
+                    {/* Plaque Gift Preview Banner */}
                     <div className="p-4 rounded-xl bg-gradient-to-r from-white/[0.08] to-white/[0.02] border border-white/20 mt-4 flex items-center gap-4">
                       <div className="w-12 h-12 rounded-lg bg-white/10 border border-white/20 flex items-center justify-center flex-shrink-0">
                         <Award className="w-6 h-6 text-white" />

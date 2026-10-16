@@ -12,7 +12,7 @@ import {
   interpolateTemplate,
   KOHOT_DEFAULT_TEMPLATES
 } from '../../utils/kohotCommunications';
-import { runReminderCheck, fetchReminderLogs } from '../../utils/apiClient';
+import { runReminderCheck, fetchReminderLogs, HOST_EMAIL } from '../../utils/apiClient';
 import {
   Calendar,
   Mail,
@@ -636,7 +636,14 @@ KoHot — Beautiful graduate memories live here.`;
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5 font-mono-tech">
-                  {filteredGraduates.slice(0, 50).map((grad) => (
+                  {filteredGraduates.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-zinc-500 font-mono-tech text-xs">
+                        No live department class albums registered yet. Demo albums are strictly managed in the dedicated Album Demos section.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredGraduates.slice(0, 50).map((grad) => (
                     <tr key={`${grad.set.id}-${grad.id}`} className="hover:bg-white/[0.02] transition-colors">
                       <td className="p-3.5">
                         <div className="flex items-center gap-2.5">
@@ -706,7 +713,7 @@ KoHot — Beautiful graduate memories live here.`;
                         </a>
                       </td>
                     </tr>
-                  ))}
+                  )))}
                 </tbody>
               </table>
             </div>
@@ -954,7 +961,7 @@ KoHot — Beautiful graduate memories live here.`;
                   When recipients receive this link via WhatsApp, Telegram, or social media, it displays the visual card below with your graduate image:
                 </p>
 
-                {/* Simulated Social Card */}
+                {/* Preview Social Card */}
                 <div className="rounded-2xl border border-white/15 bg-black overflow-hidden shadow-2xl transition-all hover:border-[#d4af37]/40">
                   <div className="relative aspect-[16/9] w-full overflow-hidden bg-black/80">
                     <img
@@ -1272,7 +1279,7 @@ KoHot — Beautiful graduate memories live here.`;
                 </span>
               </div>
 
-              {/* Mock Email Client Shell */}
+              {/* Sample Email Client Shell */}
               <div className="flex-1 rounded-2xl bg-black/80 border border-white/15 p-5 space-y-4 font-body text-xs text-zinc-300">
                 <div className="border-b border-white/10 pb-3 space-y-1 font-mono-tech text-[11px]">
                   <p className="text-zinc-500">
@@ -1588,15 +1595,15 @@ KoHot — Beautiful graduate memories live here.`;
                       className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
                     />
                     <span className="font-mono-tech text-xs text-white">
-                      Dry-Run Mode (Simulate without sending)
+                      Dry-Run Mode (Test evaluation without sending)
                     </span>
                   </label>
                 </div>
 
-                {/* 2. Simulated Date Picker */}
+                {/* 2. Custom Test Date Picker */}
                 <div className="space-y-1.5">
                   <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                    Simulate Date (Run as if today were)
+                    Test Date (Run as if today were)
                   </label>
                   <input
                     type="date"
@@ -1619,7 +1626,7 @@ KoHot — Beautiful graduate memories live here.`;
                       className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
                     />
                     <span className="font-mono-tech text-xs text-white">
-                      Send to seyidan03@gmail.com with [TEST]
+                      Send to {HOST_EMAIL} with [TEST]
                     </span>
                   </label>
                 </div>

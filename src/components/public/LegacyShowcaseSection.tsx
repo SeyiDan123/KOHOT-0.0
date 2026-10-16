@@ -109,7 +109,7 @@ export const LegacyShowcaseSection: React.FC<LegacyShowcaseSectionProps> = ({
           </h2>
 
           <p className="font-body text-base text-zinc-400 max-w-xl mx-auto leading-relaxed">
-            A permanent digital class album paired with a physical, laser-engraved department plaque installed in your faculty corridor.
+            A permanent digital class album paired with a physical, laser-engraved department plaque installed in your department corridor.
           </p>
         </div>
 
@@ -262,7 +262,7 @@ export const LegacyShowcaseSection: React.FC<LegacyShowcaseSectionProps> = ({
             </h3>
 
             <p className="font-body text-base text-zinc-300 leading-relaxed">
-              An architectural metal and acrylic plaque mounted in your faculty corridor. Anyone who taps or scans it instantly accesses every graduating class's living memories.
+              An architectural metal and acrylic plaque mounted in your department corridor. Anyone who taps or scans it instantly accesses every graduating class's living memories.
             </p>
 
             {/* Core Value Points */}

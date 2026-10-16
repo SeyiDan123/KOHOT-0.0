@@ -49,20 +49,21 @@ import {
   Upload,
   QrCode,
   Sun,
-  Moon
+  Moon,
+  Bookmark,
+  AlertTriangle
 } from 'lucide-react';
 import { StudentDetailModal } from './StudentDetailModal';
 import { FrictionlessSubmitModal } from './FrictionlessSubmitModal';
-import { SaveAlbumToCloudModal } from './SaveAlbumToCloudModal';
+import { KeepAlbumSheet } from './KeepAlbumSheet';
 import { DepartmentVideoModal } from './DepartmentVideoModal';
-import { AlbumAdminSwitcher } from '../common/AlbumAdminSwitcher';
 import { AlbumDisputeModal } from '../admin/AlbumDisputeModal';
 import { useFeedback } from '../common/FeedbackSystem';
 import { getAlbumUrl, copyUrlToClipboard } from '../../utils/urlHelper';
 import { SocialIconsRow } from '../common/SocialIconsRow';
 import { GlazedImage } from '../common/GlazedImage';
 import { getYouTubeThumbnailUrl } from '../../utils/youtube';
-import { updateSocialMetaTags } from '../../utils/metaTags';
+import { updateSocialMetaTags, updateManifestTag } from '../../utils/metaTags';
 import { saveAlbumShortcutToDrive } from '../../utils/googleDriveHelper';
 import { getAwardVisualConfig } from '../../utils/awardVisuals';
 import { getLuxuryThemeById, DarkLuxuryTheme, LUXURY_PAPER_TEXTURE_SVG } from '../../utils/luxuryThemes';
@@ -271,12 +272,19 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   const [selectedMemoryCategory, setSelectedMemoryCategory] = useState<string>('All');
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
-  const [isSaveToCloudOpen, setIsSaveToCloudOpen] = useState(false);
+  const [isKeepSheetOpen, setIsKeepSheetOpen] = useState(false);
   const [isSavingToDrive, setIsSavingToDrive] = useState(false);
   const [driveNotification, setDriveNotification] = useState<{ message: string; success: boolean; url?: string } | null>(null);
   const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState<DepartmentVideoItem | null>(null);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+
+  // Update dynamic web app manifest for this album
+  useEffect(() => {
+    if (currentSet?.id) {
+      updateManifestTag({ album: currentSet.id });
+    }
+  }, [currentSet?.id]);
 
   // Context-Aware Light / Dark Mode State with localStorage Persistence (Default: Light Mode)
   const [isLightMode, setIsLightMode] = useState<boolean>(() => getTheme() === 'light');
@@ -646,6 +654,21 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         </div>
       )}
 
+      {/* Unpublished or Deleted Admin Notice Banner */}
+      {(currentSet.deletedAt || currentSet.isUnpublished) && (
+        <div 
+          id="album-status-banner"
+          className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 text-center text-xs font-mono-tech text-amber-300 flex items-center justify-center gap-2 relative z-50"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <span>
+            {currentSet.deletedAt
+              ? `Admin Notice: This album was soft-deleted and is hidden from public visitors.`
+              : 'Admin Notice: This album is unpublished and currently hidden from public visitors.'}
+          </span>
+        </div>
+      )}
+
       {/* =========================================================================
           TOP NAVIGATION BAR (Pixieset Simplicity + NeoVision Aesthetics)
           ========================================================================= */}
@@ -657,15 +680,21 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4 relative">
           {/* Left: All Albums navigation */}
           <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
-            {/* All Albums Navigation */}
+            {/* All Albums / Back Navigation */}
             <button
               id="back-to-home-btn"
-              onClick={onBackToGrid}
+              onClick={
+                originView === 'layer1_rep' && onManageAlbum
+                  ? onManageAlbum
+                  : onBackToGrid
+              }
               className={`flex items-center gap-2 transition-colors cursor-pointer group shrink-0 ${
                 isLightMode ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-300 hover:text-white'
               }`}
               title={
-                originView === 'layer0_master'
+                originView === 'layer1_rep'
+                  ? 'Return to Manage Album Dashboard'
+                  : originView === 'layer0_master'
                   ? 'Return to Master Host Dashboard'
                   : 'Return to All Albums'
               }
@@ -680,27 +709,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               <span className={`font-syne font-bold text-xs sm:text-sm tracking-wide transition-colors ${
                 isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
               }`}>
-                All Albums
+                {originView === 'layer1_rep' ? 'Manage Album' : 'All Albums'}
               </span>
             </button>
           </div>
-
-          {/* Center: The sticky transition buttons permanently centralized (Admin Only) */}
-          {isAlbumAdmin && onManageAlbum && (
-            <AlbumAdminSwitcher
-              activeMode="preview"
-              showMainButton={Boolean(showMainButton)}
-              showManageButton={true}
-              onMainDashboard={onMainDashboard}
-              onManageAlbum={handleManageAlbumWithScroll}
-              onPreviewAlbum={() => {
-                if (isViewingOtherAlbum && onReturnToMyAlbum) {
-                  onReturnToMyAlbum();
-                }
-              }}
-              isViewingOtherAlbum={isViewingOtherAlbum}
-            />
-          )}
 
           {/* Right: Light Mode Toggle, Save & Share Buttons */}
           <div className="flex items-center gap-2 shrink-0">
@@ -731,17 +743,17 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             </button>
 
             <button
-              id="album-save-drive-btn"
-              onClick={() => setIsSaveToCloudOpen(true)}
+              id="album-keep-btn"
+              onClick={() => setIsKeepSheetOpen(true)}
               className={`px-3.5 py-1.5 sm:py-2 rounded-full border font-tech text-xs tracking-wider uppercase font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-md hover:scale-105 active:scale-95 shrink-0 ${
                 isLightMode 
                   ? 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900' 
                   : 'bg-white/[0.08] hover:bg-white/[0.15] border-white/20 text-white'
               }`}
-              title="Save this live Class Album link to your cloud storage"
+              title="Keep this album"
             >
-              <Cloud className={`w-3.5 h-3.5 ${isLightMode ? 'text-zinc-700' : 'text-zinc-300'}`} />
-              <span>Save</span>
+              <Bookmark className={`w-3.5 h-3.5 ${isLightMode ? 'text-zinc-700' : 'text-[#d4af37]'}`} />
+              <span>KEEP</span>
             </button>
 
             <button
@@ -1276,20 +1288,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                           “{student.nickname}”
                         </p>
                       )}
-
-                      {/* Social icons visible after name and nickname - includes email icon, opens full view on click */}
-                      {((student.socials && Object.values(student.socials).some(Boolean)) || student.email || student.instagramOrTwitter) && (
-                        <div className="mt-1.5 pointer-events-none">
-                          <SocialIconsRow
-                            socials={student.socials}
-                            instagramOrTwitter={student.instagramOrTwitter}
-                            email={student.email}
-                            isLightMode={isLightMode}
-                            size="xs"
-                            interactive={false}
-                          />
-                        </div>
-                      )}
                     </div>
 
                     {student.quote && (
@@ -1588,12 +1586,21 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                     isLightMode ? 'border-zinc-200' : 'border-white/10'
                   }`}>
                     <div className="space-y-1 text-left">
-                      <div className="flex flex-wrap items-baseline gap-2.5">
+                      <div className="flex flex-wrap items-center gap-2.5">
                         <h3 className={`font-syne font-bold text-xl sm:text-2xl tracking-tight leading-tight ${
                           isLightMode ? 'text-zinc-900' : 'text-white'
                         }`}>
                           {event.title}
                         </h3>
+                        {event.dateStr && (
+                          <span className={`text-xs font-mono-tech px-2.5 py-0.5 rounded-full border ${
+                            isLightMode 
+                              ? 'bg-zinc-100 text-zinc-700 border-zinc-200' 
+                              : 'bg-white/5 text-zinc-400 border-white/10'
+                          }`}>
+                            {event.dateStr}
+                          </span>
+                        )}
                       </div>
                       {event.caption && (
                         <p className={`font-body text-xs sm:text-sm max-w-2xl leading-relaxed ${
@@ -2128,10 +2135,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         onSubmitStudent={handleAddNewStudent}
       />
 
-      {/* Save Album to Major Cloud Storage Platforms Modal */}
-      <SaveAlbumToCloudModal
-        isOpen={isSaveToCloudOpen}
-        onClose={() => setIsSaveToCloudOpen(false)}
+      {/* Keep This Album Sheet */}
+      <KeepAlbumSheet
+        isOpen={isKeepSheetOpen}
+        onClose={() => setIsKeepSheetOpen(false)}
         currentSet={currentSet}
         isLightMode={isLightMode}
       />
@@ -2287,37 +2294,37 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             }}
           >
             {/* Top Bar Overlay - Absolute at top so photo occupies true vertical & horizontal center */}
-            <div className={`absolute top-0 inset-x-0 px-5 sm:px-8 py-4 flex items-center justify-between gap-4 z-50 pointer-events-auto ${
+            <div className={`absolute top-0 inset-x-0 px-4 sm:px-8 py-3 sm:py-4 flex items-center justify-between gap-4 z-50 pointer-events-auto ${
               momentCardMode === 'light'
                 ? 'bg-gradient-to-b from-white/95 via-white/60 to-transparent'
                 : 'bg-gradient-to-b from-black/85 via-black/45 to-transparent'
             }`}>
-              {/* Category Title & Date at Top Left */}
-              <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap">
-                <span className={`px-4 py-1.5 rounded-full text-xs font-syne font-bold uppercase tracking-wider border backdrop-blur-md shadow-xs ${
+              {/* Category Title & Date at Top Left - Perfectly aligned horizontally with cancel button */}
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                <span className={`px-3.5 py-1.5 rounded-full text-xs font-syne font-bold uppercase tracking-wider border backdrop-blur-md shadow-xs truncate max-w-[180px] sm:max-w-md ${
                   momentCardMode === 'light'
                     ? 'bg-black/5 text-black border-black/15'
                     : 'bg-white/10 text-white border-white/20'
                 }`}>
                   {currentMoment.categoryTitle || currentMoment.title}
                 </span>
-                <span className={`font-mono-tech text-xs hidden sm:inline ${
-                  momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
-                }`}>
-                  Photo {((currentMoment.imageIndexInCategory ?? 0) + 1)} of {(currentMoment.totalImagesInCategory ?? lightboxMomentsList.length)}
-                </span>
                 {currentMoment.dateStr && (
-                  <span className={`font-mono-tech text-xs flex items-center gap-1.5 ${
+                  <span className={`font-mono-tech text-xs shrink-0 flex items-center gap-1.5 ${
                     momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
                   }`}>
                     <span className="opacity-40">•</span>
                     <span>{currentMoment.dateStr}</span>
                   </span>
                 )}
+                <span className={`font-mono-tech text-xs hidden md:inline shrink-0 ${
+                  momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
+                }`}>
+                  ({((currentMoment.imageIndexInCategory ?? 0) + 1)} / {(currentMoment.totalImagesInCategory ?? lightboxMomentsList.length)})
+                </span>
               </div>
 
-              {/* Close Button Only on Top Right - Icon only */}
-              <div className="flex items-center gap-2">
+              {/* Close / Cancel Button on Top Right - Exactly aligned on same horizontal line */}
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   id="close-lightbox-btn"
                   type="button"
@@ -2327,7 +2334,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                     setMomentZoomScale(1);
                     setMomentPanPos({ x: 0, y: 0 });
                   }}
-                  className={`w-10 h-10 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-lg active:scale-95 border ${
+                  className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-lg active:scale-95 border ${
                     momentCardMode === 'light'
                       ? 'bg-black/10 hover:bg-black/20 text-zinc-900 border-black/15'
                       : 'bg-white/15 hover:bg-white/25 text-white border-white/25'

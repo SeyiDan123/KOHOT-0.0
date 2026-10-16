@@ -5,7 +5,6 @@ import {
   X, 
   Check, 
   Cloud, 
-  Apple, 
   Download
 } from 'lucide-react';
 
@@ -135,37 +134,6 @@ export const AlbumShareModal: React.FC<AlbumShareModalProps> = ({
               {savedCloud === 'dropbox' ? (
                 <>
                   <Check className="w-3.5 h-3.5 text-white" />
-                  <span>Saved</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Save</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          {/* Option 3: Apple Cloud (iCloud) */}
-          <div className="rounded-2xl border border-zinc-300 bg-white p-4 flex items-center justify-between gap-4 hover:border-zinc-400 transition-all shadow-xs">
-            <div className="flex items-center gap-3.5 min-w-0">
-              <div className="w-10 h-10 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center justify-center shrink-0">
-                <Apple className="w-5 h-5 text-black" />
-              </div>
-              <div className="min-w-0">
-                <h4 className="font-syne font-bold text-sm text-black truncate">Apple Cloud (iCloud)</h4>
-                <p className="font-body text-[11px] text-zinc-500">Save to your iCloud Drive / Apple devices</p>
-              </div>
-            </div>
-
-            <button
-              id="save-to-apple-cloud-btn"
-              onClick={handleSaveToAppleCloud}
-              className="px-4 py-2.5 rounded-xl bg-black hover:bg-zinc-800 text-white font-tech text-xs uppercase font-bold transition-all flex items-center gap-1.5 shadow cursor-pointer shrink-0"
-            >
-              {savedCloud === 'apple' ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Saved</span>
                 </>
               ) : (

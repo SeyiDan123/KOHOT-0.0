@@ -313,12 +313,10 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
   return (
     <section 
       id="core-pillars" 
-      className="py-24 sm:py-32 px-6 sm:px-10 bg-zinc-100 dark:bg-[#121214] border-t border-b border-zinc-200 dark:border-zinc-800 relative overflow-hidden text-zinc-900 dark:text-white transition-colors duration-300"
+      className="py-24 sm:py-32 px-6 sm:px-10 bg-zinc-100 dark:bg-[#18181b] border-t border-b border-zinc-200 dark:border-zinc-800 relative overflow-hidden text-zinc-900 dark:text-white transition-colors duration-300"
     >
       {/* Background Graduation Pattern Watermark Texture */}
       <GraduationPattern className="opacity-15 dark:opacity-40" />
-
-
 
       <div className="max-w-7xl mx-auto relative z-10">
         
@@ -333,7 +331,7 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
               <span className="text-[#d4af37]">WHY KOHOT EXISTS</span>
             </div>
 
-            <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-zinc-900 dark:text-white tracking-tight leading-tight text-left">
+            <h2 className="font-syne font-bold text-3xl sm:text-4xl lg:text-5xl text-zinc-900 dark:text-white tracking-tight leading-tight text-left">
               The years you shared will move on. Your memories don’t have to.
             </h2>
           </ScrollReveal>
@@ -365,7 +363,7 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
                 <Layers className="w-3.5 h-3.5 text-[#d4af37]" />
                 <span className="text-[#d4af37]">{contentOverride?.pillarsEyebrow || 'THE THREE ELEMENTS'}</span>
               </div>
-              <h3 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
+              <h3 className="font-syne font-bold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
                 {contentOverride?.pillarsHeading || 'Everything your class needs to leave a legacy'}
               </h3>
             </ScrollReveal>

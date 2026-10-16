@@ -471,7 +471,7 @@ export const INITIAL_CONTENT_OVERRIDE: WebsiteContentOverride = {
   pillar1Title: 'The Class Album',
   pillar1Description: 'A private, interactive digital home for your class. Full individual graduate profiles, memorable moments, candid stories, and shared photos.',
   pillar2Title: 'The Legacy Plaque',
-  pillar2Description: 'A physical, beautifully cast plaque installed permanently in your faculty corridor. A scannable gateway connecting campus corridors to your class album.',
+  pillar2Description: 'A physical, beautifully cast plaque installed permanently in your department corridor. A scannable gateway connecting campus corridors to your class album.',
   pillar3Title: 'The Annual Reminder',
   pillar3Description: 'An automated anniversary tradition. Every year on convocation day, every graduate receives a nostalgic notification reconnecting them to their memories.',
   howItWorksEyebrow: 'THE JOURNEY',
@@ -541,8 +541,8 @@ export function getStoredSets(): ClassSet[] {
     if (!Array.isArray(parsed) || parsed.length === 0) {
       return INITIAL_SETS;
     }
-    const oldMockIds = ['unilag-cs-2026', 'unilag-med-2025', 'covenant-arch-2026', 'covenant-arch-2024'];
-    const cleanedParsed = parsed.filter((s) => !oldMockIds.includes(s.id));
+    const oldLegacyIds = ['unilag-cs-2026', 'unilag-med-2025', 'covenant-arch-2026', 'covenant-arch-2024'];
+    const cleanedParsed = parsed.filter((s) => !oldLegacyIds.includes(s.id));
     const mergedSets = [...cleanedParsed];
     for (const demoSet of INITIAL_SETS) {
       if (!mergedSets.some((s) => s.id === demoSet.id)) {

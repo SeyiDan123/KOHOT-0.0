@@ -24,8 +24,16 @@ import { SocialUrlInputField } from '../common/SocialUrlInputField';
 import { getYouTubeThumbnailUrl } from '../../utils/youtube';
 import { getAwardVisualConfig } from '../../utils/awardVisuals';
 import { getTheme, applyTheme } from '../../utils/theme';
+import {
+  apiClientUnpublishAlbum,
+  apiClientRequestAlbumDeletion,
+  apiClientDeleteProfile,
+  apiClientDeleteMemory,
+  apiClientDeleteAward
+} from '../../utils/apiClient';
 import { 
   User,
+  AlertTriangle,
   Users, 
   UserCheck,
   UserPlus,
@@ -139,7 +147,9 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   onMainDashboard,
   showMainButton,
 }) => {
-  const { showSuccess, showError, showWarning } = useFeedback();
+  const { showSuccess, showError, showWarning, confirmWarning } = useFeedback();
+  const [isRequestDeletionModalOpen, setIsRequestDeletionModalOpen] = useState(false);
+  const [deletionReason, setDeletionReason] = useState('');
   const [activeTab, setActiveTab] = useState<
     'students' | 'memories' | 'awards' | 'voices' | 'story' | 'imagery' | 'videos'
   >(() => {
@@ -1227,12 +1237,22 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
   const handleDeleteStudent = (id: string) => {
     const student = currentSet.students.find((s) => s.id === id);
-    const updated = {
-      ...currentSet,
-      students: currentSet.students.filter((s) => s.id !== id),
-    };
-    onUpdateSet(updated);
-    showWarning('Profile deleted.', `${student?.fullName || 'Student'} was removed from the roster.`);
+    confirmWarning({
+      title: 'Delete Classmate Profile?',
+      message: `Are you sure you want to delete "${student?.fullName || 'this student'}" from the album? This action cannot be undone.`,
+      confirmLabel: 'Delete Profile',
+      cancelLabel: 'Keep',
+      isDestructive: true,
+      onConfirm: () => {
+        const updated = {
+          ...currentSet,
+          students: currentSet.students.filter((s) => s.id !== id),
+        };
+        onUpdateSet(updated);
+        apiClientDeleteProfile(currentSet.id, id);
+        showWarning('Profile deleted.', `${student?.fullName || 'Student'} was removed from the roster.`);
+      },
+    });
   };
 
   // ==========================================
@@ -1433,34 +1453,55 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   // Delete an entire batch
   const handleDeleteBatch = (batchId: string) => {
     const target = currentSet.memories.find((m) => m.id === batchId);
-    const updatedMemories = currentSet.memories
-      .filter((m) => m.id !== batchId)
-      .map((m, idx) => ({ ...m, order: idx + 1 }));
+    confirmWarning({
+      title: 'Delete Moment Category?',
+      message: `Are you sure you want to delete "${target?.title || 'this category'}" and all photos in it? This action cannot be undone.`,
+      confirmLabel: 'Delete Category',
+      cancelLabel: 'Keep',
+      isDestructive: true,
+      onConfirm: () => {
+        const updatedMemories = currentSet.memories
+          .filter((m) => m.id !== batchId)
+          .map((m, idx) => ({ ...m, order: idx + 1 }));
 
-    onUpdateSet({
-      ...currentSet,
-      memories: updatedMemories,
+        onUpdateSet({
+          ...currentSet,
+          memories: updatedMemories,
+        });
+
+        apiClientDeleteMemory(currentSet.id, batchId);
+        showWarning('Moment Category Deleted', `Deleted "${target?.title || 'Moments'}".`);
+      },
     });
-
-    setHierarchyToast(`Deleted batch "${target?.title || 'Moments'}".`);
-    setTimeout(() => setHierarchyToast(null), 3000);
   };
 
   // Delete a specific image from an existing batch
   const handleDeleteImageFromBatch = (batchId: string, imageId: string) => {
-    const updatedMemories = currentSet.memories.map((m) => {
-      if (m.id === batchId) {
-        return {
-          ...m,
-          images: m.images.filter((img) => img.id !== imageId),
-        };
-      }
-      return m;
-    });
+    confirmWarning({
+      title: 'Remove Photo?',
+      message: 'Are you sure you want to remove this photo from the moment category? This action cannot be undone.',
+      confirmLabel: 'Remove Photo',
+      cancelLabel: 'Keep',
+      isDestructive: true,
+      onConfirm: () => {
+        const updatedMemories = currentSet.memories.map((m) => {
+          if (m.id === batchId) {
+            return {
+              ...m,
+              images: m.images.filter((img) => img.id !== imageId),
+            };
+          }
+          return m;
+        });
 
-    onUpdateSet({
-      ...currentSet,
-      memories: updatedMemories,
+        onUpdateSet({
+          ...currentSet,
+          memories: updatedMemories,
+        });
+
+        apiClientDeleteMemory(currentSet.id, `${batchId}-${imageId}`);
+        showSuccess('Photo Removed', 'The photo was removed from the moment collection.');
+      },
     });
   };
 
@@ -1602,13 +1643,23 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   };
 
   const handleDeleteAward = (awardId: string) => {
-    const updated = currentSet.awards.filter((a) => a.id !== awardId);
-    onUpdateSet({
-      ...currentSet,
-      awards: updated,
+    const target = currentSet.awards.find((a) => a.id === awardId);
+    confirmWarning({
+      title: 'Delete Award?',
+      message: `Are you sure you want to delete the award "${target?.category || 'this award'}"? This action cannot be undone.`,
+      confirmLabel: 'Delete Award',
+      cancelLabel: 'Keep',
+      isDestructive: true,
+      onConfirm: () => {
+        const updated = currentSet.awards.filter((a) => a.id !== awardId);
+        onUpdateSet({
+          ...currentSet,
+          awards: updated,
+        });
+        apiClientDeleteAward(currentSet.id, awardId);
+        showSuccess('Award Removed', 'The award was removed from the album.');
+      },
     });
-    setHierarchyToast('✓ Award removed from album.');
-    setTimeout(() => setHierarchyToast(null), 3000);
   };
 
   const handleSelectStudentForAward = (studentId: string) => {
@@ -1770,13 +1821,81 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   };
 
   const handleDeleteVoice = (voiceId: string) => {
-    const updated = currentSet.voices.filter((v) => v.id !== voiceId);
-    onUpdateSet({
-      ...currentSet,
-      voices: updated,
+    const target = currentSet.voices.find((v) => v.id === voiceId);
+    confirmWarning({
+      title: 'Delete Final Thought?',
+      message: `Are you sure you want to remove the parting words from "${target?.lecturerName || 'this leader'}"? This action cannot be undone.`,
+      confirmLabel: 'Delete',
+      cancelLabel: 'Keep',
+      isDestructive: true,
+      onConfirm: () => {
+        const updated = currentSet.voices.filter((v) => v.id !== voiceId);
+        onUpdateSet({
+          ...currentSet,
+          voices: updated,
+        });
+        showWarning('Voice Removed', 'Parting thought was removed from the album.');
+      },
     });
-    setHierarchyToast('✓ Student leader voice removed from album.');
-    setTimeout(() => setHierarchyToast(null), 3000);
+  };
+
+  const handleToggleUnpublishAlbum = () => {
+    const nextUnpublished = !currentSet.isUnpublished;
+    if (nextUnpublished) {
+      confirmWarning({
+        title: 'Unpublish Class Album?',
+        message: 'Unpublishing this album immediately hides it from all public visitors and the department legacy wall. All album data remains intact and restorable at any time by you or the Host.',
+        confirmLabel: 'Unpublish Album',
+        cancelLabel: 'Keep Published',
+        isDestructive: true,
+        onConfirm: () => {
+          const updated: ClassSet = {
+            ...currentSet,
+            isUnpublished: true,
+            isPublished: false,
+            unpublishedAt: new Date().toISOString(),
+            unpublishedBy: currentSet.classRepEmail || 'admin',
+          };
+          onUpdateSet(updated);
+          apiClientUnpublishAlbum(currentSet.id, true);
+          showWarning('Album Unpublished', 'The album is now hidden from public visitors. You or the Host can republish it at any time.');
+        },
+      });
+    } else {
+      const updated: ClassSet = {
+        ...currentSet,
+        isUnpublished: false,
+        isPublished: true,
+        publishedAt: currentSet.publishedAt || new Date().toISOString(),
+      };
+      onUpdateSet(updated);
+      apiClientUnpublishAlbum(currentSet.id, false);
+      showSuccess('Album Republished', 'The album is now published live and accessible to visitors.');
+    }
+  };
+
+  const handleConfirmRequestDeletion = () => {
+    const trimmed = deletionReason.trim();
+    if (!trimmed) {
+      showError('Reason Required', 'Please provide a reason for requesting album deletion.');
+      return;
+    }
+
+    const updated: ClassSet = {
+      ...currentSet,
+      deletionRequest: {
+        requestedAt: new Date().toISOString(),
+        requestedBy: currentSet.classRepName || 'Class Admin',
+        requestedByEmail: currentSet.classRepEmail || 'admin@kohot.app',
+        reason: trimmed,
+        status: 'pending',
+      },
+    };
+    onUpdateSet(updated);
+    apiClientRequestAlbumDeletion(currentSet.id, trimmed);
+    setIsRequestDeletionModalOpen(false);
+    setDeletionReason('');
+    showSuccess('Deletion Request Submitted', 'Your deletion request with reason has been forwarded to the Master Host dashboard.');
   };
 
   const handleSaveStory = () => {
@@ -2955,7 +3074,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
 
-                  {/* Simulated Album Overlay */}
+                  {/* Album Preview Overlay */}
                   <div className="absolute bottom-4 left-4 right-4">
                     <span className="font-mono-tech text-[10px] uppercase text-amber-400 font-bold">
                       {currentSet.classSetName} • Class of {currentSet.graduationYear}
@@ -3021,7 +3140,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   />
                   <div className="absolute inset-0 bg-black/50" />
 
-                  {/* Simulated Legacy Text Overlay */}
+                  {/* Legacy Text Preview Overlay */}
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4">
                     <p className="font-syne font-bold text-lg sm:text-2xl text-white tracking-widest uppercase drop-shadow">
                       THIS IS OUR LEGACY.
@@ -3324,6 +3443,93 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </div>
             </div>
           )}
+
+          {/* Red-outlined Danger Zone Box */}
+            <div className="p-6 sm:p-8 rounded-3xl border-2 border-red-500/50 bg-red-950/10 space-y-6">
+              <div className="flex items-center gap-3 pb-4 border-b border-red-500/20">
+                <div className="w-10 h-10 rounded-2xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-syne font-bold text-lg text-white">Danger Zone</h3>
+                  <p className="font-body text-xs text-zinc-400 mt-0.5">
+                    Critical album visibility and administrative removal actions
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {/* 1. Unpublish / Republish Album */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-black/40 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1 max-w-lg">
+                    <div className="font-syne font-bold text-sm text-white flex items-center gap-2">
+                      <span>{currentSet.isUnpublished ? 'Republish Album' : 'Unpublish Album'}</span>
+                      {currentSet.isUnpublished && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono-tech uppercase font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                          Currently Unpublished
+                        </span>
+                      )}
+                    </div>
+                    <p className="font-body text-xs text-zinc-400 leading-relaxed">
+                      {currentSet.isUnpublished
+                        ? 'This album is hidden from public visitors and the legacy wall. Click to make it publicly viewable again.'
+                        : 'Temporarily hide this album from visitors and the legacy wall. All profiles and data are preserved and restorable at any time.'}
+                    </p>
+                  </div>
+                  {currentSet.isUnpublished ? (
+                    <button
+                      type="button"
+                      onClick={handleToggleUnpublishAlbum}
+                      className="px-5 py-2.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-mono-tech text-xs font-bold uppercase tracking-wider transition-colors shrink-0 cursor-pointer shadow-md"
+                    >
+                      Republish Album
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleToggleUnpublishAlbum}
+                      className="px-5 py-2.5 rounded-full border border-red-500/50 hover:bg-red-500/20 text-red-400 font-mono-tech text-xs font-bold uppercase tracking-wider transition-colors shrink-0 cursor-pointer"
+                    >
+                      Unpublish Album
+                    </button>
+                  )}
+                </div>
+
+                {/* 2. Request Album Deletion */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-black/40 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1 max-w-lg">
+                    <div className="font-syne font-bold text-sm text-white flex items-center gap-2">
+                      <span>Request Album Deletion</span>
+                      {currentSet.deletionRequest?.status === 'pending' && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono-tech uppercase font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                          Request Pending
+                        </span>
+                      )}
+                    </div>
+                    <p className="font-body text-xs text-zinc-400 leading-relaxed">
+                      Album administrators cannot delete class albums directly. You may request official deletion from the KoHot Master Host. A specific reason is required.
+                    </p>
+                    {currentSet.deletionRequest?.status === 'pending' && (
+                      <div className="mt-2 text-xs font-mono-tech text-amber-300/90 bg-amber-400/10 border border-amber-400/20 p-2.5 rounded-xl">
+                        <span className="font-bold text-amber-400">Submitted reason:</span> "{currentSet.deletionRequest.reason}"
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsRequestDeletionModalOpen(true)}
+                    disabled={currentSet.deletionRequest?.status === 'pending'}
+                    className={`px-5 py-2.5 rounded-full font-mono-tech text-xs font-bold uppercase tracking-wider transition-all shrink-0 ${
+                      currentSet.deletionRequest?.status === 'pending'
+                        ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-white/5'
+                        : 'border border-red-500 bg-red-600/20 hover:bg-red-600/40 text-red-300 cursor-pointer shadow-md'
+                    }`}
+                  >
+                    {currentSet.deletionRequest?.status === 'pending' ? 'Request Pending' : 'Request Deletion'}
+                  </button>
+                </div>
+              </div>
+            </div>
         </div>
       )}
 
@@ -4335,16 +4541,14 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                                         <span>Replace</span>
                                       </button>
 
-                                      {batch.images.length > 1 && (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleDeleteImageFromBatch(batch.id, img.id)}
-                                          className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 text-[10px] font-mono-tech transition-colors cursor-pointer ml-auto"
-                                          title="Remove photo from category"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteImageFromBatch(batch.id, img.id)}
+                                        className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 text-[10px] font-mono-tech transition-colors cursor-pointer ml-auto"
+                                        title="Remove photo from category"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
                                     </div>
                                   </div>
                               ))}
@@ -5691,6 +5895,71 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Request Album Deletion Modal */}
+      {isRequestDeletionModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-fadeIn">
+          <div className="relative w-full max-w-md rounded-3xl bg-[#121318] border border-red-500/30 p-6 sm:p-7 text-white space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-syne font-bold text-base text-white">
+                    Request Album Deletion
+                  </h3>
+                  <p className="text-[11px] font-mono-tech text-zinc-400">
+                    Host review required
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRequestDeletionModalOpen(false)}
+                className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="font-body text-xs text-zinc-300 leading-relaxed">
+              Are you sure you want to request deletion of <span className="text-white font-bold">{currentSet.departmentName} (Class of {currentSet.graduationYear})</span>? The Host will review your request in the dashboard.
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold">
+                Reason for Deletion *
+              </label>
+              <textarea
+                required
+                rows={3}
+                value={deletionReason}
+                onChange={(e) => setDeletionReason(e.target.value)}
+                placeholder="State the specific reason for requesting this class album's deletion..."
+                className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-red-400 focus:outline-none resize-none font-body text-xs"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setIsRequestDeletionModalOpen(false)}
+                className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRequestDeletion}
+                className="px-6 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-syne font-bold text-xs uppercase shadow-md cursor-pointer transition-colors"
+              >
+                Submit Request
+              </button>
+            </div>
           </div>
         </div>
       )}

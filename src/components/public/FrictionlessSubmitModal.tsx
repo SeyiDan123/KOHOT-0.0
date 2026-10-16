@@ -1,11 +1,13 @@
 import React, { useState, useRef } from 'react';
 import { ClassSet, StudentProfile } from '../../types';
 import { compressImageToWebP, CompressionResult, fileToUniversalDataUrl } from '../../utils/imageCompressor';
-import { X, Upload, CheckCircle2, Sparkles, Image as ImageIcon, ArrowRight, Crown, Sliders } from 'lucide-react';
+import { X, Upload, CheckCircle2, Sparkles, Image as ImageIcon, ArrowRight, Crown, Sliders, Calendar, ExternalLink } from 'lucide-react';
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import { ImageCropModal } from '../common/ImageCropModal';
 import { UniversalModal } from '../common/UniversalModal';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
+import { generateGoogleCalendarUrl, downloadIcsCalendarFile } from '../../utils/calendarHelper';
+import { getAlbumUrl } from '../../utils/urlHelper';
 
 interface FrictionlessSubmitModalProps {
   currentSet: ClassSet;
@@ -34,6 +36,7 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
   const [compressionInfo, setCompressionInfo] = useState<CompressionResult | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [showRemindOptions, setShowRemindOptions] = useState(false);
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [rawPhotoToCrop, setRawPhotoToCrop] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -130,16 +133,66 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
               Status: <span className="font-semibold text-emerald-700">Live on Album</span>
               <p className="text-[10px] text-slate-500 mt-0.5">Your classmate card is now visible to everyone.</p>
             </div>
-            <button
-              id="finish-submit-btn"
-              onClick={() => {
-                setIsSuccess(false);
-                onClose();
-              }}
-              className="bg-slate-900 text-white font-tech text-xs tracking-wider uppercase font-bold py-3.5 px-8 rounded-full hover:bg-black transition-colors cursor-pointer shadow-md"
-            >
-              View on Album
-            </button>
+            <div className="flex flex-col items-center gap-3 w-full max-w-xs mx-auto">
+              <button
+                id="finish-submit-btn"
+                onClick={() => {
+                  setIsSuccess(false);
+                  onClose();
+                }}
+                className="w-full bg-slate-900 text-white font-tech text-xs tracking-wider uppercase font-bold py-3.5 px-6 rounded-full hover:bg-black transition-colors cursor-pointer shadow-md"
+              >
+                View on Album
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowRemindOptions(!showRemindOptions)}
+                className="w-full inline-flex items-center justify-center gap-2 text-xs font-mono-tech uppercase tracking-wider text-amber-950 bg-amber-400 hover:bg-amber-300 py-3 px-6 rounded-full transition-all cursor-pointer shadow-sm active:scale-95 font-bold"
+              >
+                <Calendar className="w-4 h-4 text-amber-950" />
+                <span>Remind Me Yearly</span>
+              </button>
+
+              {showRemindOptions && (
+                <div className="w-full p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-left animate-fadeIn shadow-sm">
+                  <div className="text-[10px] font-mono-tech text-slate-500 uppercase tracking-wider px-1">
+                    Add yearly relive reminder:
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = generateGoogleCalendarUrl({
+                        departmentName: currentSet.departmentName,
+                        graduationYear: currentSet.graduationYear,
+                        convocationDate: currentSet.convocationDate || currentSet.reminderSettings?.convocationDate,
+                        albumUrl: getAlbumUrl(currentSet.id),
+                      });
+                      window.open(url, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-xs font-mono-tech flex items-center justify-between text-slate-800 cursor-pointer transition-colors"
+                  >
+                    <span>Google Calendar</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadIcsCalendarFile({
+                        departmentName: currentSet.departmentName,
+                        graduationYear: currentSet.graduationYear,
+                        convocationDate: currentSet.convocationDate || currentSet.reminderSettings?.convocationDate,
+                        albumUrl: getAlbumUrl(currentSet.id),
+                      });
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-xs font-mono-tech flex items-center justify-between text-slate-800 cursor-pointer transition-colors"
+                  >
+                    <span>Apple / other (.ics)</span>
+                    <span className="text-[10px] text-emerald-600 font-bold uppercase">Download</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <div className="space-y-6 text-slate-900">
@@ -389,9 +442,10 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
         imageSrc={rawPhotoToCrop}
         onClose={() => setIsCropModalOpen(false)}
         onApplyCrop={handleApplyCrop}
-        initialAspectRatio="4:5"
-        title="Frame Your Graduate Portrait"
-        helperText="Center your face, adjust zoom and crop for a crisp class album portrait."
+        initialAspectRatio="1:1"
+        isProfileSubmission={true}
+        title="Position & Crop Portrait"
+        helperText="Move the square portrait frame across your photo to capture your face."
       />
     </>
   );

@@ -4,7 +4,8 @@ import {
   X, 
   Crown,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Mail
 } from 'lucide-react';
 import { StudentProfile } from '../../types';
 import { isLeaderProfile } from '../../utils/leadershipHierarchy';
@@ -203,7 +204,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
   const modalElement = (
     <div
       id="student-detail-modal-backdrop"
-      className={`fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 select-none overflow-hidden transition-colors duration-200 ${
+      className={`fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 md:p-6 select-none overflow-hidden transition-colors duration-200 ${
         effectiveIsLight 
           ? 'bg-black/60 backdrop-blur-md' 
           : 'bg-black/85 backdrop-blur-xl'
@@ -219,7 +220,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
             e.stopPropagation();
             onPrevious();
           }}
-          className={`absolute left-2 sm:left-5 top-1/2 -translate-y-1/2 z-50 w-11 h-11 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-xl border ${
+          className={`absolute left-2 sm:left-5 top-1/2 -translate-y-1/2 z-[100] w-11 h-11 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-xl border ${
             effectiveIsLight
               ? 'bg-white hover:bg-zinc-100 text-black border-zinc-300'
               : 'bg-zinc-800 hover:bg-zinc-700 text-white border-zinc-600'
@@ -239,7 +240,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
             e.stopPropagation();
             onNext();
           }}
-          className={`absolute right-2 sm:right-5 top-1/2 -translate-y-1/2 z-50 w-11 h-11 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-xl border ${
+          className={`absolute right-2 sm:right-5 top-1/2 -translate-y-1/2 z-[100] w-11 h-11 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-xl border ${
             effectiveIsLight
               ? 'bg-white hover:bg-zinc-100 text-black border-zinc-300'
               : 'bg-zinc-800 hover:bg-zinc-700 text-white border-zinc-600'
@@ -277,7 +278,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
 
         {/* Left Column: Portrait - Restored square frame, image not cut off */}
         <div 
-          className={`md:w-3/5 lg:w-2/3 h-[50vh] md:h-full relative overflow-hidden flex-shrink-0 flex items-center justify-center p-3 sm:p-6 select-none ${
+          className={`w-full md:w-3/5 lg:w-2/3 h-[50vh] md:h-full relative overflow-hidden flex-shrink-0 flex items-center justify-center p-3 sm:p-6 select-none ${
             effectiveIsLight ? 'bg-slate-50' : 'bg-[#121214]'
           }`}
           onTouchStart={handleTouchStart}
@@ -290,7 +291,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
           onWheel={handleWheel}
         >
           <div 
-            className={`aspect-square w-full max-w-[480px] md:max-w-[75vh] h-auto max-h-[75vh] relative rounded-2xl overflow-hidden flex items-center justify-center border shadow-md transition-all duration-300 ${
+            className={`relative aspect-square w-full max-w-[min(100%,480px)] max-h-full md:max-w-[min(100%,72vh)] md:max-h-[72vh] mx-auto rounded-2xl overflow-hidden flex items-center justify-center border shadow-md transition-all duration-300 ${
               effectiveIsLight ? 'bg-white border-slate-200' : 'bg-[#161619] border-zinc-800'
             }`}
           >
@@ -301,9 +302,11 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
                 cursor: zoomScale > 1.05 ? 'grab' : 'default',
               }}
             >
-              <img
-                src={student.photoUrl}
+              <GlazedImage
+                src={student.photoUrl || student.rawPhotoUrl || ''}
                 alt={student.fullName}
+                priority
+                containerClassName="w-full h-full"
                 className="w-full h-full object-cover object-center filter contrast-[1.03] select-none pointer-events-none"
                 draggable={false}
               />
@@ -351,15 +354,29 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
                 </p>
               )}
 
-              {/* Social icons positioned below nickname */}
-              <div className="mt-3">
+              {/* Social icons & Email badge positioned below nickname */}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <SocialIconsRow
                   socials={student.socials}
                   instagramOrTwitter={student.instagramOrTwitter}
-                  email={student.email}
                   isLightMode={effectiveIsLight}
                   size="md"
                 />
+                {student.email && (
+                  <a
+                    href={`mailto:${student.email}`}
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono-tech border transition-all ${
+                      effectiveIsLight
+                        ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                        : 'bg-white/5 hover:bg-white/10 text-zinc-300 border-white/10'
+                    }`}
+                    title="Send Email"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Mail className="w-3.5 h-3.5 text-[#d4af37]" />
+                    <span className="truncate max-w-[200px] sm:max-w-xs">{student.email}</span>
+                  </a>
+                )}
               </div>
             </div>
 

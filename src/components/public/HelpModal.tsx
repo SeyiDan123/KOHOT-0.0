@@ -85,7 +85,7 @@ const SUPPORT_TOPICS: SupportTopic[] = [
     id: 'plaque-continuity',
     category: 'Inviting the Next Class',
     title: 'Does the next class need a separate physical plaque?',
-    answer: 'No. The 10 × 12 inch physical departmental Legacy Plaque installed in your faculty corridor features a permanent QR gateway that links to your department Legacy Wall. Every succeeding class automatically connects under the same departmental gateway.',
+    answer: 'No. The 10 × 12 inch physical departmental Legacy Plaque installed in your department corridor features a permanent QR gateway that links to your department Legacy Wall. Every succeeding class automatically connects under the same departmental gateway.',
   },
 
   // 4. Administration

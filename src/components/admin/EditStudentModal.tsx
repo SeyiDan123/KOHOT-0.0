@@ -48,6 +48,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
   const [facebookHandle, setFacebookHandle] = useState('');
   const [photoUrl, setPhotoUrl] = useState('');
   const [rawPhotoUrl, setRawPhotoUrl] = useState('');
+  const [cropSettings, setCropSettings] = useState<any>(undefined);
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [rawPhotoToCrop, setRawPhotoToCrop] = useState('');
   const [isCompressing, setIsCompressing] = useState(false);
@@ -68,6 +69,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
       setFacebookHandle(student.socials?.facebook || '');
       setPhotoUrl(student.photoUrl || '');
       setRawPhotoUrl(student.rawPhotoUrl || student.photoUrl || '');
+      setCropSettings(student.cropSettings);
       setCompressionInfo(null);
     }
   }, [student]);
@@ -147,6 +149,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
         },
         photoUrl: effectivePhoto,
         rawPhotoUrl: rawPhotoUrl || student.rawPhotoUrl || effectivePhoto,
+        cropSettings: cropSettings || student.cropSettings,
         approved: (student.isClassRep || student.id.startsWith('admin-')) ? true : (approveNow ? true : student.approved),
         leaderOrder: hasLeaderTitle
           ? (student.leaderOrder ?? calculateIntuitiveHierarchyRank(trimmedPos))
@@ -214,8 +217,8 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
                 onClick={() => {
                   confirmWarning({
                     title: 'Delete Classmate Profile?',
-                    message: `Are you sure you want to remove "${fullName || 'this student'}" from the album? This action cannot be undone.`,
-                    confirmLabel: 'Delete Student',
+                    message: `Are you sure you want to delete "${fullName || 'this student'}" from the album? This action cannot be undone.`,
+                    confirmLabel: 'Delete Profile',
                     cancelLabel: 'Keep',
                     isDestructive: true,
                     onConfirm: () => {
@@ -225,10 +228,10 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
                     },
                   });
                 }}
-                className="px-4 py-2 rounded-xl text-red-400 hover:text-red-300 hover:bg-red-500/10 border border-red-500/20 text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer w-full sm:w-auto justify-center"
+                className="text-xs font-mono-tech text-red-500 hover:text-red-400 underline decoration-red-500/30 hover:decoration-red-400 p-2 cursor-pointer transition-colors flex items-center gap-1.5 w-full sm:w-auto justify-start"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Remove Student</span>
+                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                <span>Delete Profile</span>
               </button>
             )}
 
@@ -485,9 +488,11 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
       <ImageCropModal
         isOpen={isCropModalOpen}
         imageSrc={rawPhotoToCrop}
+        initialCropSettings={cropSettings}
         onClose={() => setIsCropModalOpen(false)}
-        onApplyCrop={(croppedUrl) => {
+        onApplyCrop={(croppedUrl, newSettings) => {
           setPhotoUrl(croppedUrl);
+          if (newSettings) setCropSettings(newSettings);
           setIsCropModalOpen(false);
         }}
         initialAspectRatio="1:1"

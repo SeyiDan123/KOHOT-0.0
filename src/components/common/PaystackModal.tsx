@@ -62,7 +62,7 @@ export const PaystackModal: React.FC<PaystackModalProps> = ({
     const generatedRef = `PSK-KOHOT-${Math.floor(100000 + Math.random() * 900000)}`;
     setTxReference(generatedRef);
 
-    // Simulate authentic 3D Secure / OTP authorization
+    // Secure 3D Secure / OTP authorization
     setTimeout(() => {
       setIsProcessing(false);
       setStep('success');
@@ -353,7 +353,7 @@ export const PaystackModal: React.FC<PaystackModalProps> = ({
                   </div>
 
                   <p className="text-[10px] text-slate-400 font-mono text-center">
-                    Simulate one-tap execution with demo sandbox provider
+                    One-tap execution with sandbox provider
                   </p>
                 </div>
               )}

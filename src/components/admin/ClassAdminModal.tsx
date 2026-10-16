@@ -87,7 +87,7 @@ export const ClassAdminModal: React.FC<ClassAdminModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [isTakeoverFormOpen, setIsTakeoverFormOpen] = useState(false);
 
-  // Takeover form simulated submission by new admin
+  // Takeover form handover submission by new admin
   const [takeoverFullName, setTakeoverFullName] = useState('');
   const [takeoverEmail, setTakeoverEmail] = useState('');
   const [takeoverPhone, setTakeoverPhone] = useState('');
@@ -237,7 +237,7 @@ export const ClassAdminModal: React.FC<ClassAdminModalProps> = ({
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
-  // Complete Takeover via Form (simulates new admin completing the handover form)
+  // Complete Takeover via Form (handles new admin completing the handover form)
   const handleCompleteTakeoverForm = (e: React.FormEvent) => {
     e.preventDefault();
     setTakeoverError('');
@@ -719,7 +719,7 @@ export const ClassAdminModal: React.FC<ClassAdminModalProps> = ({
                             </button>
                           </div>
 
-                          {/* Simulate Takeover Form Preview button */}
+                          {/* Takeover Form Preview button */}
                           <div className="pt-2 border-t border-white/10 flex items-center justify-between">
                             <span className="text-zinc-400 font-mono-tech text-xs">
                               Successor: <strong>{activeTransferRequest.toName}</strong> ({activeTransferRequest.toEmail || activeTransferRequest.toPhoneOrWhatsapp})

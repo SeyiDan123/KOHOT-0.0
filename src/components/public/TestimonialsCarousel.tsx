@@ -60,9 +60,8 @@ export const TestimonialsCarousel: React.FC = () => {
   return (
     <section 
       id="testimonials" 
-      className="py-24 sm:py-32 px-6 sm:px-10 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121214] relative overflow-hidden text-slate-900 dark:text-white transition-colors duration-300"
+      className="py-24 sm:py-32 px-6 sm:px-10 border-t border-slate-200 dark:border-zinc-800 bg-zinc-100 dark:bg-[#18181b] relative overflow-hidden text-slate-900 dark:text-white transition-colors duration-300"
     >
-
 
       <div className="max-w-7xl mx-auto relative z-10">
         {/* Section Header - SLOW-MOTION: Titles first (1250ms), then Captions (1350ms) */}
@@ -75,7 +74,7 @@ export const TestimonialsCarousel: React.FC = () => {
                   THE LEGACY, IN THEIR WORDS
                 </span>
               </div>
-              <h2 className="font-syne font-semibold text-2xl sm:text-3xl lg:text-4xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
+              <h2 className="font-syne font-bold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight leading-tight text-left">
                 The Legacy, In Their Words
               </h2>
             </ScrollReveal>

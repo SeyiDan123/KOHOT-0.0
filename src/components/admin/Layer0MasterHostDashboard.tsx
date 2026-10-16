@@ -80,7 +80,18 @@ import { MasterTestimonialsSection } from './MasterTestimonialsSection';
 import { MasterDisputesSection } from './MasterDisputesSection';
 import { MasterNextClassHandoffsSection } from './MasterNextClassHandoffsSection';
 import { MasterSupportInboxSection } from './MasterSupportInboxSection';
-import { fetchHostSupportMessages } from '../../utils/apiClient';
+import { MasterAlbumMediaSection } from './MasterAlbumMediaSection';
+import { MasterAlbumVisualsSection } from './MasterAlbumVisualsSection';
+import { 
+  fetchHostSupportMessages,
+  apiClientSoftDeleteAlbum,
+  apiClientRestoreAlbum,
+  apiClientPermanentDeleteAlbum,
+  apiClientUnpublishAlbum,
+  getAuthStatus,
+  AuthStatusResponse
+} from '../../utils/apiClient';
+import { useFeedback } from '../common/FeedbackSystem';
 import { DashboardProfileMenu } from '../common/DashboardProfileMenu';
 
 interface Layer0MasterHostDashboardProps {
@@ -100,6 +111,7 @@ interface Layer0MasterHostDashboardProps {
   onViewDepartmentLegacyWall?: (deptId: string, uniId?: string) => void;
   onEditDemoAlbum?: (setId: string) => void;
   onUpdateSingleSet?: (updatedSet: ClassSet) => void;
+  onDeleteSetPermanently?: (setId: string) => void;
   onSwitchRole: (role: 'visitor') => void;
 }
 
@@ -120,8 +132,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   onViewDepartmentLegacyWall,
   onEditDemoAlbum,
   onUpdateSingleSet,
+  onDeleteSetPermanently,
   onSwitchRole,
 }) => {
+  const { showSuccess, showError, showWarning, showInfo, confirmWarning } = useFeedback();
+  const [albumToDelete, setAlbumToDelete] = useState<{ set: ClassSet; isPermanent: boolean } | null>(null);
+  const [typedConfirmName, setTypedConfirmName] = useState('');
   const [activeTab, setActiveTab] = useState<
     'album_demos' | 'seeder' | 'founding_requests' | 'support' | 'reminders' | 'handoffs' | 'editor' | 'analytics' | 'requests' | 'testimonials' | 'disputes'
   >('album_demos');
@@ -154,6 +170,32 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     setExpandedDirectoryUnis((prev) => ({ ...prev, [uniId]: !prev[uniId] }));
   };
 
+  // System Check State (Host only • No secret values)
+  const [systemCheck, setSystemCheck] = useState<AuthStatusResponse | null>(null);
+  const [isSystemChecking, setIsSystemChecking] = useState<boolean>(false);
+
+  const runSystemCheck = async () => {
+    setIsSystemChecking(true);
+    try {
+      const res = await getAuthStatus();
+      setSystemCheck(res);
+    } catch {
+      setSystemCheck({
+        googleClientIdSet: false,
+        sessionSecretSet: false,
+        hostEmailSet: false,
+        databaseReachable: false,
+        tablesPresent: false,
+      });
+    } finally {
+      setIsSystemChecking(false);
+    }
+  };
+
+  useEffect(() => {
+    runSystemCheck();
+  }, []);
+
   // Context awareness and return rule (Request 2): return to exact spot clicked in institution directory
   useEffect(() => {
     try {
@@ -171,6 +213,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             const el = document.getElementById(spot.elementId);
             if (el) {
               el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              if (spot.uniId) {
+                const scrollContainer = document.getElementById(`dept-scroll-${spot.uniId}`);
+                if (scrollContainer) {
+                  scrollContainer.scrollTo({ left: Math.max(0, el.offsetLeft - 40), behavior: 'smooth' });
+                }
+              }
               el.classList.add('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
               setTimeout(() => {
                 el.classList.remove('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
@@ -279,7 +327,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   const [editPillar1Title, setEditPillar1Title] = useState(contentOverride.pillar1Title || 'The Class Album');
   const [editPillar1Description, setEditPillar1Description] = useState(contentOverride.pillar1Description || 'A private, interactive digital home for your class. Full individual graduate profiles, memorable moments, candid stories, and shared photos.');
   const [editPillar2Title, setEditPillar2Title] = useState(contentOverride.pillar2Title || 'The Legacy Plaque');
-  const [editPillar2Description, setEditPillar2Description] = useState(contentOverride.pillar2Description || 'A physical, beautifully cast plaque installed permanently in your faculty corridor. A scannable gateway connecting campus corridors to your class album.');
+  const [editPillar2Description, setEditPillar2Description] = useState(contentOverride.pillar2Description || 'A physical, beautifully cast plaque installed permanently in your department corridor. A scannable gateway connecting campus corridors to your class album.');
   const [editPillar3Title, setEditPillar3Title] = useState(contentOverride.pillar3Title || 'The Annual Reminder');
   const [editPillar3Description, setEditPillar3Description] = useState(contentOverride.pillar3Description || 'An automated anniversary tradition. Every year on convocation day, every graduate receives a nostalgic notification reconnecting them to their memories.');
 
@@ -371,7 +419,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       setEditPillar1Title(contentOverride.pillar1Title || 'The Class Album');
       setEditPillar1Description(contentOverride.pillar1Description || 'A private, interactive digital home for your class. Full individual graduate profiles, memorable moments, candid stories, and shared photos.');
       setEditPillar2Title(contentOverride.pillar2Title || 'The Legacy Plaque');
-      setEditPillar2Description(contentOverride.pillar2Description || 'A physical, beautifully cast plaque installed permanently in your faculty corridor. A scannable gateway connecting campus corridors to your class album.');
+      setEditPillar2Description(contentOverride.pillar2Description || 'A physical, beautifully cast plaque installed permanently in your department corridor. A scannable gateway connecting campus corridors to your class album.');
       setEditPillar3Title(contentOverride.pillar3Title || 'The Annual Reminder');
       setEditPillar3Description(contentOverride.pillar3Description || 'An automated anniversary tradition. Every year on convocation day, every graduate receives a nostalgic notification reconnecting them to their memories.');
 
@@ -436,8 +484,105 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     reader.readAsDataURL(file);
   };
 
-  // Live Department Class Albums (Demo albums are strictly isolated in Album Demos)
-  const liveSets = useMemo(() => sets.filter((s) => !s.id.startsWith('crownfield-')), [sets]);
+  // Live Department Class Albums (Demo albums are strictly isolated in Album Demos, soft-deleted albums hidden)
+  const liveSets = useMemo(() => sets.filter((s) => !s.id.startsWith('crownfield-') && !s.deletedAt), [sets]);
+
+  // Recently deleted albums (kept for 30 days)
+  const recentlyDeletedSets = useMemo(() => {
+    return sets.filter((s) => Boolean(s.deletedAt));
+  }, [sets]);
+
+  // Pending deletion requests from class admins
+  const pendingDeletionRequests = useMemo(() => {
+    return sets.filter((s) => s.deletionRequest && s.deletionRequest.status === 'pending');
+  }, [sets]);
+
+  const pendingRequestsCount = additionRequests.filter((r) => r.status === 'Pending').length + pendingDeletionRequests.length;
+
+  const handleHostToggleUnpublish = (setId: string) => {
+    const target = sets.find((s) => s.id === setId);
+    if (!target) return;
+    const nextUnpublished = !target.isUnpublished;
+    const updated: ClassSet = {
+      ...target,
+      isUnpublished: nextUnpublished,
+      isPublished: !nextUnpublished,
+      unpublishedAt: nextUnpublished ? new Date().toISOString() : undefined,
+      unpublishedBy: nextUnpublished ? currentUser.email : undefined,
+    };
+    onUpdateSingleSet?.(updated);
+    apiClientUnpublishAlbum(target.id, nextUnpublished);
+    if (nextUnpublished) {
+      showWarning('Album Unpublished', `"${target.classSetName || target.departmentName}" is now hidden from public visitors.`);
+    } else {
+      showSuccess('Album Published', `"${target.classSetName || target.departmentName}" is published live.`);
+    }
+  };
+
+  const handleStartDeleteAlbum = (targetSet: ClassSet, isPermanent: boolean = false) => {
+    setAlbumToDelete({ set: targetSet, isPermanent });
+    setTypedConfirmName('');
+  };
+
+  const handleConfirmHostDelete = () => {
+    if (!albumToDelete) return;
+    const expectedName = (albumToDelete.set.classSetName || albumToDelete.set.departmentName).trim().toLowerCase();
+    const typed = typedConfirmName.trim().toLowerCase();
+
+    if (typed !== expectedName) {
+      showError('Name Mismatch', `Please type the exact album name "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" to confirm deletion.`);
+      return;
+    }
+
+    if (albumToDelete.isPermanent) {
+      apiClientPermanentDeleteAlbum(albumToDelete.set.id, albumToDelete.set.classSetName);
+      onDeleteSetPermanently?.(albumToDelete.set.id);
+      showSuccess('Album Permanently Deleted', `"${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" and all associated data were permanently erased.`);
+    } else {
+      const updated: ClassSet = {
+        ...albumToDelete.set,
+        deletedAt: new Date().toISOString(),
+        deletedBy: currentUser.email || 'host',
+        deletionRequest: albumToDelete.set.deletionRequest ? {
+          ...albumToDelete.set.deletionRequest,
+          status: 'approved',
+        } : undefined,
+      };
+      onUpdateSingleSet?.(updated);
+      apiClientSoftDeleteAlbum(albumToDelete.set.id, albumToDelete.set.classSetName);
+      showSuccess('Album Soft-Deleted', `"${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" has been moved to Recently Deleted and hidden from all public views.`);
+    }
+
+    setAlbumToDelete(null);
+    setTypedConfirmName('');
+  };
+
+  const handleRestoreAlbum = (setId: string) => {
+    const target = sets.find((s) => s.id === setId);
+    if (!target) return;
+    const updated: ClassSet = {
+      ...target,
+      deletedAt: undefined,
+      deletedBy: undefined,
+    };
+    onUpdateSingleSet?.(updated);
+    apiClientRestoreAlbum(setId);
+    showSuccess('Album Restored', `"${target.classSetName || target.departmentName}" has been restored to active status.`);
+  };
+
+  const handleDeclineDeletionRequest = (setId: string) => {
+    const target = sets.find((s) => s.id === setId);
+    if (!target || !target.deletionRequest) return;
+    const updated: ClassSet = {
+      ...target,
+      deletionRequest: {
+        ...target.deletionRequest,
+        status: 'rejected',
+      },
+    };
+    onUpdateSingleSet?.(updated);
+    showInfo('Request Declined', 'The album deletion request was declined.');
+  };
 
   // Analytics Metrics
   const totalActiveImages = calculateTotalImages(liveSets);
@@ -714,10 +859,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           </div>
           <Layer1ClassRepDashboard
             currentUser={{
-              id: 'owner-admin',
-              email: targetSet.classRepEmail,
-              fullName: `${targetSet.classRepName} (Owner Demo Mode)`,
-              role: 'class_rep',
+              id: currentUser?.id || 'owner-admin',
+              email: currentUser.email,
+              fullName: displayedOwnerName || currentUser.fullName,
+              role: 'master_host',
               assignedSetId: targetSet.id,
             }}
             currentSet={targetSet}
@@ -774,7 +919,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               {
                 id: 'notif-owner-1',
                 title: 'Command Center Active',
-                description: `${sets.length} Class Albums active across ${universities.length} universities.`,
+                description: `${universities.length} Universities in Institutional Directory. ${liveSets.length} Live Class Albums.`,
                 time: 'Realtime',
                 unread: true,
               },
@@ -800,6 +945,104 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       {/* Main Container */}
       <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-8 sm:pt-10 space-y-8">
         
+        {/* Host Only: System Check Card */}
+        <div 
+          id="host-system-check-card"
+          className={`p-5 sm:p-6 rounded-3xl border shadow-sm transition-colors ${
+            isLightMode ? 'bg-white border-zinc-200' : 'bg-[#18181b] border-white/10'
+          }`}
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-200 dark:border-white/10">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-syne font-bold text-base text-zinc-900 dark:text-white flex items-center gap-2">
+                  <span>System Check</span>
+                  <span className="text-[10px] font-mono-tech uppercase px-2 py-0.5 rounded-full bg-amber-500/10 text-[#d4af37] border border-[#d4af37]/30">
+                    Host Only
+                  </span>
+                </h3>
+                <p className="font-mono-tech text-xs text-zinc-500 dark:text-zinc-400">
+                  Real-time configuration &amp; D1 database status (Never displays secret values)
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={runSystemCheck}
+              disabled={isSystemChecking}
+              className="px-4 py-2 rounded-full bg-zinc-100 hover:bg-zinc-200 dark:bg-white/10 dark:hover:bg-white/20 text-zinc-800 dark:text-white font-mono-tech text-xs flex items-center gap-2 transition-all cursor-pointer self-start sm:self-auto disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSystemChecking ? 'animate-spin' : ''}`} />
+              <span>Refresh Check</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-4">
+            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
+              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
+                GOOGLE_CLIENT_ID
+              </div>
+              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
+                <span className={`w-2 h-2 rounded-full ${systemCheck?.googleClientIdSet ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                <span className={systemCheck?.googleClientIdSet ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
+                  {systemCheck?.googleClientIdSet ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
+              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
+                SESSION_SECRET
+              </div>
+              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
+                <span className={`w-2 h-2 rounded-full ${systemCheck?.sessionSecretSet ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                <span className={systemCheck?.sessionSecretSet ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
+                  {systemCheck?.sessionSecretSet ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
+              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
+                HOST_EMAIL
+              </div>
+              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
+                <span className={`w-2 h-2 rounded-full ${systemCheck?.hostEmailSet ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                <span className={systemCheck?.hostEmailSet ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
+                  {systemCheck?.hostEmailSet ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
+              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
+                Database reachable
+              </div>
+              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
+                <span className={`w-2 h-2 rounded-full ${systemCheck?.databaseReachable ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                <span className={systemCheck?.databaseReachable ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
+                  {systemCheck?.databaseReachable ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1 col-span-2 sm:col-span-1">
+              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
+                Tables present
+              </div>
+              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
+                <span className={`w-2 h-2 rounded-full ${systemCheck?.tablesPresent ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                <span className={systemCheck?.tablesPresent ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
+                  {systemCheck?.tablesPresent ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Command Navigation Tabs */}
         <div className={`flex items-center gap-2 overflow-x-auto no-scrollbar border-b pb-4 ${
           isLightMode ? 'border-zinc-200' : 'border-white/[0.08]'
@@ -938,9 +1181,11 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             }`}
           >
             <Inbox className="w-3.5 h-3.5" />
-            <span>Addition Inquiries</span>
-            {additionRequests.filter((r) => r.status === 'Pending').length > 0 && (
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>Requests</span>
+            {pendingRequestsCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-red-500 text-white font-bold text-[10px] animate-pulse">
+                {pendingRequestsCount}
+              </span>
             )}
           </button>
 
@@ -1127,7 +1372,16 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                         <div className="grid grid-cols-2 gap-2">
                           <button
                             type="button"
-                            onClick={() => onViewDepartmentAlbum(liveSet.id)}
+                            onClick={() => {
+                              try {
+                                sessionStorage.setItem("kohot_host_return_spot", JSON.stringify({
+                                  tab: "album_demos",
+                                  elementId: `demo-card-${liveSet.id}`,
+                                  scrollY: window.scrollY
+                                }));
+                              } catch {}
+                              onViewDepartmentAlbum(liveSet.id);
+                            }}
                             className={`py-2 px-3 rounded-xl border text-xs font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
                               isLightMode 
                                 ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300' 
@@ -1141,6 +1395,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                           <button
                             type="button"
                             onClick={() => {
+                              try {
+                                sessionStorage.setItem("kohot_host_return_spot", JSON.stringify({
+                                  tab: "album_demos",
+                                  elementId: `demo-card-${liveSet.id}`,
+                                  scrollY: window.scrollY
+                                }));
+                              } catch {}
                               if (onViewDepartmentLegacyWall) {
                                 onViewDepartmentLegacyWall('dept-crownfield-public-law', 'crownfield');
                               } else {
@@ -1155,6 +1416,31 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                           >
                             <Layers className="w-3.5 h-3.5" />
                             <span>Legacy Wall</span>
+                          </button>
+                        </div>
+
+                        {/* Safe Deleting & Visibility Controls for Host */}
+                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/10">
+                          <button
+                            type="button"
+                            onClick={() => handleHostToggleUnpublish(liveSet.id)}
+                            className={`py-2 px-3 rounded-xl border text-[11px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                              liveSet.isUnpublished
+                                ? 'bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border-amber-400/30 font-bold'
+                                : 'bg-white/5 hover:bg-white/10 text-zinc-300 border-white/10'
+                            }`}
+                          >
+                            {liveSet.isUnpublished ? <Eye className="w-3.5 h-3.5 text-amber-400" /> : <EyeOff className="w-3.5 h-3.5 text-zinc-400" />}
+                            <span>{liveSet.isUnpublished ? 'Republish' : 'Unpublish'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleStartDeleteAlbum(liveSet, false)}
+                            className="py-2 px-3 rounded-xl border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[11px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                            <span>Delete</span>
                           </button>
                         </div>
                       </div>
@@ -1782,16 +2068,6 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                 style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch' }}
                               >
                                 {departmentsList.map((dept) => {
-                                  // Find all yearly sets belonging strictly to this department
-                                  const deptSets = sets.filter((s) => {
-                                    if (s.departmentId && s.departmentId === dept.id) return true;
-                                    const matchesName = s.departmentName.toLowerCase().trim() === dept.name.toLowerCase().trim();
-                                    const matchesUni = s.institutionId === uni.id ||
-                                                       s.institutionName.toLowerCase().includes(uni.shortCode.toLowerCase()) ||
-                                                       s.institutionName.toLowerCase().includes(uni.name.toLowerCase());
-                                    return matchesName && matchesUni;
-                                  });
-
                                   return (
                                     <div
                                       key={dept.id}
@@ -1980,7 +2256,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   <GraduationCap className="w-5 h-5 text-[#d4af37] shrink-0" />
                   <div>
                     <div className="text-[10px] font-mono-tech uppercase text-zinc-400 font-medium">Archival Class Sets</div>
-                    <div className="font-syne font-bold text-sm sm:text-base text-white">{sets.length} Class Sets Active</div>
+                    <div className="font-syne font-bold text-sm sm:text-base text-white">{liveSets.length} Live Class Sets</div>
                   </div>
                 </div>
 
@@ -2052,14 +2328,14 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 <ImageIcon className="w-3.5 h-3.5 text-[#d4af37]" />
                 <span>Album Media</span>
                 <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-[10px] font-mono-tech">
-                  {sets.length} Sets
+                  {liveSets.length} Live Sets
                 </span>
               </button>
             </div>
 
             {mediaSubTab === 'albums' ? (
               <MasterAlbumMediaSection
-                sets={sets}
+                sets={liveSets}
                 onViewDepartmentAlbum={onViewDepartmentAlbum}
                 compressionResolution={editCompressionResolution}
                 onUpdateCompressionResolution={setEditCompressionResolution}
@@ -3091,7 +3367,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           <div id="analytics-module" className="space-y-8">
             {/* Live Website Statistics & Growth Module */}
             <MasterWebsiteStatsSection
-              sets={sets}
+              sets={liveSets}
               universities={universities}
               contentOverride={contentOverride}
               onUpdateContentOverride={onUpdateContentOverride}
@@ -3150,7 +3426,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 </h3>
 
                 <div className="space-y-2.5">
-                  {sets.map((s) => {
+                  {liveSets.length === 0 ? (
+                    <div className="p-6 rounded-2xl bg-white/[0.03] border border-white/10 text-center font-mono-tech text-xs text-zinc-400">
+                      No live department class albums registered yet. Demo albums are strictly managed in the dedicated Album Demos section.
+                    </div>
+                  ) : (
+                    liveSets.map((s) => {
                     const studentCount = s.students.length;
                     const memCount = s.memories.reduce((acc, m) => acc + m.images.length, 0);
                     const awdCount = s.awards.length;
@@ -3188,7 +3469,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                         </div>
                       </div>
                     );
-                  })}
+                  }))}
                 </div>
               </div>
             </div>
@@ -3196,64 +3477,226 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         )}
 
         {/* =========================================================================
-            5. ADDITION REQUESTS
+            5. REQUESTS TAB: ALBUM DELETIONS, RECENTLY DELETED & DEPARTMENT INQUIRIES
             ========================================================================= */}
         {activeTab === 'requests' && (
-          <div id="requests-module" className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6">
-            <div className="pb-3 border-b border-white/10">
-              <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
-                <Inbox className="w-5 h-5 text-white" />
-                Unlisted Department Addition Inquiries
-              </h2>
-              <p className="font-body text-xs text-zinc-400 mt-1">
-                Incoming Class Rep inquiries requesting new universities or unlisted departments to be preloaded.
-              </p>
+          <div id="requests-module" className="space-y-8 animate-fadeIn">
+            {/* Section 1: Pending Album Deletion Requests */}
+            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border-2 border-red-500/30 space-y-6 shadow-xl">
+              <div className="pb-3 border-b border-red-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
+                    <AlertTriangle className="w-5 h-5 text-red-400" />
+                    <span>Album Deletion Requests</span>
+                    {pendingDeletionRequests.length > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-red-500 text-white font-mono-tech text-xs font-bold">
+                        {pendingDeletionRequests.length}
+                      </span>
+                    )}
+                  </h2>
+                  <p className="font-body text-xs text-zinc-400 mt-1">
+                    Submitted by album administrators. Deletion requires Host review and reason verification.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 font-body">
+                {pendingDeletionRequests.length === 0 ? (
+                  <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
+                    No pending album deletion requests in queue.
+                  </p>
+                ) : (
+                  pendingDeletionRequests.map((set) => (
+                    <div
+                      key={set.id}
+                      className="p-5 rounded-2xl bg-[#08090e] border border-red-500/20 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                    >
+                      <div className="space-y-1.5 max-w-2xl">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-syne font-bold text-white text-base">
+                            {set.classSetName || set.departmentName}
+                          </span>
+                          <span className="text-zinc-500">•</span>
+                          <span className="text-amber-400 text-xs font-mono-tech">
+                            Class of {set.graduationYear}
+                          </span>
+                          <span className="text-zinc-500">•</span>
+                          <span className="text-zinc-400 text-xs font-mono-tech">
+                            {set.institutionName}
+                          </span>
+                        </div>
+                        <div className="text-xs font-mono-tech text-zinc-400">
+                          Requested by: <span className="text-zinc-200">{set.deletionRequest?.requestedBy || set.classRepEmail || 'Admin'}</span>
+                          {set.deletionRequest?.requestedAt && ` on ${set.deletionRequest.requestedAt}`}
+                        </div>
+                        <div className="text-xs text-zinc-300 bg-red-950/20 border border-red-500/20 p-2.5 rounded-xl font-mono-tech">
+                          <span className="font-bold text-red-400">Reason:</span> "{set.deletionRequest?.reason}"
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleStartDeleteAlbum(set, false)}
+                          className="bg-red-600 hover:bg-red-500 text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer shadow-md"
+                        >
+                          Approve (Soft-Delete)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeclineDeletionRequest(set.id)}
+                          className="bg-white/10 hover:bg-white/20 text-zinc-300 hover:text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
+                        >
+                          Decline Request
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
 
-            <div className="space-y-3 font-body">
-              {additionRequests.length === 0 ? (
-                <p className="text-xs text-zinc-500 font-mono-tech py-8 text-center">
-                  No pending department requests in queue.
-                </p>
-              ) : (
-                additionRequests.map((req) => (
-                  <div
-                    key={req.id}
-                    className="p-5 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-syne font-bold text-white text-sm">
-                          {req.requestedDepartment}
-                        </span>
-                        <span className="text-zinc-500">•</span>
-                        <span className="text-zinc-300 text-xs">{req.institutionName}</span>
-                      </div>
-                      <p className="text-xs text-zinc-400 font-mono-tech mt-1">
-                        Faculty: {req.facultyName} • Rep: {req.requesterName} ({req.requesterEmail}, {req.requesterPhone})
-                      </p>
-                      {req.notes && (
-                        <p className="text-xs text-zinc-400 mt-1.5 italic">"{req.notes}"</p>
-                      )}
-                    </div>
+            {/* Section 2: Recently Deleted Albums (30-Day Retention) */}
+            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6 shadow-xl">
+              <div className="pb-3 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
+                    <Trash2 className="w-5 h-5 text-amber-400" />
+                    <span>Recently Deleted Albums</span>
+                    <span className="px-2 py-0.5 rounded-full bg-white/10 text-zinc-300 font-mono-tech text-xs">
+                      {recentlyDeletedSets.length}
+                    </span>
+                  </h2>
+                  <p className="font-body text-xs text-zinc-400 mt-1">
+                    Soft-deleted albums are hidden from all visitors and legacy walls, but preserved for 30 days before permanent erasure.
+                  </p>
+                </div>
+              </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      {req.status === 'Pending' ? (
-                        <button
-                          onClick={() => handleApproveRequest(req)}
-                          className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
-                        >
-                          Approve &amp; Seed
-                        </button>
-                      ) : (
-                        <span className="text-xs font-mono-tech text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
-                          Approved
-                        </span>
-                      )}
+              <div className="space-y-3 font-body">
+                {recentlyDeletedSets.length === 0 ? (
+                  <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
+                    No recently deleted albums.
+                  </p>
+                ) : (
+                  recentlyDeletedSets.map((s) => {
+                    const daysPassed = s.deletedAt
+                      ? Math.floor((Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24))
+                      : 0;
+                    const daysRemaining = Math.max(0, 30 - daysPassed);
+                    const canDeletePermanently = daysRemaining === 0;
+
+                    return (
+                      <div
+                        key={s.id}
+                        className="p-5 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-syne font-bold text-white text-base">
+                              {s.classSetName || s.departmentName}
+                            </span>
+                            <span className="text-zinc-500">•</span>
+                            <span className="text-zinc-300 text-xs">Class of {s.graduationYear}</span>
+                            <span className="text-zinc-500">•</span>
+                            <span className="text-zinc-400 text-xs">{s.institutionName}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech font-bold uppercase tracking-wider ${
+                              canDeletePermanently
+                                ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                : 'bg-amber-400/10 text-amber-300 border border-amber-400/20'
+                            }`}>
+                              {canDeletePermanently ? '30-Day Retention Expired' : `${daysRemaining} day${daysRemaining === 1 ? '' : 's'} remaining`}
+                            </span>
+                            <span className="text-xs text-zinc-500 font-mono-tech">
+                              Deleted: {s.deletedAt ? new Date(s.deletedAt).toLocaleDateString() : 'Recently'} by {s.deletedBy || 'Host'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreAlbum(s.id)}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
+                          >
+                            Restore Album
+                          </button>
+                          {canDeletePermanently && (
+                            <button
+                              type="button"
+                              onClick={() => handleStartDeleteAlbum(s, true)}
+                              className="bg-red-600 hover:bg-red-500 text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer shadow-md"
+                            >
+                              Delete Permanently
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Section 3: Unlisted Department Addition Inquiries */}
+            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6 shadow-xl">
+              <div className="pb-3 border-b border-white/10">
+                <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
+                  <Inbox className="w-5 h-5 text-white" />
+                  <span>Unlisted Department Addition Inquiries</span>
+                </h2>
+                <p className="font-body text-xs text-zinc-400 mt-1">
+                  Incoming Class Rep inquiries requesting new universities or unlisted departments to be preloaded.
+                </p>
+              </div>
+
+              <div className="space-y-3 font-body">
+                {additionRequests.length === 0 ? (
+                  <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
+                    No pending department requests in queue.
+                  </p>
+                ) : (
+                  additionRequests.map((req) => (
+                    <div
+                      key={req.id}
+                      className="p-5 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-syne font-bold text-white text-sm">
+                            {req.requestedDepartment}
+                          </span>
+                          <span className="text-zinc-500">•</span>
+                          <span className="text-zinc-300 text-xs">{req.institutionName}</span>
+                        </div>
+                        <p className="text-xs text-zinc-400 font-mono-tech mt-1">
+                          Faculty: {req.facultyName} • Rep: {req.requesterName} ({req.requesterEmail}, {req.requesterPhone})
+                        </p>
+                        {req.notes && (
+                          <p className="text-xs text-zinc-400 mt-1.5 italic">"{req.notes}"</p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {req.status === 'Pending' ? (
+                          <button
+                            onClick={() => handleApproveRequest(req)}
+                            className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
+                          >
+                            Approve &amp; Seed
+                          </button>
+                        ) : (
+                          <span className="text-xs font-mono-tech text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
+                            Approved
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
-              )}
+                  ))
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -3286,7 +3729,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         {activeTab === 'reminders' && (
           <MasterAnnualRemindersSection
             universities={universities}
-            sets={sets}
+            sets={liveSets}
             contentOverride={contentOverride}
             onUpdateContentOverride={onUpdateContentOverride}
           />
@@ -3297,7 +3740,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             ========================================================================= */}
         {activeTab === 'handoffs' && (
           <MasterNextClassHandoffsSection
-            sets={sets}
+            sets={liveSets}
             universities={universities}
             onViewDepartmentLegacyWall={(deptId, uniId) => onViewDepartmentLegacyWall?.(deptId, uniId)}
           />
@@ -3349,6 +3792,68 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           university={selectedDeptForPlaque.uni}
           sets={sets}
         />
+      )}
+
+      {/* Host Album Deletion Confirmation Modal */}
+      {albumToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="relative w-full max-w-lg rounded-3xl bg-[#18181b] border-2 border-red-500/50 p-6 sm:p-8 text-white space-y-5 shadow-2xl">
+            <div className="flex items-center gap-3 pb-3 border-b border-red-500/20">
+              <div className="w-10 h-10 rounded-2xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-syne font-bold text-lg text-white">
+                  {albumToDelete.isPermanent ? 'Delete Album Permanently' : 'Soft-Delete Album'}
+                </h3>
+                <p className="font-mono-tech text-xs text-red-400">
+                  {albumToDelete.isPermanent ? 'Irreversible Action • Data Erased' : 'Retained in Recently Deleted for 30 Days'}
+                </p>
+              </div>
+            </div>
+
+            <p className="font-body text-xs text-zinc-300 leading-relaxed">
+              {albumToDelete.isPermanent
+                ? `You are about to permanently erase the album "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" and all associated student profiles, memories, and photos. This cannot be undone.`
+                : `This will soft-delete "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" and hide it everywhere, including the legacy wall. It will be retained in "Recently Deleted" for 30 days.`}
+            </p>
+
+            <div className="p-3.5 rounded-xl bg-black/60 border border-white/10 space-y-2">
+              <label className="block font-mono-tech text-[11px] text-zinc-400">
+                To confirm, type the exact album name <span className="text-white font-bold font-mono">"{albumToDelete.set.classSetName || albumToDelete.set.departmentName}"</span>:
+              </label>
+              <input
+                type="text"
+                autoFocus
+                value={typedConfirmName}
+                onChange={(e) => setTypedConfirmName(e.target.value)}
+                placeholder={albumToDelete.set.classSetName || albumToDelete.set.departmentName}
+                className="w-full px-3.5 py-2.5 rounded-lg bg-zinc-900 border border-white/20 text-white font-mono text-xs focus:border-red-400 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAlbumToDelete(null);
+                  setTypedConfirmName('');
+                }}
+                className="px-4 py-2.5 rounded-full bg-white/10 hover:bg-white/15 text-zinc-300 hover:text-white font-mono-tech text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmHostDelete}
+                disabled={typedConfirmName.trim().toLowerCase() !== (albumToDelete.set.classSetName || albumToDelete.set.departmentName).trim().toLowerCase()}
+                className="px-5 py-2.5 rounded-full bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white font-mono-tech text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg shadow-red-600/30"
+              >
+                {albumToDelete.isPermanent ? 'Delete Permanently' : 'Confirm Soft Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
