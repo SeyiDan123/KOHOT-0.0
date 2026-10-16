@@ -97,13 +97,14 @@ import {
   Lock,
   Unlock,
   Sun,
-  Moon
+  Moon,
+  Pin,
+  PinOff
 } from 'lucide-react';
 import { ConvocationReminderModal } from './ConvocationReminderModal';
 import { InviteNextClassModal } from './InviteNextClassModal';
 import { PublishAlbumModal } from './PublishAlbumModal';
 import { InviteClassmatesModal } from './InviteClassmatesModal';
-import { SaveAlbumToCloudModal } from '../public/SaveAlbumToCloudModal';
 import { DashboardProfileMenu } from '../common/DashboardProfileMenu';
 import { BrandLogo } from '../common/BrandLogo';
 import { AwardTypeSelector } from '../common/AwardTypeSelector';
@@ -943,6 +944,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const [voiceTitle, setVoiceTitle] = useState('');
   const [voiceHeadshotUrl, setVoiceHeadshotUrl] = useState('');
   const [voicePartingQuote, setVoicePartingQuote] = useState('');
+  const [voiceIsPinned, setVoiceIsPinned] = useState(false);
+  const [voicePinnedTitle, setVoicePinnedTitle] = useState('From the President');
   const [selectedVoiceStudentId, setSelectedVoiceStudentId] = useState<string>('');
   const [isVoicePickerOpen, setIsVoicePickerOpen] = useState(false);
   const voicePhotoInputRef = useRef<HTMLInputElement>(null);
@@ -950,7 +953,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   // Dedicated Edit Modals for Awards and Final Thoughts to eliminate scrolling
   const [editingAwardModalItem, setEditingAwardModalItem] = useState<AwardItem | null>(null);
   const [editingVoiceModalItem, setEditingVoiceModalItem] = useState<VoiceItem | null>(null);
-  const [isSaveToCloudOpen, setIsSaveToCloudOpen] = useState(false);
   const [isShareAlbumModalOpen, setIsShareAlbumModalOpen] = useState(false);
   const [copiedAlbumShareLink, setCopiedAlbumShareLink] = useState(false);
   const modalAwardPhotoInputRef = useRef<HTMLInputElement>(null);
@@ -1013,23 +1015,63 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   };
 
   const handleOpenEditVoiceModal = (voice: VoiceItem) => {
-    setEditingVoiceModalItem({ ...voice });
+    setEditingVoiceModalItem({ 
+      ...voice,
+      pinnedTitle: voice.pinnedTitle || 'From the President',
+    });
   };
 
   const handleSaveVoiceModal = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingVoiceModalItem) return;
-    const updated = currentSet.voices.map((v) =>
-      v.id === editingVoiceModalItem.id ? editingVoiceModalItem : v
-    );
+    const isPinned = Boolean(editingVoiceModalItem.isPinned);
+    const updated = currentSet.voices.map((v) => {
+      if (v.id === editingVoiceModalItem.id) {
+        return {
+          ...editingVoiceModalItem,
+          isPinned,
+          pinnedTitle: isPinned ? (editingVoiceModalItem.pinnedTitle?.trim() || 'From the President') : undefined,
+        };
+      }
+      return isPinned ? { ...v, isPinned: false } : v;
+    });
     onUpdateSet({
       ...currentSet,
       voices: updated,
     });
-    setHierarchyToast('✓ Final thought updated successfully!');
+    const msg = isPinned 
+      ? `✓ Pinned as "${editingVoiceModalItem.pinnedTitle?.trim() || 'From the President'}" (shows first)` 
+      : '✓ Final thought updated successfully!';
+    setHierarchyToast(msg);
     setTimeout(() => setHierarchyToast(null), 3000);
-    showSuccess('Final thought updated.');
+    showSuccess(msg);
     setEditingVoiceModalItem(null);
+  };
+
+  const handleTogglePinVoice = (voiceId: string) => {
+    const target = currentSet.voices.find((v) => v.id === voiceId);
+    if (!target) return;
+    const isNowPinned = !target.isPinned;
+    const updated = currentSet.voices.map((v) => {
+      if (v.id === voiceId) {
+        return {
+          ...v,
+          isPinned: isNowPinned,
+          pinnedTitle: isNowPinned ? (v.pinnedTitle || 'From the President') : undefined,
+        };
+      }
+      return isNowPinned ? { ...v, isPinned: false } : v;
+    });
+    onUpdateSet({
+      ...currentSet,
+      voices: updated,
+    });
+    const msg = isNowPinned 
+      ? `✓ Pinned as "${target.pinnedTitle || 'From the President'}" (shows first)` 
+      : '✓ Message unpinned';
+    setHierarchyToast(msg);
+    setTimeout(() => setHierarchyToast(null), 3000);
+    showSuccess(isNowPinned ? 'Pinned message to top.' : 'Unpinned message.');
   };
 
   const handleModalAwardPhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1803,20 +1845,28 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       title: voiceTitle || 'Student Leader / Executive',
       headshotUrl: voiceHeadshotUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=320&auto=format&fit=crop&q=85',
       partingQuote: voicePartingQuote,
+      isPinned: voiceIsPinned,
+      pinnedTitle: voiceIsPinned ? (voicePinnedTitle.trim() || 'From the President') : undefined,
     };
+
+    const existingVoices = voiceIsPinned 
+      ? currentSet.voices.map(v => ({ ...v, isPinned: false }))
+      : currentSet.voices;
 
     onUpdateSet({
       ...currentSet,
-      voices: [newVoice, ...currentSet.voices],
+      voices: [newVoice, ...existingVoices],
     });
 
     setVoiceLecturerName('');
     setVoiceTitle('');
     setVoiceHeadshotUrl('');
     setVoicePartingQuote('');
+    setVoiceIsPinned(false);
+    setVoicePinnedTitle('From the President');
     setSelectedVoiceStudentId('');
     setIsAddingVoice(false);
-    setHierarchyToast('✓ Student leader voice saved to album.');
+    setHierarchyToast(voiceIsPinned ? '✓ Final thought pinned as featured message!' : '✓ Final thought saved to album.');
     setTimeout(() => setHierarchyToast(null), 3000);
   };
 
@@ -2054,25 +2104,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 >
                   <Share2 className="w-3.5 h-3.5 shrink-0" />
                   <span className="truncate">{shareAlbumToast ? 'Copied Link!' : 'Share'}</span>
-                </button>
-
-                <button
-                  id="album-admin-save-album-btn"
-                  disabled={!isAlbumPublished}
-                  onClick={() => setIsSaveToCloudOpen(true)}
-                  title={
-                    isAlbumPublished
-                      ? 'Save and backup album link and QR code to Google Drive / Cloud'
-                      : 'Save album activates automatically once the album is published or toggled live'
-                  }
-                  className={`py-2 px-2.5 rounded-2xl font-syne font-bold text-[11px] sm:text-xs tracking-wider uppercase flex items-center justify-center gap-1 transition-all text-center ${
-                    isAlbumPublished
-                      ? 'bg-[#d4af37]/20 hover:bg-[#d4af37]/30 text-[#d4af37] border border-[#d4af37]/40 shadow-md cursor-pointer active:scale-98'
-                      : 'bg-white/5 text-zinc-500 border border-white/5 cursor-not-allowed opacity-40'
-                  }`}
-                >
-                  <HardDrive className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">Save</span>
                 </button>
               </div>
             </div>
@@ -5173,12 +5204,46 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   </label>
                   <textarea
                     required
-                    rows={2}
+                    rows={3}
                     value={voicePartingQuote}
                     onChange={(e) => setVoicePartingQuote(e.target.value)}
                     placeholder="Carry the discipline and brotherhood we forged in these lecture halls into every sphere of your life."
                     className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none font-body"
                   />
+                </div>
+
+                {/* Pin as Featured Message (e.g. From the President) */}
+                <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                  <label className="flex items-center gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={voiceIsPinned}
+                      onChange={(e) => setVoiceIsPinned(e.target.checked)}
+                      className="w-4 h-4 rounded border-zinc-600 text-amber-500 focus:ring-amber-400"
+                    />
+                    <div className="flex items-center gap-1.5 font-mono-tech text-xs text-white font-semibold">
+                      <Pin className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Pin this message to the top</span>
+                    </div>
+                  </label>
+
+                  {voiceIsPinned && (
+                    <div className="pt-2 border-t border-white/10 space-y-1.5 animate-fadeIn">
+                      <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-amber-300">
+                        Pinned Message Title
+                      </label>
+                      <input
+                        type="text"
+                        value={voicePinnedTitle}
+                        onChange={(e) => setVoicePinnedTitle(e.target.value)}
+                        placeholder="e.g. From the President"
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none text-xs font-mono-tech"
+                      />
+                      <p className="font-mono-tech text-[10px] text-zinc-400">
+                        This pinned message will display first in the Final Thoughts section with the author's portrait, name, role, and a "Read more" toggle for text over about 120 words.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-3 pt-2">
@@ -5219,21 +5284,50 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 </div>
               ) : (
                 currentSet.voices.map((voice) => (
-                  <div key={voice.id} className="p-5 rounded-2xl bg-[#0c0d14] border border-white/10 flex items-start justify-between gap-4">
+                  <div 
+                    key={voice.id} 
+                    className={`p-5 rounded-2xl border flex items-start justify-between gap-4 transition-all ${
+                      voice.isPinned 
+                        ? 'bg-gradient-to-r from-amber-500/10 via-[#0c0d14] to-[#0c0d14] border-amber-500/40 shadow-lg shadow-amber-500/5' 
+                        : 'bg-[#0c0d14] border-white/10'
+                    }`}
+                  >
                     <div className="flex items-start gap-4 min-w-0">
                       <img
                         src={voice.headshotUrl}
                         alt={voice.lecturerName}
                         referrerPolicy="no-referrer"
-                        className="w-12 h-12 rounded-full object-cover border border-white/20 filter grayscale shrink-0"
+                        className={`w-12 h-12 rounded-full object-cover border filter grayscale shrink-0 ${
+                          voice.isPinned ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-white/20'
+                        }`}
                       />
-                      <div className="min-w-0">
+                      <div className="min-w-0 space-y-1">
+                        {voice.isPinned && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-[10px] font-mono-tech font-bold uppercase tracking-wider">
+                            <Pin className="w-3 h-3 text-amber-400" />
+                            <span>Pinned: {voice.pinnedTitle || 'From the President'}</span>
+                          </div>
+                        )}
                         <h4 className="font-syne font-bold text-sm text-white truncate">{voice.lecturerName}</h4>
                         <p className="font-mono-tech text-xs text-amber-300">{voice.title}</p>
                         <p className="font-body text-xs text-zinc-300 italic mt-1.5 leading-relaxed">"{voice.partingQuote}"</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePinVoice(voice.id)}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-mono-tech flex items-center gap-1.5 transition-colors cursor-pointer ${
+                          voice.isPinned
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
+                            : 'bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white'
+                        }`}
+                        title={voice.isPinned ? 'Unpin message' : 'Pin message as From the President (shows first)'}
+                      >
+                        {voice.isPinned ? <PinOff className="w-3 h-3 text-amber-400" /> : <Pin className="w-3 h-3 text-zinc-400" />}
+                        <span>{voice.isPinned ? 'Unpin' : 'Pin'}</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => handleOpenEditVoiceModal(voice)}
@@ -5414,15 +5508,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             }
             setIsCropModalOpen(false);
           }}
-        />
-      )}
-
-      {/* Save Album to Cloud Modal for Dashboard */}
-      {isSaveToCloudOpen && (
-        <SaveAlbumToCloudModal
-          isOpen={isSaveToCloudOpen}
-          onClose={() => setIsSaveToCloudOpen(false)}
-          currentSet={currentSet}
         />
       )}
 
@@ -5876,6 +5961,53 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   }
                   className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none font-body"
                 />
+              </div>
+
+              {/* Pin as Featured Message (e.g. From the President) */}
+              <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingVoiceModalItem.isPinned)}
+                    onChange={(e) =>
+                      setEditingVoiceModalItem({
+                        ...editingVoiceModalItem,
+                        isPinned: e.target.checked,
+                        pinnedTitle: e.target.checked
+                          ? (editingVoiceModalItem.pinnedTitle?.trim() || 'From the President')
+                          : editingVoiceModalItem.pinnedTitle,
+                      })
+                    }
+                    className="w-4 h-4 rounded border-zinc-600 text-amber-500 focus:ring-amber-400"
+                  />
+                  <div className="flex items-center gap-1.5 font-mono-tech text-xs text-white font-semibold">
+                    <Pin className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Pin this message to the top</span>
+                  </div>
+                </label>
+
+                {editingVoiceModalItem.isPinned && (
+                  <div className="pt-2 border-t border-white/10 space-y-1.5 animate-fadeIn">
+                    <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-amber-300">
+                      Pinned Message Title
+                    </label>
+                    <input
+                      type="text"
+                      value={editingVoiceModalItem.pinnedTitle || ''}
+                      onChange={(e) =>
+                        setEditingVoiceModalItem({
+                          ...editingVoiceModalItem,
+                          pinnedTitle: e.target.value,
+                        })
+                      }
+                      placeholder="e.g. From the President"
+                      className="w-full px-3.5 py-2 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none text-xs font-mono-tech"
+                    />
+                    <p className="font-mono-tech text-[10px] text-zinc-400">
+                      This pinned message will display first in the Final Thoughts section with the author's portrait, name, role, and a "Read more" toggle for text over about 120 words.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Actions */}

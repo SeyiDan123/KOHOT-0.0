@@ -28,8 +28,8 @@ function workerApiPlugin() {
             });
 
             const webRes = await worker.fetch(webReq, {
-              GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '',
-              SESSION_SECRET: process.env.SESSION_SECRET || '',
+              GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '688826683374-i08rgemf0ghvdabmelefmplju2q0rauh.apps.googleusercontent.com',
+              SESSION_SECRET: process.env.SESSION_SECRET || 'dev-session-secret-kohot-2025',
               HOST_EMAIL: process.env.HOST_EMAIL || 'seyidan03@gmail.com',
               PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || '',
               RESEND_API_KEY: process.env.RESEND_API_KEY || '',

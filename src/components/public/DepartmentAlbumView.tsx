@@ -51,7 +51,10 @@ import {
   Sun,
   Moon,
   Bookmark,
-  AlertTriangle
+  AlertTriangle,
+  Pin,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { StudentDetailModal } from './StudentDetailModal';
 import { FrictionlessSubmitModal } from './FrictionlessSubmitModal';
@@ -64,7 +67,6 @@ import { SocialIconsRow } from '../common/SocialIconsRow';
 import { GlazedImage } from '../common/GlazedImage';
 import { getYouTubeThumbnailUrl } from '../../utils/youtube';
 import { updateSocialMetaTags, updateManifestTag } from '../../utils/metaTags';
-import { saveAlbumShortcutToDrive } from '../../utils/googleDriveHelper';
 import { getAwardVisualConfig } from '../../utils/awardVisuals';
 import { getLuxuryThemeById, DarkLuxuryTheme, LUXURY_PAPER_TEXTURE_SVG } from '../../utils/luxuryThemes';
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
@@ -235,7 +237,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         if (targetId) {
           sessionStorage.removeItem('kohot_album_preview_target_id');
           setTimeout(() => {
-            const el = document.getElementById(`student-card-${targetId}`) || document.getElementById(`award-card-${targetId}`);
+            const el = document.getElementById(`student-card-${targetId}`) || 
+                       document.getElementById(`award-card-${targetId}`) ||
+                       document.getElementById(`voice-card-${targetId}`) ||
+                       document.getElementById(`pinned-voice-card-${targetId}`);
             if (el) {
               el.scrollIntoView({ behavior: 'smooth', block: 'center' });
               return;
@@ -273,11 +278,15 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [isKeepSheetOpen, setIsKeepSheetOpen] = useState(false);
-  const [isSavingToDrive, setIsSavingToDrive] = useState(false);
-  const [driveNotification, setDriveNotification] = useState<{ message: string; success: boolean; url?: string } | null>(null);
   const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState<DepartmentVideoItem | null>(null);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+  const [isPinnedExpanded, setIsPinnedExpanded] = useState(false);
+
+  // Reset pinned voice expanded state on album switch
+  useEffect(() => {
+    setIsPinnedExpanded(false);
+  }, [currentSet?.id]);
 
   // Update dynamic web app manifest for this album
   useEffect(() => {
@@ -393,38 +402,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [lightboxMomentIndex, lightboxMomentsList]);
-
-  const handleHeaderSaveToDrive = async () => {
-    setIsSavingToDrive(true);
-    setDriveNotification(null);
-    try {
-      const res = await saveAlbumShortcutToDrive(currentSet);
-      if (res.success) {
-        setDriveNotification({
-          success: true,
-          message: 'Saved to your Google Drive! Clicking the shortcut in Drive opens this live album directly.',
-          url: res.driveViewUrl,
-        });
-      } else if (res.cancelled) {
-        setDriveNotification({
-          success: false,
-          message: 'Google permission request was cancelled.',
-        });
-      } else {
-        setDriveNotification({
-          success: false,
-          message: res.error || 'Failed to save to Google Drive.',
-        });
-      }
-    } catch (err: any) {
-      setDriveNotification({
-        success: false,
-        message: err?.message || 'Could not connect to Google Drive.',
-      });
-    } finally {
-      setIsSavingToDrive(false);
-    }
-  };
 
   // Sub-tab state for Moments & Highlights (Moments vs Highlights side-by-side)
   const [memoriesViewSubTab, setMemoriesViewSubTab] = useState<'moments' | 'highlights'>('moments');
@@ -771,43 +748,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             </button>
           </div>
         </div>
-
-        {/* Global Toast Notification for Drive Save */}
-        {driveNotification && (
-          <div 
-            id="drive-notification-toast"
-            className={`w-full max-w-5xl mx-auto mt-2 px-4 py-2.5 rounded-2xl text-xs font-mono-tech flex items-center justify-between gap-3 animate-pop-in ${
-              driveNotification.success
-                ? 'bg-emerald-950/90 border border-emerald-500/30 text-emerald-200'
-                : 'bg-amber-950/90 border border-amber-500/30 text-amber-200'
-            }`}
-          >
-            <div className="flex items-center gap-2 truncate">
-              <HardDrive className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">{driveNotification.message}</span>
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
-              {driveNotification.url && (
-                <a
-                  href={driveNotification.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline hover:text-white flex items-center gap-1"
-                >
-                  <span>Open Drive</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              )}
-              <button
-                onClick={() => setDriveNotification(null)}
-                className="text-white/60 hover:text-white cursor-pointer"
-                title="Dismiss"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        )}
       </header>
  
       {/* Read-Only Notice Banner when an Admin is viewing another cohort's album */}
@@ -1827,75 +1767,183 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             </p>
           </div>
 
-          {(!currentSet.voices || currentSet.voices.length === 0) ? (
-            <div className={`text-center py-16 px-6 border border-dashed rounded-3xl space-y-3 ${
-              isLightMode ? 'bg-white border-zinc-200 text-zinc-900 shadow-sm' : 'border-white/10 bg-[#18181b] text-white'
-            }`}>
-              <Quote className="w-8 h-8 text-zinc-500 mx-auto" />
-              <p className={`font-syne text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Final Thoughts Published Yet</p>
-              <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                Parting reflections and words of guidance from faculty advisers, lecturers, and class leaders will appear here.
-              </p>
-            </div>
-          ) : (
-            <div 
-              id="voices-grid"
-              className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6"
-            >
-              {currentSet.voices.map((voice) => (
-                <div
-                  key={voice.id}
-                  id={`voice-card-${voice.id}`}
-                  className={`rounded-2xl p-6 flex flex-col justify-between shadow-lg border ${
-                    isLightMode 
-                      ? 'bg-white border-zinc-200 text-zinc-900 shadow-md hover:border-zinc-400' 
-                      : 'bg-[#18181b] border-white/[0.08] text-white hover:border-white/30'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border-2 border-white/30 shadow-2xl ring-4 ring-white/10 shrink-0 bg-zinc-900">
+          {(() => {
+            const voicesList = currentSet.voices || [];
+            if (voicesList.length === 0) {
+              return (
+                <div className={`text-center py-16 px-6 border border-dashed rounded-3xl space-y-3 ${
+                  isLightMode ? 'bg-white border-zinc-200 text-zinc-900 shadow-sm' : 'border-white/10 bg-[#18181b] text-white'
+                }`}>
+                  <Quote className="w-8 h-8 text-zinc-500 mx-auto" />
+                  <p className={`font-syne text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Final Thoughts Published Yet</p>
+                  <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                    Parting reflections and words of guidance from faculty advisers, lecturers, and class leaders will appear here.
+                  </p>
+                </div>
+              );
+            }
+
+            const pinnedVoice = voicesList.find((v) => Boolean(v.isPinned));
+            const remainingVoices = pinnedVoice 
+              ? voicesList.filter((v) => v.id !== pinnedVoice.id)
+              : voicesList;
+
+            const pinnedQuoteText = pinnedVoice ? (pinnedVoice.partingQuote || pinnedVoice.quote || '') : '';
+            const pinnedQuoteWords = pinnedQuoteText.trim().split(/\s+/).filter(Boolean);
+            const isPinnedOver120Words = pinnedQuoteWords.length > 120;
+            const displayedPinnedQuote = (!isPinnedOver120Words || isPinnedExpanded)
+              ? pinnedQuoteText
+              : pinnedQuoteWords.slice(0, 120).join(' ') + '…';
+
+            return (
+              <>
+                {/* Pinned Voice Card (e.g. "From the President") */}
+                {pinnedVoice && (
+                  <div
+                    key={pinnedVoice.id}
+                    id={`pinned-voice-card-${pinnedVoice.id}`}
+                    className={`mb-6 sm:mb-8 rounded-3xl p-6 sm:p-8 border shadow-xl relative overflow-hidden transition-all ${
+                      isLightMode
+                        ? 'bg-gradient-to-br from-amber-50/90 via-white to-amber-50/40 border-amber-300 text-zinc-900 shadow-amber-900/5 ring-1 ring-amber-400/20'
+                        : 'bg-gradient-to-br from-[#1c1917]/90 via-[#18181b] to-[#121318] border-amber-500/40 text-white shadow-black/40 ring-1 ring-amber-500/20'
+                    }`}
+                  >
+                    {/* Subtle decorative gold glow */}
+                    <div className="absolute top-0 right-0 w-72 h-72 bg-amber-500/5 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
+
+                    {/* Pinned Title Header */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-5 pb-4 border-b border-amber-500/20">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-500 dark:text-amber-400 text-xs font-mono-tech font-bold uppercase tracking-wider">
+                        <Pin className="w-3.5 h-3.5 text-amber-500 fill-amber-500/40" />
+                        <span>{pinnedVoice.pinnedTitle?.trim() || 'From the President'}</span>
+                      </div>
+                      <span className={`font-mono-tech text-[11px] ${isLightMode ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                        Featured Final Thought
+                      </span>
+                    </div>
+
+                    {/* Author & Quote Body */}
+                    <div className="flex flex-col sm:flex-row items-start gap-5 sm:gap-6">
+                      {/* Author Photo */}
+                      <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl overflow-hidden border-2 border-amber-400/60 shadow-2xl ring-4 ring-amber-400/10 shrink-0 bg-zinc-900">
                         <GlazedImage
-                          src={voice.headshotUrl}
-                          alt={voice.lecturerName}
+                          src={pinnedVoice.headshotUrl || pinnedVoice.avatarUrl}
+                          alt={pinnedVoice.lecturerName || pinnedVoice.authorName || 'Author'}
                           showMonogram={false}
                           className="w-full h-full object-cover"
                           containerClassName="w-full h-full"
                         />
                       </div>
-                      <div className="min-w-0">
-                        <h3 className={`font-syne font-bold text-base sm:text-lg leading-tight truncate ${
-                          isLightMode ? 'text-zinc-900' : 'text-white'
-                        }`}>
-                          {voice.lecturerName}
-                        </h3>
-                        <p className={`font-mono-tech text-xs font-semibold mt-1 leading-snug ${
-                          isLightMode ? 'text-[#b89728]' : 'text-[#d4af37]'
-                        }`}>
-                          {voice.title}
-                        </p>
-                        <span className={`inline-block mt-1 font-mono-tech text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                          isLightMode 
-                            ? 'text-zinc-700 bg-zinc-100 border-zinc-300 font-semibold' 
-                            : 'text-zinc-400 bg-white/5 border-white/10'
-                        }`}>
-                          Faculty Reflection
-                        </span>
+
+                      {/* Author Details & Quote */}
+                      <div className="flex-1 min-w-0">
+                        <div>
+                          <h3 className={`font-syne font-bold text-lg sm:text-xl leading-tight ${
+                            isLightMode ? 'text-zinc-900' : 'text-white'
+                          }`}>
+                            {pinnedVoice.lecturerName || pinnedVoice.authorName}
+                          </h3>
+                          <p className={`font-mono-tech text-xs sm:text-sm font-semibold mt-1 leading-snug ${
+                            isLightMode ? 'text-amber-700' : 'text-[#d4af37]'
+                          }`}>
+                            {pinnedVoice.title || pinnedVoice.role}
+                          </p>
+                        </div>
+
+                        <div className="relative pt-3 mt-1">
+                          <p className={`font-body text-sm sm:text-base italic leading-relaxed whitespace-pre-line ${
+                            isLightMode ? 'text-zinc-800' : 'text-zinc-200'
+                          }`}>
+                            “{displayedPinnedQuote}”
+                          </p>
+
+                          {isPinnedOver120Words && (
+                            <button
+                              type="button"
+                              onClick={() => setIsPinnedExpanded((prev) => !prev)}
+                              className={`inline-flex items-center gap-1.5 mt-3 font-mono-tech text-xs font-bold transition-colors cursor-pointer ${
+                                isLightMode 
+                                  ? 'text-amber-700 hover:text-amber-900' 
+                                  : 'text-[#d4af37] hover:text-amber-300'
+                              }`}
+                            >
+                              <span>{isPinnedExpanded ? 'Read less' : 'Read more'}</span>
+                              {isPinnedExpanded ? (
+                                <ChevronUp className="w-3.5 h-3.5" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
-
-                    <div className="relative pt-2">
-                      <p className={`font-body text-sm sm:text-base italic leading-relaxed ${
-                        isLightMode ? 'text-zinc-800' : 'text-zinc-300'
-                      }`}>
-                        “{voice.partingQuote}”
-                      </p>
-                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                )}
+
+                {/* Remaining Voices Grid */}
+                {remainingVoices.length > 0 && (
+                  <div 
+                    id="voices-grid"
+                    className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6"
+                  >
+                    {remainingVoices.map((voice) => (
+                      <div
+                        key={voice.id}
+                        id={`voice-card-${voice.id}`}
+                        className={`rounded-2xl p-6 flex flex-col justify-between shadow-lg border ${
+                          isLightMode 
+                            ? 'bg-white border-zinc-200 text-zinc-900 shadow-md hover:border-zinc-400' 
+                            : 'bg-[#18181b] border-white/[0.08] text-white hover:border-white/30'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center gap-4 mb-4">
+                            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border-2 border-white/30 shadow-2xl ring-4 ring-white/10 shrink-0 bg-zinc-900">
+                              <GlazedImage
+                                src={voice.headshotUrl}
+                                alt={voice.lecturerName}
+                                showMonogram={false}
+                                className="w-full h-full object-cover"
+                                containerClassName="w-full h-full"
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <h3 className={`font-syne font-bold text-base sm:text-lg leading-tight truncate ${
+                                isLightMode ? 'text-zinc-900' : 'text-white'
+                              }`}>
+                                {voice.lecturerName}
+                              </h3>
+                              <p className={`font-mono-tech text-xs font-semibold mt-1 leading-snug ${
+                                isLightMode ? 'text-[#b89728]' : 'text-[#d4af37]'
+                              }`}>
+                                {voice.title}
+                              </p>
+                              <span className={`inline-block mt-1 font-mono-tech text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                isLightMode 
+                                  ? 'text-zinc-700 bg-zinc-100 border-zinc-300 font-semibold' 
+                                  : 'text-zinc-400 bg-white/5 border-white/10'
+                              }`}>
+                                Faculty Reflection
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="relative pt-2">
+                            <p className={`font-body text-sm sm:text-base italic leading-relaxed ${
+                              isLightMode ? 'text-zinc-800' : 'text-zinc-300'
+                            }`}>
+                              “{voice.partingQuote}”
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </section>
       )}
 

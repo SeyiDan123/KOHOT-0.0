@@ -78,17 +78,9 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
   const [nextRepName, setNextRepName] = useState<string>('');
   const [nextRepPhone, setNextRepPhone] = useState<string>('');
   const [nextRepEmail, setNextRepEmail] = useState<string>('');
-  const [contactPickerSupported, setContactPickerSupported] = useState(false);
 
   // Storage key for persisting draft if admin exits
-  const draftStorageKey = `kohot_publish_album_draft_${currentSet.id}`;
-
-  // Check contact picker support on mount
-  useEffect(() => {
-    if (typeof window !== 'undefined' && 'contacts' in navigator && 'ContactsManager' in window) {
-      setContactPickerSupported(true);
-    }
-  }, []);
+  const draftStorageKey = `kohot_publish_draft_${currentSet.id}`;
 
   // Load draft on mount / open
   useEffect(() => {
@@ -171,30 +163,6 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
   );
 
   const canPublish = isStep1Complete && isStep2Complete && isStep3Complete;
-
-  // Native Mobile Contact Picker integration
-  const handlePickNativeContact = async () => {
-    try {
-      if ('contacts' in navigator && 'select' in (navigator as any).contacts) {
-        const props = ['name', 'tel', 'email'];
-        const contacts = await (navigator as any).contacts.select(props, { multiple: false });
-        if (contacts && contacts.length > 0) {
-          const picked = contacts[0];
-          if (picked.name && picked.name[0]) {
-            setNextRepName(picked.name[0]);
-          }
-          if (picked.tel && picked.tel[0]) {
-            setNextRepPhone(picked.tel[0]);
-          }
-          if (picked.email && picked.email[0]) {
-            setNextRepEmail(picked.email[0]);
-          }
-        }
-      }
-    } catch (err) {
-      console.log('Contact picker dismissed or not accessible:', err);
-    }
-  };
 
   // Execution of Publication
   const handleFinalPublish = () => {
@@ -700,17 +668,6 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
                         Next Class Representative — {nextGraduationYear}
                       </h4>
 
-                      {/* Native Contact Picker Button if supported */}
-                      {contactPickerSupported && (
-                        <button
-                          type="button"
-                          onClick={handlePickNativeContact}
-                          className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                        >
-                          <Smartphone className="w-3.5 h-3.5 text-amber-400" />
-                          <span>+ Add from Contacts</span>
-                        </button>
-                      )}
                     </div>
 
                     <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed">

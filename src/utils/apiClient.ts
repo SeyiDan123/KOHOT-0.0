@@ -10,23 +10,6 @@ import { getStoredFoundingClassRequests, getStoredSets } from '../data/initialDa
 export const HOST_EMAIL = 'seyidan03@gmail.com';
 export const STANDARD_PRICE = 50000; // Flat 50,000 NGN
 
-export interface AuthResponse {
-  success: boolean;
-  user?: UserAccount;
-  error?: string;
-  message?: string;
-}
-
-export interface VerifyPaymentResponse {
-  success: boolean;
-  status?: string;
-  reference?: string;
-  error?: string;
-  message?: string;
-}
-
-/**
- * Handle Google Auth response via Worker /api/auth/google
 export interface AuthStatusResponse {
   googleClientIdSet: boolean;
   sessionSecretSet: boolean;
@@ -42,6 +25,14 @@ export interface AuthResponse {
   error?: string;
   message?: string;
   status?: number;
+}
+
+export interface VerifyPaymentResponse {
+  success: boolean;
+  status?: string;
+  reference?: string;
+  error?: string;
+  message?: string;
 }
 
 /**
@@ -121,6 +112,20 @@ export async function getAuthStatus(): Promise<AuthStatusResponse> {
     databaseReachable: false,
     tablesPresent: false,
   };
+}
+
+/**
+ * GET /api/auth/config - Public configuration returning googleClientId from Worker env
+ */
+export async function fetchAuthConfig(): Promise<{ googleClientId: string }> {
+  try {
+    const res = await fetch('/api/auth/config');
+    if (res.ok) {
+      const data = await res.json();
+      return { googleClientId: (data.googleClientId || '').trim() };
+    }
+  } catch {}
+  return { googleClientId: '' };
 }
 
 /**

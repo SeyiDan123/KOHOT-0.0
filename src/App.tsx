@@ -1088,7 +1088,7 @@ export default function App() {
               onLogout={handleLogout}
               contentOverride={contentOverride}
               currentUser={null}
-              universities={universities}
+              sets={sets}
             />
           )
         )}
@@ -1153,7 +1153,7 @@ export default function App() {
               onLogout={handleLogout}
               contentOverride={contentOverride}
               currentUser={null}
-              universities={universities}
+              sets={sets}
             />
           )
         )}
@@ -1172,7 +1172,6 @@ export default function App() {
         isOpen={isLoginOpen}
         onClose={() => setIsLoginOpen(false)}
         availableSets={sets}
-        foundingRequests={foundingRequests}
         onLoginSuccess={handleLoginSuccess}
       />
 

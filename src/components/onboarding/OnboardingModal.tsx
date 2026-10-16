@@ -32,7 +32,7 @@ import {
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 import { AlbumAdminHelpModal } from '../admin/AlbumAdminHelpModal';
 import { PaystackModal } from '../common/PaystackModal';
-import { verifyPaystackPaymentOnServer, STANDARD_PRICE, HOST_EMAIL, requestGoogleSignupToken } from '../../utils/apiClient';
+import { verifyPaystackPaymentOnServer, STANDARD_PRICE, HOST_EMAIL, requestGoogleSignupToken, fetchAuthConfig } from '../../utils/apiClient';
 
 interface OnboardingModalProps {
   isOpen: boolean;
@@ -385,55 +385,68 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   useEffect(() => {
     if (!isOpen || currentStep !== 1 || isGoogleVerified) return;
 
-    const googleClientId =
-      (typeof process !== 'undefined' && process.env?.GOOGLE_CLIENT_ID) ||
-      (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
-      '';
-
+    let isCancelled = false;
     let timer: any;
-    const setupGoogleBtn = () => {
-      if (typeof window !== 'undefined' && (window as any).google?.accounts?.id && googleSignupBtnContainerRef.current) {
-        try {
-          (window as any).google.accounts.id.initialize({
-            client_id: googleClientId,
-            callback: async (response: any) => {
-              if (response?.credential) {
-                setIsVerifyingGoogle(true);
-                setValidationError(null);
-                const res = await requestGoogleSignupToken(response.credential);
-                setIsVerifyingGoogle(false);
-                if (res.success && res.signupToken && res.email) {
-                  setSignupToken(res.signupToken);
-                  setAdminEmail(res.email);
-                  if (res.name) {
-                    setAdminFullName(res.name);
-                  }
-                  setIsGoogleVerified(true);
-                } else {
-                  console.error('[GoogleSignup error]', res.error, res.message);
-                  setValidationError(res.message || 'Google verification failed. Please try again.');
-                }
-              }
-            },
-          });
-          googleSignupBtnContainerRef.current.innerHTML = '';
-          (window as any).google.accounts.id.renderButton(googleSignupBtnContainerRef.current, {
-            theme: 'outline',
-            size: 'large',
-            type: 'standard',
-            shape: 'pill',
-            text: 'signup_with',
-            width: 280,
-          });
-        } catch (e) {
-          console.error('[GoogleSignup button render error]', e);
-        }
-      } else {
-        timer = setTimeout(setupGoogleBtn, 300);
+
+    const initGsi = async () => {
+      const { googleClientId } = await fetchAuthConfig();
+      if (isCancelled) return;
+
+      if (!googleClientId) {
+        setValidationError("Sign-in isn't set up yet.");
+        return;
       }
+
+      const setupGoogleBtn = () => {
+        if (isCancelled) return;
+        if (typeof window !== 'undefined' && (window as any).google?.accounts?.id && googleSignupBtnContainerRef.current) {
+          try {
+            (window as any).google.accounts.id.initialize({
+              client_id: googleClientId,
+              callback: async (response: any) => {
+                if (response?.credential) {
+                  setIsVerifyingGoogle(true);
+                  setValidationError(null);
+                  const res = await requestGoogleSignupToken(response.credential);
+                  setIsVerifyingGoogle(false);
+                  if (res.success && res.signupToken && res.email) {
+                    setSignupToken(res.signupToken);
+                    setAdminEmail(res.email);
+                    if (res.name) {
+                      setAdminFullName(res.name);
+                    }
+                    setIsGoogleVerified(true);
+                  } else {
+                    console.error('[GoogleSignup error]', res.error, res.message);
+                    setValidationError(res.message || 'Google verification failed. Please try again.');
+                  }
+                }
+              },
+            });
+            googleSignupBtnContainerRef.current.innerHTML = '';
+            (window as any).google.accounts.id.renderButton(googleSignupBtnContainerRef.current, {
+              theme: 'outline',
+              size: 'large',
+              type: 'standard',
+              shape: 'pill',
+              text: 'signup_with',
+              width: 280,
+            });
+          } catch (e) {
+            console.error('[GoogleSignup button render error]', e);
+          }
+        } else {
+          timer = setTimeout(setupGoogleBtn, 300);
+        }
+      };
+
+      setupGoogleBtn();
     };
-    setupGoogleBtn();
+
+    initGsi();
+
     return () => {
+      isCancelled = true;
       if (timer) clearTimeout(timer);
     };
   }, [isOpen, currentStep, isGoogleVerified]);

@@ -1074,6 +1074,20 @@ export default {
       );
     }
 
+    // 0k. Public Auth Config Endpoint (returns public googleClientId from Worker env)
+    if (path === '/api/auth/config' && request.method === 'GET') {
+      const googleClientId = (env.GOOGLE_CLIENT_ID || '').trim();
+      return new Response(
+        JSON.stringify({
+          googleClientId,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
     // 1. Google OAuth Verification Endpoint
     if (path === '/api/auth/google' && request.method === 'POST') {
       // Configuration checks
@@ -1377,11 +1391,12 @@ export default {
           institutionId: string;
           departmentId: string;
           graduationYear: number;
-          applicantEmail: string;
+          applicantEmail?: string;
           applicantName: string;
           applicantPhone: string;
           classSetName: string;
           estimatedGraduates?: number;
+          signupToken?: string;
         };
 
         const { reference, institutionId, departmentId, graduationYear, applicantName, applicantPhone, classSetName, signupToken } = body;
@@ -1466,7 +1481,7 @@ export default {
                 STANDARD_PRICE_KOBO,
                 'paid, duplicate class, needs refund',
                 applicantName,
-                applicantEmail
+                verifiedApplicantEmail
               )
               .run();
 
@@ -1487,14 +1502,14 @@ export default {
             `INSERT INTO registrations (id, applicant_email, applicant_name, applicant_phone, institution_id, department_id, graduation_year, class_set_name, registration_type, status, payment_ref, payment_amount, approved_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'standard', 'active', ?, ?, datetime('now'))`
           )
-            .bind(regId, applicantEmail, applicantName, applicantPhone, institutionId, departmentId, graduationYear, classSetName, reference, STANDARD_PRICE_KOBO)
+            .bind(regId, verifiedApplicantEmail, applicantName, applicantPhone, institutionId, departmentId, graduationYear, classSetName, reference, STANDARD_PRICE_KOBO)
             .run();
 
           await env.DB.prepare(
             `INSERT INTO transactions (id, reference, set_id, set_name, amount, amount_kobo, status, payer_name, payer_email)
              VALUES (?, ?, ?, ?, ?, ?, 'Paid', ?, ?)`
           )
-            .bind(`tx-${Date.now()}`, reference, albumId, classSetName, 50000, STANDARD_PRICE_KOBO, applicantName, applicantEmail)
+            .bind(`tx-${Date.now()}`, reference, albumId, classSetName, 50000, STANDARD_PRICE_KOBO, applicantName, verifiedApplicantEmail)
             .run();
         }
 

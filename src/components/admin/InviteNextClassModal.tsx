@@ -34,7 +34,6 @@ import {
 import { logManualCommunication } from '../../utils/kohotCommunications';
 import { copyUrlToClipboard } from '../../utils/urlHelper';
 import { useFeedback } from '../common/FeedbackSystem';
-import { pickContactPhoneNumber } from '../../utils/contactPickerHelper';
 
 interface InviteNextClassModalProps {
   isOpen: boolean;
@@ -361,17 +360,6 @@ export const InviteNextClassModal: React.FC<InviteNextClassModalProps> = ({
                   <label className="block text-[11px] font-mono-tech uppercase text-zinc-400">
                     Phone / WhatsApp Number
                   </label>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const picked = await pickContactPhoneNumber();
-                      if (picked) setTargetPhone(picked);
-                    }}
-                    className="text-[10px] font-mono-tech text-emerald-400 hover:underline cursor-pointer flex items-center gap-1 font-semibold"
-                  >
-                    <Smartphone className="w-3 h-3" />
-                    <span>Select from Phone Contacts</span>
-                  </button>
                 </div>
                 <input
                   type="tel"

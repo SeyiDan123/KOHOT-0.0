@@ -23,7 +23,6 @@ import { useFeedback } from '../common/FeedbackSystem';
 import { getWhatsAppDigits, formatNigerianPhoneNumber } from '../../utils/phoneFormatter';
 
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
-import { pickContactPhoneNumber } from '../../utils/contactPickerHelper';
 
 export interface OtherDepartmentInviteRecord {
   id: string;
@@ -305,17 +304,6 @@ export const InviteOtherDepartmentsModal: React.FC<InviteOtherDepartmentsModalPr
                   <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-slate-700 dark:text-zinc-400 font-semibold">
                     WhatsApp / Phone Number
                   </label>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const picked = await pickContactPhoneNumber();
-                      if (picked) setTargetPhone(picked);
-                    }}
-                    className="text-[10px] font-mono-tech text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer flex items-center gap-1 font-semibold"
-                  >
-                    <Phone className="w-3 h-3" />
-                    <span>Select from Contacts</span>
-                  </button>
                 </div>
                 <input
                   type="tel"

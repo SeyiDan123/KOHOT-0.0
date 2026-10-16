@@ -465,6 +465,16 @@ function generateMemoriesForSet(setId: string, year: number): MemoryEvent[] {
 function generateVoicesForSet(setId: string): VoiceItem[] {
   return [
     {
+      id: `voc-${setId}-president`,
+      setId,
+      lecturerName: 'Babajide Ogundipe',
+      title: 'Class President (Law Student Association)',
+      headshotUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=720&auto=format&fit=crop&q=85',
+      partingQuote: 'Dear Class of 2023, when we first walked into the Faculty of Law lecture halls five years ago, timid and clutching photocopied statutory provisions, none of us could fully fathom the transformative crucible awaiting us. We navigated demanding moot court arbitrations, endured sleepless nights during bar exam season, and challenged one another to debate with uncompromising rigour and compassion. We formed lifelong bonds over lukewarm canteen coffee and intense library discussions. As we step into the courtroom, the boardroom, and public office, never surrender your integrity for expedient victories. Remember that true advocacy speaks truth to power and shields those who cannot defend themselves. Serve our nation with unyielding honor, excellence, and moral courage. I am endlessly proud to have served as your class president.',
+      isPinned: true,
+      pinnedTitle: 'From the President',
+    },
+    {
       id: `voc-${setId}-1`,
       setId,
       lecturerName: 'Prof. Adeyemi Adeleke, SAN',

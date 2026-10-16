@@ -11,7 +11,7 @@ import {
   Layers
 } from 'lucide-react';
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
-import { authenticateWithGoogleCredential } from '../../utils/apiClient';
+import { authenticateWithGoogleCredential, fetchAuthConfig } from '../../utils/apiClient';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -60,49 +60,60 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    const googleClientId =
-      (typeof process !== 'undefined' && process.env?.GOOGLE_CLIENT_ID) ||
-      (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
-      '';
-
+    let isCancelled = false;
     let timer: any;
 
-    const setupGoogleBtn = () => {
-      if (typeof window !== 'undefined' && (window as any).google?.accounts?.id && googleBtnContainerRef.current) {
-        try {
-          (window as any).google.accounts.id.initialize({
-            client_id: googleClientId,
-            callback: (response: any) => {
-              if (response?.credential) {
-                handleProcessGoogleAuth(response.credential);
-              } else {
-                console.error('[GoogleAuth error] No credential returned from Google Identity Services');
-                setErrorMessage('Sign in failed. Please try again.');
-              }
-            },
-          });
+    const initGsi = async () => {
+      // 1. Fetch Google Client ID from Worker env (never rely on build-time env vars)
+      const { googleClientId } = await fetchAuthConfig();
+      if (isCancelled) return;
 
-          // Render official Google Sign-in button
-          googleBtnContainerRef.current.innerHTML = '';
-          (window as any).google.accounts.id.renderButton(googleBtnContainerRef.current, {
-            theme: 'outline',
-            size: 'large',
-            type: 'standard',
-            shape: 'pill',
-            text: 'signin_with',
-            width: 280,
-          });
-        } catch (e: any) {
-          console.error('[GoogleAuth error] Failed to initialize Google button:', e);
-        }
-      } else {
-        timer = setTimeout(setupGoogleBtn, 300);
+      if (!googleClientId) {
+        setErrorMessage("Sign-in isn't set up yet.");
+        return;
       }
+
+      const setupGoogleBtn = () => {
+        if (isCancelled) return;
+        if (typeof window !== 'undefined' && (window as any).google?.accounts?.id && googleBtnContainerRef.current) {
+          try {
+            (window as any).google.accounts.id.initialize({
+              client_id: googleClientId,
+              callback: (response: any) => {
+                if (response?.credential) {
+                  handleProcessGoogleAuth(response.credential);
+                } else {
+                  console.error('[GoogleAuth error] No credential returned from Google Identity Services');
+                  setErrorMessage('Sign in failed. Please try again.');
+                }
+              },
+            });
+
+            // Render official Google Sign-in button
+            googleBtnContainerRef.current.innerHTML = '';
+            (window as any).google.accounts.id.renderButton(googleBtnContainerRef.current, {
+              theme: 'outline',
+              size: 'large',
+              type: 'standard',
+              shape: 'pill',
+              text: 'signin_with',
+              width: 280,
+            });
+          } catch (e: any) {
+            console.error('[GoogleAuth error] Failed to initialize Google button:', e);
+          }
+        } else {
+          timer = setTimeout(setupGoogleBtn, 300);
+        }
+      };
+
+      setupGoogleBtn();
     };
 
-    setupGoogleBtn();
+    initGsi();
 
     return () => {
+      isCancelled = true;
       if (timer) clearTimeout(timer);
     };
   }, [isOpen]);

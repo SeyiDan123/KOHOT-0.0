@@ -559,9 +559,16 @@ export function getStoredSets(): ClassSet[] {
         accentColor: s.accentColor !== undefined ? s.accentColor : (match?.accentColor ?? undefined),
         students: Array.isArray(s.students) ? s.students : [],
         memories: Array.isArray(s.memories) ? s.memories : [],
-        awards: Array.isArray(s.awards) ? s.awards : [],
-        voices: Array.isArray(s.voices) ? s.voices : [],
-        videos: Array.isArray(s.videos) ? s.videos : (match?.videos || []),
+        voices: (() => {
+          const list = Array.isArray(s.voices) && s.voices.length > 0 ? s.voices : (match?.voices || []);
+          if (match?.voices && !list.some((v) => v.isPinned)) {
+            const pinnedMatch = match.voices.find((v) => v.isPinned);
+            if (pinnedMatch && !list.some((v) => v.id === pinnedMatch.id)) {
+              return [pinnedMatch, ...list];
+            }
+          }
+          return list;
+        })(),
         socials: s.socials || match?.socials || {
           youtube: '',
           instagram: '',

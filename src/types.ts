@@ -182,6 +182,8 @@ export interface VoiceItem {
   quote?: string;
   role?: string;
   featured?: boolean;
+  isPinned?: boolean; // Pinned as featured message (e.g. "From the President")
+  pinnedTitle?: string; // Custom title for pinned message, defaults to "From the President"
 }
 
 export type ClassAlbumLifecycleStatus = 
