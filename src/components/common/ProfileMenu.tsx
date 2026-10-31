@@ -19,11 +19,20 @@ import {
   ArrowRightLeft,
   Building2,
   MessageSquare,
-  X
+  Trash2,
+  UserPlus,
+  X,
+  Copy,
+  QrCode,
+  MessageCircle,
+  CheckCircle2
 } from 'lucide-react';
 import { UserAccount, ClassSet } from '../../types';
+import { getAlbumUrl, copyUrlToClipboard } from '../../utils/urlHelper';
+import { apiClientUnpublishAlbum } from '../../utils/apiClient';
 import { ClassAdminModal } from '../admin/ClassAdminModal';
 import { InviteOtherDepartmentsModal } from '../admin/InviteOtherDepartmentsModal';
+import { InviteNextClassModal } from '../admin/InviteNextClassModal';
 import { HelpModal } from '../public/HelpModal';
 import { UniversalModal } from './UniversalModal';
 import { ImageCropModal } from './ImageCropModal';
@@ -37,6 +46,8 @@ export interface ProfileMenuProps {
   onUpdateSet?: (updatedSet: ClassSet) => void;
   onAdminTransferred?: (newAdminUser: UserAccount) => void;
   onOpenMyProfile?: () => void;
+  onOpenInviteNextClass?: () => void;
+  onOpenRequestDeletion?: () => void;
   triggerCropForImage?: (
     imgUrl: string,
     aspect: 'free' | '1:1' | '4:5' | '16:9',
@@ -62,6 +73,8 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
   onUpdateSet,
   onAdminTransferred,
   onOpenMyProfile,
+  onOpenInviteNextClass,
+  onOpenRequestDeletion,
   triggerCropForImage,
   notifications = [
     {
@@ -100,19 +113,40 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isClassAdminOpen, setIsClassAdminOpen] = useState(false);
   const [classAdminInitialTab, setClassAdminInitialTab] = useState<'admin_history' | 'transfer_admin'>('transfer_admin');
+  const [isInviteNextClassOpen, setIsInviteNextClassOpen] = useState(false);
   const [isInviteDepartmentsOpen, setIsInviteDepartmentsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isSupportOpen, setIsSupportOpen] = useState(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [isMyProfileModalOpen, setIsMyProfileModalOpen] = useState(false);
 
+  // Check if current user has administrative authorization
+  const isAdmin = currentUser.role === 'class_rep' || currentUser.role === 'master_host';
+
+  // Ensure account name, email, and phone tally with the Album Admin name at the top-left corner of the navigation bar
+  const effectiveAccountName = (currentSet?.classRepName || currentUser.fullName || '').trim();
+  const effectiveAccountEmail = (currentSet?.classRepEmail || currentUser.email || '').trim();
+  const effectiveAccountPhone = (currentSet?.classRepPhone || currentUser.phone || '').trim();
+
   // Settings form
-  const [fullNameInput, setFullNameInput] = useState(currentUser.fullName || '');
-  const [emailInput, setEmailInput] = useState(currentUser.email || '');
-  const [phoneInput, setPhoneInput] = useState(currentUser.phone || '');
+  const [fullNameInput, setFullNameInput] = useState(effectiveAccountName);
+  const [emailInput, setEmailInput] = useState(effectiveAccountEmail);
+  const [phoneInput, setPhoneInput] = useState(effectiveAccountPhone);
   const [avatarInput, setAvatarInput] = useState(currentUser.avatarUrl || '');
   const [settingsSaved, setSettingsSaved] = useState(false);
   const settingsPhotoInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setFullNameInput(effectiveAccountName);
+  }, [effectiveAccountName]);
+
+  useEffect(() => {
+    setEmailInput(effectiveAccountEmail);
+  }, [effectiveAccountEmail]);
+
+  useEffect(() => {
+    setPhoneInput(effectiveAccountPhone);
+  }, [effectiveAccountPhone]);
 
   // Internal Crop Modal fallback for Owner Dashboard or standalone use
   const [internalCropOpen, setInternalCropOpen] = useState(false);
@@ -143,8 +177,8 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
     if (avatarInput) return avatarInput;
     if (currentUser.avatarUrl) return currentUser.avatarUrl;
     if (currentSet?.students) {
-      const adminEmail = (currentUser?.email || currentSet.classRepEmail || '').toLowerCase().trim();
-      const adminName = (currentUser?.fullName || currentSet.classRepName || '').toLowerCase().trim();
+      const adminEmail = (currentSet.classRepEmail || currentUser?.email || '').toLowerCase().trim();
+      const adminName = (currentSet.classRepName || currentUser?.fullName || '').toLowerCase().trim();
       const match = currentSet.students.find((s) => {
         if (s.email && adminEmail && s.email.toLowerCase().trim() === adminEmail) return true;
         if (s.fullName && adminName && s.fullName.toLowerCase().trim() === adminName) return true;
@@ -167,9 +201,6 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
   const notifTriggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
-
-  // Check if current user has administrative authorization
-  const isAdmin = currentUser.role === 'class_rep' || currentUser.role === 'master_host';
 
   // PWA installation detection
   useEffect(() => {
@@ -349,9 +380,12 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    currentUser.fullName = fullNameInput.trim();
-    currentUser.email = emailInput.trim();
-    currentUser.phone = phoneInput.trim();
+    const nextName = fullNameInput.trim();
+    const nextEmail = emailInput.trim();
+    const nextPhone = phoneInput.trim();
+    currentUser.fullName = nextName;
+    currentUser.email = nextEmail;
+    currentUser.phone = nextPhone;
     if (avatarInput) {
       currentUser.avatarUrl = avatarInput;
     }
@@ -361,11 +395,29 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
       // ignore
     }
     if (currentSet && onUpdateSet) {
+      const prevAdminEmail = (currentSet.classRepEmail || currentUser.email || '').toLowerCase().trim();
+      const prevAdminName = (currentSet.classRepName || currentUser.fullName || '').toLowerCase().trim();
+      const updatedStudents = (currentSet.students || []).map((s) => {
+        const isMatch =
+          s.id === `admin-${currentSet.id}` ||
+          (s.email && prevAdminEmail && s.email.toLowerCase().trim() === prevAdminEmail) ||
+          (s.fullName && prevAdminName && s.fullName.toLowerCase().trim() === prevAdminName) ||
+          (s as any).isClassRep === true;
+        if (!isMatch) return s;
+        return {
+          ...s,
+          fullName: nextName || s.fullName,
+          email: nextEmail || s.email,
+          whatsappNumber: nextPhone || s.whatsappNumber,
+          photoUrl: avatarInput || s.photoUrl,
+        };
+      });
       onUpdateSet({
         ...currentSet,
-        classRepName: fullNameInput.trim(),
-        classRepEmail: emailInput.trim(),
-        classRepPhone: phoneInput.trim(),
+        classRepName: nextName,
+        classRepEmail: nextEmail,
+        classRepPhone: nextPhone,
+        students: updatedStudents,
       });
     }
     // Instantly notify whole application of updated user name/profile
@@ -373,9 +425,9 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
       window.dispatchEvent(
         new CustomEvent('kohot_user_profile_updated', {
           detail: {
-            fullName: fullNameInput.trim(),
-            email: emailInput.trim(),
-            phone: phoneInput.trim(),
+            fullName: nextName,
+            email: nextEmail,
+            phone: nextPhone,
             avatarUrl: avatarInput,
           },
         })
@@ -390,8 +442,8 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
 
   // Find admin's student profile in currentSet
   const currentAdminStudent = currentSet?.students.find(
-    (s) => s.email?.toLowerCase() === currentUser.email?.toLowerCase() ||
-           s.fullName?.toLowerCase() === currentUser.fullName?.toLowerCase()
+    (s) => s.email?.toLowerCase() === effectiveAccountEmail.toLowerCase() ||
+           s.fullName?.toLowerCase() === effectiveAccountName.toLowerCase()
   );
 
   return (
@@ -431,13 +483,13 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
       >
         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-white/20 to-white/5 border border-white/20 flex items-center justify-center font-mono-tech text-xs font-bold text-white shadow-inner shrink-0 group-hover:scale-105 transition-transform overflow-hidden">
           {effectiveAvatar ? (
-            <img src={effectiveAvatar} alt={currentUser.fullName} className="w-full h-full object-cover" />
+            <img src={effectiveAvatar} alt={fullNameInput || effectiveAccountName} className="w-full h-full object-cover" />
           ) : (
-            <span>{currentUser.fullName ? currentUser.fullName.charAt(0).toUpperCase() : 'U'}</span>
+            <span>{(fullNameInput || effectiveAccountName) ? (fullNameInput || effectiveAccountName).charAt(0).toUpperCase() : 'U'}</span>
           )}
         </div>
         <span className="hidden sm:inline font-mono-tech text-xs text-zinc-200 group-hover:text-white max-w-[100px] truncate">
-          {currentUser.fullName ? currentUser.fullName.split(' ')[0] : 'User'}
+          {(fullNameInput || effectiveAccountName) ? (fullNameInput || effectiveAccountName).split(' ')[0] : 'User'}
         </span>
       </button>
 
@@ -550,25 +602,36 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
           {/* User Header - Compact */}
           <div className="px-2 py-1.5 border-b border-white/10 mb-1 shrink-0">
             <div className="font-syne font-bold text-xs text-white truncate">
-              {currentUser.fullName}
+              {fullNameInput || effectiveAccountName}
             </div>
             <div className="font-mono-tech text-[10px] text-zinc-400 truncate">
-              {currentUser.email}
+              {emailInput || effectiveAccountEmail}
             </div>
-            {currentUser.phone && (
+            {(phoneInput || effectiveAccountPhone) && (
               <div className="font-mono-tech text-[10px] text-zinc-400 truncate">
-                {currentUser.phone}
+                {phoneInput || effectiveAccountPhone}
               </div>
             )}
-            <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase bg-white/10 text-white border border-white/15 font-semibold">
-              <ShieldCheck className="w-2.5 h-2.5 text-[#d4af37]" />
-              <span className="truncate">{roleTitle}</span>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1">
+              <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase bg-white/10 text-white border border-white/15 font-semibold">
+                <ShieldCheck className="w-2.5 h-2.5 text-[#d4af37]" />
+                <span className="truncate">{roleTitle}</span>
+              </div>
+              {isAdmin && currentSet && (
+                <div
+                  title={`Registration Reference: ${currentSet.activationRef || 'Verified'}`}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 font-semibold"
+                >
+                  <CheckCircle2 className="w-2.5 h-2.5" />
+                  <span>Verified Class Album</span>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Menu Items - All Displayed Directly */}
           <div className="space-y-0.5 pr-0.5">
-            {/* Admin Management: Only Transfer Admin (Admin History is inside Transfer Admin modal) */}
+            {/* Admin Management: Transfer Admin, Invite Next Class (before Invite Other Departments) */}
             {isAdmin && currentSet && (
               <div className="p-0.5 mb-0.5 rounded-lg bg-white/[0.04] border border-white/10 space-y-0.5">
                 {/* Transfer Admin */}
@@ -587,6 +650,25 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                   <span>Transfer Admin</span>
                 </button>
 
+                {/* Invite Next Class (Before Invite Other Departments) */}
+                <button
+                  id="profile-menu-invite-next-class"
+                  type="button"
+                  onClick={() => {
+                    setIsProfileOpen(false);
+                    if (onOpenInviteNextClass) {
+                      onOpenInviteNextClass();
+                    } else {
+                      setIsInviteNextClassOpen(true);
+                    }
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-md hover:bg-white/10 text-[11px] font-mono-tech text-[#d4af37] hover:text-amber-200 flex items-center gap-2 transition-colors text-left cursor-pointer active:bg-white/15"
+                  title="Invite the next graduating class representative to continue your department legacy"
+                >
+                  <UserPlus className="w-3 h-3 text-[#d4af37] shrink-0" />
+                  <span className="truncate">Invite Next Class</span>
+                </button>
+
                 {/* Invite Other Departments */}
                 <button
                   id="profile-menu-invite-departments"
@@ -599,7 +681,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                   title="Invite graduating class representatives of other departments to create their albums on the website"
                 >
                   <Building2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                  <span className="truncate">Invite Departments</span>
+                  <span className="truncate">Invite Other Departments</span>
                 </button>
               </div>
             )}
@@ -680,6 +762,30 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
               <MessageSquare className="w-4 h-4 text-[#d4af37]" />
               <span>Contact Support</span>
             </button>
+
+            {/* Delete Album (moved completely under the profile icon list, 30-day recoverable soft delete) */}
+            {isAdmin && currentSet && onOpenRequestDeletion && (
+              <button
+                id="profile-menu-delete-album"
+                type="button"
+                onClick={() => {
+                  setIsProfileOpen(false);
+                  onOpenRequestDeletion();
+                }}
+                className="w-full px-3 py-2 rounded-xl hover:bg-red-500/15 text-xs font-mono-tech text-red-400/90 hover:text-red-300 flex items-center justify-between gap-2 transition-colors text-left cursor-pointer active:bg-red-500/20"
+                title={currentSet.deletedAt ? 'Recover soft-deleted album (within 30 days)' : 'Soft-delete album (recoverable within 30 days)'}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Trash2 className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>{currentSet.deletedAt ? 'Recover Album' : 'Delete Album'}</span>
+                </div>
+                {currentSet.deletedAt && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[9px] font-mono-tech uppercase font-bold">
+                    30d
+                  </span>
+                )}
+              </button>
+            )}
 
             <div className="my-1 border-t border-white/10" />
 
@@ -935,17 +1041,17 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
             <div className="flex flex-col items-center text-center p-5 rounded-2xl bg-white/[0.03] border border-white/10 gap-3">
               <div className="w-20 h-20 rounded-full bg-white/10 border-2 border-[#d4af37]/40 flex items-center justify-center font-bold text-2xl text-white overflow-hidden shadow-lg shrink-0">
                 {effectiveAvatar ? (
-                  <img src={effectiveAvatar} alt={currentUser.fullName} className="w-full h-full object-cover" />
+                  <img src={effectiveAvatar} alt={fullNameInput || effectiveAccountName} className="w-full h-full object-cover" />
                 ) : (
-                  <span>{currentUser.fullName ? currentUser.fullName.charAt(0).toUpperCase() : 'U'}</span>
+                  <span>{(fullNameInput || effectiveAccountName) ? (fullNameInput || effectiveAccountName).charAt(0).toUpperCase() : 'U'}</span>
                 )}
               </div>
               <div className="min-w-0">
                 <div className="font-syne font-bold text-lg text-white">
-                  {currentUser.fullName || currentSet?.classRepName || 'User'}
+                  {fullNameInput || effectiveAccountName || 'User'}
                 </div>
                 <div className="text-zinc-400 text-xs mt-0.5">
-                  {currentUser.email || currentSet?.classRepEmail || 'Not configured'}
+                  {emailInput || effectiveAccountEmail || 'Not configured'}
                 </div>
                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-mono-tech uppercase bg-[#d4af37]/15 text-[#d4af37] border border-[#d4af37]/30 font-semibold mt-2">
                   <ShieldCheck className="w-3.5 h-3.5 text-[#d4af37]" />
@@ -961,11 +1067,11 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
               </div>
               <div className="flex justify-between items-center py-1 border-b border-white/5">
                 <span className="text-zinc-400">Email</span>
-                <span className="text-white select-all">{currentUser.email || currentSet?.classRepEmail || 'Not configured'}</span>
+                <span className="text-white select-all">{emailInput || effectiveAccountEmail || 'Not configured'}</span>
               </div>
               <div className="flex justify-between items-center py-1">
                 <span className="text-zinc-400">WhatsApp / Mobile Phone</span>
-                <span className="text-white select-all">{currentUser.phone || currentSet?.classRepPhone || 'Not configured'}</span>
+                <span className="text-white select-all">{phoneInput || effectiveAccountPhone || 'Not configured'}</span>
               </div>
             </div>
 
@@ -994,6 +1100,17 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
             setAvatarInput(cropped);
             setInternalCropOpen(false);
           }}
+        />
+      )}
+
+      {/* Fallback Invite Next Class Modal if opened directly from ProfileMenu */}
+      {currentSet && isInviteNextClassOpen && (
+        <InviteNextClassModal
+          isOpen={isInviteNextClassOpen}
+          onClose={() => setIsInviteNextClassOpen(false)}
+          currentSet={currentSet}
+          currentUser={currentUser}
+          onUpdateSet={onUpdateSet || (() => {})}
         />
       )}
 

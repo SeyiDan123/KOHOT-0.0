@@ -375,7 +375,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
   const modalElement = (
     <div 
       id="image-crop-modal-backdrop"
-      className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-fadeIn select-none"
+      className="fixed inset-0 z-[10050] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-fadeIn select-none"
       onClick={onClose}
     >
       <div 

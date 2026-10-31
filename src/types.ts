@@ -70,6 +70,22 @@ export interface StudentProfile {
   approved: boolean;
   approvedAt?: number | string;
   submittedAt: string;
+  status?: 'draft' | 'pending' | 'changes_requested' | 'approved' | 'declined' | 'removed';
+  submissionStatus?: 'draft' | 'pending' | 'changes_requested' | 'approved' | 'declined' | 'removed';
+  paymentStatus?: 'unpaid' | 'paid' | 'waived';
+  feeChoice?: 'unpaid' | 'paid' | 'waived';
+  paidReference?: string;
+  claimsToBeCovered?: boolean;
+  declineReason?: string;
+  declinedAt?: string;
+  reinstateUntil?: string;
+  changesRequestedNote?: string;
+  changesRequestedAt?: string;
+  usedSlot?: boolean;
+  slotConsumed?: boolean;
+  source?: 'student' | 'admin';
+  consentAt?: string;
+  isAdminProfile?: boolean;
 }
 
 export interface MemoryEventImage {
@@ -187,6 +203,10 @@ export interface VoiceItem {
 }
 
 export type ClassAlbumLifecycleStatus = 
+  | 'draft'
+  | 'published'
+  | 'unpublished'
+  | 'deleted'
   | 'submitted' 
   | 'pending_review' 
   | 'approved' 
@@ -346,6 +366,9 @@ export interface ClassSet {
   // Safe Deleting & Unpublishing
   deletedAt?: string; // Soft delete timestamp (ISO string). Hidden everywhere, kept 30 days.
   deletedBy?: string; // User email who soft deleted
+  keptByHostOnly?: boolean; // Host chose to retain a soft-deleted album permanently (visible only to Host)
+  keptByHostAt?: string;
+  showWelcomeMessage?: boolean; // Displays immediate welcome message when a newly registered album is accessed
   isUnpublished?: boolean; // Whether the album has been unpublished
   unpublishedAt?: string;
   unpublishedBy?: string;
@@ -356,6 +379,24 @@ export interface ClassSet {
     reason: string;
     status: 'pending' | 'approved' | 'rejected';
   };
+  version?: number;
+  published?: boolean;
+  unpublished?: boolean;
+  keepByHost?: boolean;
+  profileSlotBalance?: number;
+  totalSlotsCredited?: number;
+  totalSlotsUsed?: number;
+  sponsors?: Array<{
+    id: string;
+    sponsorName: string;
+    DisplayLabel?: string;
+    quantity: number;
+    amountPaid: number;
+    reference: string;
+    date: string;
+    showSponsorNameOnAlbum?: boolean;
+    isKoHotCredit?: boolean;
+  }>;
 }
 
 export interface PlaquePrivacySettings {
@@ -692,6 +733,9 @@ export interface WebsiteContentOverride {
   }>;
   // KoHot Media Assets (stored & served through KoHot's configured storage infrastructure)
   heroVideoUrl?: string; // Owner Dashboard / Platform Hero Showcase Video
+  heroPosterUrl?: string; // Owner Dashboard / Hero Video Poster Image
+  heroVideoKey?: string; // Stored R2 storage key in site settings
+  heroPosterKey?: string; // Stored R2 storage key in site settings
   albumBackgroundMusicUrl?: string; // Class Album ambient background music audio
   albumBackgroundMusicTitle?: string; // Optional track name
   classAlbumCardVideoUrl?: string; // Homepage Card Video for Class Album

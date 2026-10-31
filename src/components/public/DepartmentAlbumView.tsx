@@ -61,6 +61,7 @@ import { FrictionlessSubmitModal } from './FrictionlessSubmitModal';
 import { KeepAlbumSheet } from './KeepAlbumSheet';
 import { DepartmentVideoModal } from './DepartmentVideoModal';
 import { AlbumDisputeModal } from '../admin/AlbumDisputeModal';
+import { AlbumAdminSwitcher } from '../common/AlbumAdminSwitcher';
 import { useFeedback } from '../common/FeedbackSystem';
 import { getAlbumUrl, copyUrlToClipboard } from '../../utils/urlHelper';
 import { SocialIconsRow } from '../common/SocialIconsRow';
@@ -297,6 +298,18 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
   // Context-Aware Light / Dark Mode State with localStorage Persistence (Default: Light Mode)
   const [isLightMode, setIsLightMode] = useState<boolean>(() => getTheme() === 'light');
+
+  useEffect(() => {
+    const handleThemeChanged = (e: any) => {
+      if (e.detail?.theme) {
+        setIsLightMode(e.detail.theme === 'light');
+      } else {
+        setIsLightMode(getTheme() === 'light');
+      }
+    };
+    window.addEventListener('kohot_theme_changed', handleThemeChanged);
+    return () => window.removeEventListener('kohot_theme_changed', handleThemeChanged);
+  }, []);
 
   // Synchronize HTML & Body backgrounds with current light/dark mode - completely eliminates zoom glitch
   useEffect(() => {
@@ -646,6 +659,21 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         </div>
       )}
 
+      {/* Centralized Sticky Admin Switcher: Main / Manage / Preview (Permanently Centered for Host Demo Albums & Reps) */}
+      {(Boolean(onManageAlbum) || Boolean(showMainButton)) && (
+        <AlbumAdminSwitcher
+          activeMode="preview"
+          showMainButton={Boolean(showMainButton && onMainDashboard)}
+          showManageButton={Boolean(onManageAlbum)}
+          onMainDashboard={onMainDashboard}
+          onManageAlbum={handleManageAlbumWithScroll}
+          onPreviewAlbum={() => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          albumLabel={currentSet.classSetName}
+        />
+      )}
+
       {/* =========================================================================
           TOP NAVIGATION BAR (Pixieset Simplicity + NeoVision Aesthetics)
           ========================================================================= */}
@@ -657,24 +685,14 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4 relative">
           {/* Left: All Albums navigation */}
           <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
-            {/* All Albums / Back Navigation */}
+            {/* All Albums Navigation (Leads to the Legacy Wall of the Department) */}
             <button
               id="back-to-home-btn"
-              onClick={
-                originView === 'layer1_rep' && onManageAlbum
-                  ? onManageAlbum
-                  : onBackToGrid
-              }
+              onClick={onBackToGrid}
               className={`flex items-center gap-2 transition-colors cursor-pointer group shrink-0 ${
                 isLightMode ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-300 hover:text-white'
               }`}
-              title={
-                originView === 'layer1_rep'
-                  ? 'Return to Manage Album Dashboard'
-                  : originView === 'layer0_master'
-                  ? 'Return to Master Host Dashboard'
-                  : 'Return to All Albums'
-              }
+              title="Return to All Albums (Department Legacy Wall)"
             >
               <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full border flex items-center justify-center transition-all shrink-0 ${
                 isLightMode 
@@ -686,7 +704,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               <span className={`font-syne font-bold text-xs sm:text-sm tracking-wide transition-colors ${
                 isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
               }`}>
-                {originView === 'layer1_rep' ? 'Manage Album' : 'All Albums'}
+                All Albums
               </span>
             </button>
           </div>
@@ -2051,66 +2069,117 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               kohot.app
             </span>
 
-            {/* Department Social Links */}
-            {currentSet.socials && (
-              <div className="flex items-center gap-3 text-zinc-400">
-                {currentSet.socials.youtube && (
-                  <a
-                    href={currentSet.socials.youtube.startsWith('http') ? currentSet.socials.youtube : `https://${currentSet.socials.youtube}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-red-400 transition-colors"
-                    title="Department YouTube"
-                  >
-                    <Youtube className="w-4 h-4" />
-                  </a>
-                )}
-                {currentSet.socials.instagram && (
-                  <a
-                    href={currentSet.socials.instagram.startsWith('http') ? currentSet.socials.instagram : `https://instagram.com/${currentSet.socials.instagram.replace('@', '')}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-pink-400 transition-colors"
-                    title="Department Instagram"
-                  >
-                    <Instagram className="w-4 h-4" />
-                  </a>
-                )}
-                {currentSet.socials.twitter && (
-                  <a
-                    href={currentSet.socials.twitter.startsWith('http') ? currentSet.socials.twitter : `https://x.com/${currentSet.socials.twitter.replace('@', '')}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-zinc-200 transition-colors"
-                    title="Department Twitter / X"
-                  >
-                    <Twitter className="w-4 h-4" />
-                  </a>
-                )}
-                {currentSet.socials.linkedin && (
-                  <a
-                    href={currentSet.socials.linkedin.startsWith('http') ? currentSet.socials.linkedin : `https://${currentSet.socials.linkedin}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-zinc-200 transition-colors"
-                    title="Department LinkedIn"
-                  >
-                    <Linkedin className="w-4 h-4" />
-                  </a>
-                )}
-                {currentSet.socials.website && (
-                  <a
-                    href={currentSet.socials.website.startsWith('http') ? currentSet.socials.website : `https://${currentSet.socials.website}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-white transition-colors"
-                    title="Department Official Website"
-                  >
-                    <Globe className="w-4 h-4" />
-                  </a>
-                )}
-              </div>
-            )}
+            {/* Department Social & Web Links (Displayed as Icons in Footer Area) */}
+            {(() => {
+              const isCrownfieldDemo = currentSet.id.startsWith('crownfield-law-');
+              const rawSocials = currentSet.socials || {};
+              const yt = (rawSocials.youtube || (isCrownfieldDemo ? 'https://youtube.com/@crownfieldlaw' : '')).trim();
+              const ig = (rawSocials.instagram || (isCrownfieldDemo ? `@crownfield_law_${currentSet.graduationYear}` : '')).trim();
+              const tw = (rawSocials.twitter || (isCrownfieldDemo ? '@crownfield_law' : '')).trim();
+              const li = (rawSocials.linkedin || (isCrownfieldDemo ? 'https://linkedin.com/company/crownfield-law-alumni' : '')).trim();
+              const web = (rawSocials.website || (isCrownfieldDemo ? 'https://law.crownfield.edu.ng' : '')).trim();
+
+              if (!yt && !ig && !tw && !li && !web) return null;
+
+              const ytHref = yt
+                ? yt.startsWith('http')
+                  ? yt
+                  : yt.startsWith('youtube.com') || yt.startsWith('youtu.be')
+                  ? `https://${yt}`
+                  : `https://youtube.com/@${yt.replace(/^@/, '')}`
+                : '';
+              const igHref = ig
+                ? ig.startsWith('http')
+                  ? ig
+                  : ig.startsWith('instagram.com')
+                  ? `https://${ig}`
+                  : `https://instagram.com/${ig.replace(/^@/, '')}`
+                : '';
+              const twHref = tw
+                ? tw.startsWith('http')
+                  ? tw
+                  : tw.startsWith('x.com') || tw.startsWith('twitter.com')
+                  ? `https://${tw}`
+                  : `https://x.com/${tw.replace(/^@/, '')}`
+                : '';
+              const liHref = li
+                ? li.startsWith('http')
+                  ? li
+                  : li.startsWith('linkedin.com')
+                  ? `https://${li}`
+                  : `https://linkedin.com/company/${li.replace(/^@/, '')}`
+                : '';
+              const webHref = web
+                ? web.startsWith('http')
+                  ? web
+                  : `https://${web}`
+                : '';
+
+              return (
+                <div id="album-footer-social-icons" className="flex items-center gap-3 text-zinc-400">
+                  {ytHref && (
+                    <a
+                      href={ytHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-red-500/20 border border-white/10 hover:border-red-500/40 flex items-center justify-center text-zinc-300 hover:text-red-400 transition-all"
+                      title="Department YouTube Channel"
+                      aria-label="Department YouTube Channel"
+                    >
+                      <Youtube className="w-4 h-4" />
+                    </a>
+                  )}
+                  {igHref && (
+                    <a
+                      href={igHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-pink-500/20 border border-white/10 hover:border-pink-500/40 flex items-center justify-center text-zinc-300 hover:text-pink-400 transition-all"
+                      title="Department Instagram"
+                      aria-label="Department Instagram"
+                    >
+                      <Instagram className="w-4 h-4" />
+                    </a>
+                  )}
+                  {twHref && (
+                    <a
+                      href={twHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center text-zinc-300 hover:text-white transition-all"
+                      title="Department X (Twitter)"
+                      aria-label="Department X (Twitter)"
+                    >
+                      <Twitter className="w-4 h-4" />
+                    </a>
+                  )}
+                  {liHref && (
+                    <a
+                      href={liHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-blue-500/20 border border-white/10 hover:border-blue-500/40 flex items-center justify-center text-zinc-300 hover:text-blue-400 transition-all"
+                      title="Department LinkedIn"
+                      aria-label="Department LinkedIn"
+                    >
+                      <Linkedin className="w-4 h-4" />
+                    </a>
+                  )}
+                  {webHref && (
+                    <a
+                      href={webHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-emerald-500/20 border border-white/10 hover:border-emerald-500/40 flex items-center justify-center text-zinc-300 hover:text-emerald-400 transition-all"
+                      title="Official Department Website"
+                      aria-label="Official Department Website"
+                    >
+                      <Globe className="w-4 h-4" />
+                    </a>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="flex items-center gap-4 font-mono-tech text-[11px] text-zinc-400">
               <span>{currentSet.classSetName}</span>

@@ -20,7 +20,11 @@ export interface AuthStatusResponse {
 
 export interface AuthResponse {
   success: boolean;
+  isNewUser?: boolean;
   user?: UserAccount;
+  signupToken?: string;
+  email?: string;
+  name?: string;
   albums?: Array<{ id: string; institutionId: string; departmentId: string; graduationYear: number; classSetName: string; applicantName: string }>;
   error?: string;
   message?: string;
@@ -35,29 +39,97 @@ export interface VerifyPaymentResponse {
   message?: string;
 }
 
+export interface OAuthRequestInput {
+  provider?: 'google' | 'apple';
+  credential?: string;
+  idToken?: string;
+  accessToken?: string;
+  nameHint?: string;
+}
+
 /**
- * Handle Google Auth response via Worker /api/auth/google
- * End-to-end real token verification against Google public keys. No typed email or fallback.
+ * Handle OAuth response (Google or Apple) via Worker /api/auth/google
+ * End-to-end real token verification against provider public keys.
+ * Automatically creates accounts for new users and signs in existing users
+ * while preserving all role approvals, permissions, and security checks.
  */
-export async function authenticateWithGoogleCredential(
-  credentialToken: string
+export async function authenticateWithOAuthPayload(
+  input: OAuthRequestInput | string
 ): Promise<AuthResponse> {
   try {
+    const payloadObj: OAuthRequestInput =
+      typeof input === 'string' ? { credential: input, provider: 'google' } : input;
+
+    const DEMO_SET_IDS = new Set([
+      'unilag-cs-2026',
+      'oau-arch-2024',
+      'crownfield-law-2023',
+      'crownfield-law-2024',
+      'crownfield-law-2025',
+      'crownfield-law-2026',
+    ]);
+
+    const storedSets = getStoredSets()
+      .filter((s) => {
+        if (DEMO_SET_IDS.has(s.id)) return false;
+        if (s.deletedAt) {
+          const daysElapsed = Math.floor((Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24));
+          if (daysElapsed >= 30) {
+            // Past 30-day recovery window: admin can no longer log in to recover (even if keptByHostOnly)
+            return false;
+          }
+        }
+        return true;
+      })
+      .map((s) => ({
+        id: s.id,
+        institutionId: s.institutionId,
+        departmentId: s.departmentId,
+        graduationYear: s.graduationYear,
+        classSetName: s.classSetName,
+        classRepName: s.classRepName,
+        classRepEmail: s.classRepEmail,
+        classRepPhone: s.classRepPhone,
+        activationStatus: 'active',
+      }));
+
+    const storedPending: Array<{ id: string; applicantEmail: string; status: string }> = [];
+
     const res = await fetch('/api/auth/google', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ credential: credentialToken }),
+      body: JSON.stringify({
+        ...payloadObj,
+        knownSets: storedSets,
+        knownPendingRequests: storedPending,
+      }),
     });
 
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.success && data.user) {
-      return { success: true, user: data.user, albums: data.albums };
+      if (data.sessionToken) {
+        try {
+          localStorage.setItem('kohot_session_token', data.sessionToken);
+        } catch {}
+      }
+      return {
+        success: true,
+        isNewUser: Boolean(data.isNewUser),
+        user: data.user,
+        signupToken: data.signupToken,
+        email: data.email || data.user.email,
+        name: data.name || data.user.fullName,
+        albums: data.albums,
+      };
     }
 
     return {
       success: false,
       error: data.error || 'auth_failed',
       message: data.message || 'Sign in failed. Please try again.',
+      signupToken: data.signupToken,
+      email: data.email,
+      name: data.name,
       status: res.status,
     };
   } catch (err: any) {
@@ -70,12 +142,22 @@ export async function authenticateWithGoogleCredential(
   }
 }
 
+export const authenticateWithGoogleCredential = authenticateWithOAuthPayload;
+
 /**
- * GET /api/auth/me - Check active authenticated session from signed cookie
+ * GET /api/auth/me - Check active authenticated session from signed cookie or Bearer token
  */
 export async function checkAuthSession(): Promise<{ authenticated: boolean; role?: string; user?: UserAccount; albums?: string[] }> {
   try {
-    const res = await fetch('/api/auth/me');
+    let token = '';
+    try {
+      token = localStorage.getItem('kohot_session_token') || '';
+    } catch {}
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch('/api/auth/me', { headers });
     if (res.ok) {
       return await res.json();
     }
@@ -84,9 +166,12 @@ export async function checkAuthSession(): Promise<{ authenticated: boolean; role
 }
 
 /**
- * POST /api/auth/logout - Clear signed session cookie
+ * POST /api/auth/logout - Clear signed session cookie and stored token
  */
 export async function logoutSession(): Promise<boolean> {
+  try {
+    localStorage.removeItem('kohot_session_token');
+  } catch {}
   try {
     const res = await fetch('/api/auth/logout', { method: 'POST' });
     return res.ok;
@@ -131,7 +216,9 @@ export async function fetchAuthConfig(): Promise<{ googleClientId: string }> {
 /**
  * POST /api/auth/google-signup-token - Generate short-lived signed signup token for new album registration
  */
-export async function requestGoogleSignupToken(credentialToken: string): Promise<{
+export async function requestGoogleSignupToken(
+  input: OAuthRequestInput | string
+): Promise<{
   success: boolean;
   signupToken?: string;
   email?: string;
@@ -140,10 +227,13 @@ export async function requestGoogleSignupToken(credentialToken: string): Promise
   message?: string;
 }> {
   try {
+    const payloadObj: OAuthRequestInput =
+      typeof input === 'string' ? { credential: input, provider: 'google' } : input;
+
     const res = await fetch('/api/auth/google-signup-token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ credential: credentialToken }),
+      body: JSON.stringify(payloadObj),
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.success && data.signupToken) {
@@ -157,13 +247,13 @@ export async function requestGoogleSignupToken(credentialToken: string): Promise
     return {
       success: false,
       error: data.error || 'token_invalid',
-      message: data.message || 'Google verification failed. Please try again.',
+      message: data.message || 'Verification failed. Please try again.',
     };
   } catch {
     return {
       success: false,
       error: 'network_error',
-      message: 'Failed to verify Google credential with server.',
+      message: 'Failed to verify account credential with server.',
     };
   }
 }
@@ -536,4 +626,601 @@ export async function apiClientDeleteAward(albumId: string, awardId: string): Pr
   } catch {}
   return { success: true };
 }
+
+/**
+ * Upload compressed media to Cloudflare R2 object storage (/api/media/upload)
+ * Falls back gracefully to the compressed dataUrl in local/preview environments.
+ */
+export async function uploadMediaToR2(
+  dataUrl: string,
+  options?: {
+    setId?: string;
+    category?: string;
+    fileName?: string;
+  }
+): Promise<{
+  success: boolean;
+  url?: string;
+  key?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/media/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dataUrl,
+        setId: options?.setId || 'general',
+        category: options?.category || 'general',
+        fileName: options?.fileName || `media-${Date.now()}.webp`,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.success && data.url) {
+        return {
+          success: true,
+          url: data.url,
+          key: data.key,
+        };
+      }
+    }
+  } catch {
+    // Fallback to inline compressed WebP dataUrl when R2 endpoint is unavailable
+  }
+
+  return {
+    success: true,
+    url: dataUrl,
+  };
+}
+
+/**
+ * Submit a student profile to the server (/api/albums/:id/submissions/submit)
+ */
+export async function submitStudentProfileOnServer(
+  albumId: string,
+  student: any,
+  options?: {
+    source?: 'student' | 'admin';
+    paymentStatus?: 'unpaid' | 'paid' | 'waived';
+    paidReference?: string;
+    claimsToBeCovered?: boolean;
+    saveAsDraft?: boolean;
+    consent?: boolean;
+  }
+): Promise<{
+  success: boolean;
+  submissionId?: string;
+  status?: string;
+  paymentStatus?: string;
+  statusToken?: string;
+  statusLink?: string;
+  submission?: any;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/submissions/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        profile: student,
+        source: options?.source || student?.source || 'student',
+        paymentStatus: options?.paymentStatus || student?.paymentStatus || 'unpaid',
+        paidReference: options?.paidReference || student?.paidReference,
+        claimsToBeCovered: options?.claimsToBeCovered ?? student?.claimsToBeCovered ?? false,
+        saveAsDraft: options?.saveAsDraft ?? false,
+        consent: options?.consent ?? true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { success: false, error: data.error || 'submission_failed', message: data.message || data.error };
+    }
+    return { success: true, ...data };
+  } catch (err: any) {
+    return { success: false, error: 'network_error', message: err?.message || 'Network error' };
+  }
+}
+
+/**
+ * Publish a Class Album on the server (/api/albums/:id/publish)
+ */
+export async function publishAlbumOnServer(
+  albumId: string,
+  payload: {
+    convocationDate: string;
+    testimonialResponse?: string;
+    allowPublicFeature?: boolean;
+    nextClassRep?: {
+      fullName: string;
+      phoneNumber: string;
+      email?: string;
+    };
+  }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      return await res.json().catch(() => ({ success: true }));
+    }
+  } catch {}
+  return { success: true };
+}
+
+// ============================================================================
+// D1 PERSISTENCE API HELPERS (ALBUMS, INSTITUTIONS, TRANSACTIONS, TESTIMONIALS, SITE CONTENT)
+// ============================================================================
+
+export async function fetchAlbumsFromD1(): Promise<{
+  success: boolean;
+  albums: any[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/albums', { credentials: 'include' });
+    if (!res.ok) {
+      return { success: false, albums: [], error: `HTTP ${res.status}` };
+    }
+    const data = await res.json();
+    return { success: true, albums: Array.isArray(data.albums) ? data.albums : [] };
+  } catch (err: any) {
+    return { success: false, albums: [], error: err?.message || 'Failed to load albums from D1' };
+  }
+}
+
+export async function fetchSingleAlbumFromD1(albumId: string): Promise<{
+  success: boolean;
+  album?: any;
+  notAvailable?: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}`, { credentials: 'include' });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 404 || data.error === 'not_available') {
+      return { success: false, notAvailable: true, error: 'not available' };
+    }
+    if (!res.ok) {
+      return { success: false, error: data.message || data.error || 'Failed to load album' };
+    }
+    return { success: true, album: data };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error' };
+  }
+}
+
+export async function createFreeAlbumOnD1(payload: {
+  signupToken?: string;
+  album: any;
+  institutionId?: string;
+  departmentId?: string;
+  graduationYear?: number;
+  adminName?: string;
+}): Promise<{
+  success: boolean;
+  alreadyExists?: boolean;
+  album?: any;
+  user?: UserAccount;
+  version?: number;
+  creditedSlots?: number;
+  canDispute?: boolean;
+  existingAlbumId?: string;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/albums', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        success: false,
+        canDispute: data.canDispute,
+        existingAlbumId: data.existingAlbumId,
+        error: data.error || 'create_failed',
+        message: data.message || data.error || 'Could not create album',
+      };
+    }
+    return { success: true, ...data };
+  } catch (err: any) {
+    return { success: false, error: 'network_error', message: err?.message || 'Network error creating album' };
+  }
+}
+
+export async function saveAlbumToD1(
+  albumId: string,
+  album: any,
+  options?: { version?: number; hostOnlyRetentionUpdate?: boolean }
+): Promise<{
+  success: boolean;
+  version?: number;
+  album?: any;
+  conflict?: boolean;
+  currentVersion?: number;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        album,
+        version: options?.version ?? album?.version ?? 1,
+        hostOnlyRetentionUpdate: options?.hostOnlyRetentionUpdate,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      return {
+        success: false,
+        conflict: true,
+        currentVersion: data.currentVersion,
+        error: 'version_conflict',
+        message: data.message || 'Conflict: This album was updated elsewhere. Please reload.',
+      };
+    }
+    if (!res.ok) {
+      return {
+        success: false,
+        error: data.error || 'save_failed',
+        message: data.message || data.error || 'Failed to save album',
+      };
+    }
+    return { success: true, version: data.version, album: data.album };
+  } catch (err: any) {
+    return { success: false, error: 'network_error', message: err?.message || 'Network error saving album' };
+  }
+}
+
+export async function fetchInstitutionsFromD1(): Promise<{
+  success: boolean;
+  institutions: any[];
+}> {
+  try {
+    const res = await fetch('/api/institutions', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, institutions: Array.isArray(data.institutions) ? data.institutions : [] };
+    }
+  } catch {}
+  return { success: false, institutions: [] };
+}
+
+export async function saveInstitutionsToD1(institutions: any[]): Promise<{ success: boolean }> {
+  try {
+    const res = await fetch('/api/institutions', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ institutions }),
+    });
+    return { success: res.ok };
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function fetchTransactionsFromD1(): Promise<{
+  success: boolean;
+  transactions: any[];
+}> {
+  try {
+    const res = await fetch('/api/transactions', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, transactions: Array.isArray(data.transactions) ? data.transactions : [] };
+    }
+  } catch {}
+  return { success: false, transactions: [] };
+}
+
+export async function saveTransactionToD1(transaction: any): Promise<{ success: boolean }> {
+  try {
+    const res = await fetch('/api/transactions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ transaction }),
+    });
+    return { success: res.ok };
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function fetchTestimonialsFromD1(): Promise<{
+  success: boolean;
+  testimonials: any[];
+}> {
+  try {
+    const res = await fetch('/api/testimonials', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, testimonials: Array.isArray(data.testimonials) ? data.testimonials : [] };
+    }
+  } catch {}
+  return { success: false, testimonials: [] };
+}
+
+export async function submitTestimonialToD1(testimonial: any): Promise<{ success: boolean; id?: string }> {
+  try {
+    const res = await fetch('/api/testimonials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ testimonial }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { success: res.ok, id: data.id };
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function updateTestimonialInD1(id: string, updates: any): Promise<{ success: boolean }> {
+  try {
+    const res = await fetch(`/api/testimonials/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(updates),
+    });
+    return { success: res.ok };
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function fetchSiteContentFromD1(): Promise<{
+  success: boolean;
+  content: any | null;
+}> {
+  try {
+    const res = await fetch('/api/site-content', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, content: data.content || null };
+    }
+  } catch {}
+  return { success: false, content: null };
+}
+
+export async function saveSiteContentToD1(content: any): Promise<{ success: boolean }> {
+  try {
+    const res = await fetch('/api/site-content', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ content }),
+    });
+    return { success: res.ok };
+  } catch {
+    return { success: false };
+  }
+}
+
+// ============================================================================
+// PROFILE SUBMISSIONS & SLOTS API HELPERS
+// ============================================================================
+
+export async function fetchAlbumSlotBalanceOnServer(albumId: string): Promise<{
+  success: boolean;
+  balance: number;
+  totalCredited: number;
+  totalUsed: number;
+  ledger: any[];
+  purchases: any[];
+  settings?: Record<string, string>;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/slots/balance`, {
+      credentials: 'include',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        balance: Number(data.balance) || 0,
+        totalCredited: Number(data.totalCredited) || 0,
+        totalUsed: Number(data.totalUsed) || 0,
+        ledger: Array.isArray(data.ledger) ? data.ledger : [],
+        purchases: Array.isArray(data.purchases) ? data.purchases : [],
+        settings: data.settings,
+      };
+    }
+  } catch {}
+  return { success: false, balance: 0, totalCredited: 0, totalUsed: 0, ledger: [], purchases: [] };
+}
+
+export async function purchaseAlbumSlotsOnServer(
+  albumId: string,
+  payload: { quantity: number; reference: string; sponsorName?: string; amountKobo?: number }
+): Promise<{
+  success: boolean;
+  balance?: number;
+  totalCredited?: number;
+  totalUsed?: number;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/slots/purchase`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { success: res.ok, ...data };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function updateAlbumSponsorOnServer(
+  albumId: string,
+  payload: { id: string; sponsorName: string }
+): Promise<{
+  success: boolean;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/slots/sponsor`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { success: false, error: data.error, message: data.message || data.error };
+    }
+    return { success: true, ...data };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function approveAlbumSubmissionsOnServer(
+  albumId: string,
+  submissionIds: string[]
+): Promise<{
+  success: boolean;
+  approvedCount?: number;
+  approvedIds?: string[];
+  skippedUnpaidIds?: string[];
+  slotsUsedCount?: number;
+  balanceLeft?: number;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/submissions/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ submissionIds }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { success: false, error: data.error, message: data.message || data.error, balanceLeft: data.balanceLeft };
+    }
+    return { success: true, ...data };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function declineAlbumSubmissionOnServer(
+  albumId: string,
+  submissionId: string,
+  reason: string
+): Promise<{
+  success: boolean;
+  slotReturned?: boolean;
+  slotSummary?: any;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/submissions/decline`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ submissionId, reason }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { success: res.ok, ...data };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function requestChangesAlbumSubmissionOnServer(
+  albumId: string,
+  submissionId: string,
+  reason: string
+): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/submissions/request-changes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ submissionId, reason }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { success: res.ok, ...data };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function reinstateAlbumSubmissionOnServer(
+  albumId: string,
+  submissionId: string,
+  isPaid?: boolean
+): Promise<{
+  success: boolean;
+  slotUsed?: boolean;
+  slotSummary?: any;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/submissions/reinstate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ submissionId, isPaid }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { success: false, error: data.error, message: data.message || data.error };
+    }
+    return { success: true, ...data };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function removeAlbumSubmissionOnServer(
+  albumId: string,
+  submissionId: string
+): Promise<{
+  success: boolean;
+  slotSummary?: any;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/submissions/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ submissionId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { success: res.ok, ...data };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+
 

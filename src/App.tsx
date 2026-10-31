@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   ClassSet, 
   UniversityDirectoryItem, 
+  DepartmentItem,
   FinancialTransaction, 
   DepartmentAdditionRequest, 
   FoundingClassRequest,
@@ -22,14 +23,31 @@ import {
   getStoredFoundingClassRequests,
   saveStoredFoundingClassRequests,
   getStoredContentOverride, 
-  saveStoredContentOverride 
+  saveStoredContentOverride,
+  saveStoredTestimonials,
+  purgeLegacyDataLocalStorage,
+  isCrownfieldDemoAlbum
 } from './data/initialData';
 import { CROWNFIELD_PUBLIC_LAW_SETS } from './data/crownfieldLawDemos';
-import { alertHostFoundingRegistration, HOST_EMAIL } from './utils/apiClient';
+import { 
+  alertHostFoundingRegistration, 
+  HOST_EMAIL,
+  checkAuthSession, 
+  logoutSession,
+  fetchAlbumsFromD1,
+  saveAlbumToD1,
+  fetchInstitutionsFromD1,
+  saveInstitutionsToD1,
+  fetchTransactionsFromD1,
+  saveTransactionToD1,
+  fetchTestimonialsFromD1,
+  fetchSiteContentFromD1,
+  saveSiteContentToD1
+} from './utils/apiClient';
 import { DepartmentAlbumView } from './components/public/DepartmentAlbumView';
 import { AlbumsGrid } from './components/public/AlbumsGrid';
 import { LandingPage } from './components/public/LandingPage';
-import { LoginModal } from './components/auth/LoginModal';
+import { LoginModal, VerifiedSignupSession } from './components/auth/LoginModal';
 import { OnboardingModal } from './components/onboarding/OnboardingModal';
 import { Layer0MasterHostDashboard } from './components/admin/Layer0MasterHostDashboard';
 import { Layer1ClassRepDashboard } from './components/admin/Layer1ClassRepDashboard';
@@ -40,8 +58,7 @@ import { FeedbackProvider } from './components/common/FeedbackSystem';
 import { resolveOrSynthesizeSet } from './utils/urlHelper';
 import { getTheme, applyTheme } from './utils/theme';
 import { forceUnlockAllScroll } from './utils/useStaticBackdropScrollLock';
-import { checkAuthSession, logoutSession } from './utils/apiClient';
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle, X, RefreshCw } from 'lucide-react';
 
 interface ResolvedRoute {
   view: 'landing' | 'albums_grid' | 'department_album' | 'layer1_rep' | 'layer0_master' | 'student_submit';
@@ -278,19 +295,16 @@ export default function App() {
     return resolveCurrentRoute(getStoredSets(), getStoredUniversities());
   }, []);
 
-  // App persistent state
+  // App state backed by D1 Worker API routes (Crownfield demo albums stay as static code)
   const [universities, setUniversities] = useState<UniversityDirectoryItem[]>(getStoredUniversities);
-  const [sets, setSets] = useState<ClassSet[]>(() => {
-    const stored = getStoredSets();
-    if (initialRoute.synthesizedSet && !stored.some((s) => s.id === initialRoute.synthesizedSet!.id)) {
-      return [initialRoute.synthesizedSet, ...stored];
-    }
-    return stored;
-  });
-  const [transactions, setTransactions] = useState<FinancialTransaction[]>(getStoredTransactions);
-  const [additionRequests, setAdditionRequests] = useState<DepartmentAdditionRequest[]>(getStoredAdditionRequests);
-  const [foundingRequests, setFoundingRequests] = useState<FoundingClassRequest[]>(getStoredFoundingClassRequests);
+  const [sets, setSets] = useState<ClassSet[]>(() => [...CROWNFIELD_PUBLIC_LAW_SETS]);
+  const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
+  const [additionRequests, setAdditionRequests] = useState<DepartmentAdditionRequest[]>([]);
+  const [foundingRequests, setFoundingRequests] = useState<FoundingClassRequest[]>([]);
   const [contentOverride, setContentOverride] = useState<WebsiteContentOverride>(getStoredContentOverride);
+  const [d1Loading, setD1Loading] = useState<boolean>(true);
+  const [d1Error, setD1Error] = useState<string | null>(null);
+  const [versionConflictMessage, setVersionConflictMessage] = useState<string | null>(null);
 
   // Invitation context for Next Class baton handover
   const [inviteContext, setInviteContext] = useState<NextClassInviteContext | null>(parseInviteContextFromUrl);
@@ -300,15 +314,103 @@ export default function App() {
     graduationYear?: number;
   }>({});
 
-  // Authentication & Role-Based Routing
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
-  const [activeView, setActiveView] = useState<'landing' | 'albums_grid' | 'department_album' | 'layer1_rep' | 'layer0_master' | 'student_submit'>(
-    initialRoute.view
-  );
-  const [albumOriginView, setAlbumOriginView] = useState<'landing' | 'albums_grid' | 'layer0_master' | 'layer1_rep'>('landing');
-  const [selectedSetId, setSelectedSetId] = useState<string>(initialRoute.setId);
-  const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(initialRoute.uniId);
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(initialRoute.deptId);
+  // Authentication & Role-Based Routing (Persisted so going away or network hiccups never drop the admin back to the website)
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    try {
+      const raw = localStorage.getItem('kohot_current_user');
+      if (raw) {
+        const parsed = JSON.parse(raw) as UserAccount;
+        if (
+          parsed &&
+          (parsed.role === 'master_host' || (parsed.role === 'class_rep' && Boolean(parsed.assignedSetId)))
+        ) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  });
+
+  const [activeView, setActiveView] = useState<'landing' | 'albums_grid' | 'department_album' | 'layer1_rep' | 'layer0_master' | 'student_submit'>(() => {
+    if (initialRoute.isExternalEntry && initialRoute.view !== 'landing') {
+      return initialRoute.view;
+    }
+    try {
+      const rawUser = localStorage.getItem('kohot_current_user');
+      const rawState = localStorage.getItem('kohot_active_dashboard_state');
+      if (rawUser) {
+        const parsedUser = JSON.parse(rawUser) as UserAccount;
+        if (parsedUser?.role === 'master_host' || (parsedUser?.role === 'class_rep' && parsedUser.assignedSetId)) {
+          if (rawState) {
+            const parsedState = JSON.parse(rawState);
+            if (
+              parsedState?.activeView &&
+              ['layer0_master', 'layer1_rep', 'department_album', 'albums_grid'].includes(parsedState.activeView)
+            ) {
+              return parsedState.activeView;
+            }
+          }
+          return parsedUser.role === 'master_host' ? 'layer0_master' : 'layer1_rep';
+        }
+      }
+    } catch {}
+    return initialRoute.view;
+  });
+
+  const [albumOriginView, setAlbumOriginView] = useState<'landing' | 'albums_grid' | 'layer0_master' | 'layer1_rep'>(() => {
+    try {
+      const rawUser = localStorage.getItem('kohot_current_user');
+      if (rawUser) {
+        const parsedUser = JSON.parse(rawUser) as UserAccount;
+        if (parsedUser?.role === 'master_host') return 'layer0_master';
+        if (parsedUser?.role === 'class_rep') return 'layer1_rep';
+      }
+    } catch {}
+    return 'landing';
+  });
+
+  const [selectedSetId, setSelectedSetId] = useState<string>(() => {
+    if (initialRoute.isExternalEntry && initialRoute.setId) {
+      return initialRoute.setId;
+    }
+    try {
+      const rawUser = localStorage.getItem('kohot_current_user');
+      const rawState = localStorage.getItem('kohot_active_dashboard_state');
+      if (rawUser) {
+        const parsedUser = JSON.parse(rawUser) as UserAccount;
+        if (rawState) {
+          const parsedState = JSON.parse(rawState);
+          if (parsedState?.selectedSetId) return parsedState.selectedSetId;
+        }
+        if (parsedUser?.role === 'class_rep' && parsedUser.assignedSetId) {
+          return parsedUser.assignedSetId;
+        }
+      }
+    } catch {}
+    return initialRoute.setId;
+  });
+
+  const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(() => {
+    try {
+      const rawState = localStorage.getItem('kohot_active_dashboard_state');
+      if (rawState) {
+        const parsedState = JSON.parse(rawState);
+        if (parsedState?.selectedUniversityId) return parsedState.selectedUniversityId;
+      }
+    } catch {}
+    return initialRoute.uniId;
+  });
+
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(() => {
+    try {
+      const rawState = localStorage.getItem('kohot_active_dashboard_state');
+      if (rawState) {
+        const parsedState = JSON.parse(rawState);
+        if (parsedState?.selectedDepartmentId) return parsedState.selectedDepartmentId;
+      }
+    } catch {}
+    return initialRoute.deptId;
+  });
 
   // The KoHot logo splash screen triggers on external links / initial deep links
   const [isTransitioning, setIsTransitioning] = useState<boolean>(initialRoute.isExternalEntry);
@@ -317,22 +419,105 @@ export default function App() {
 
   const hasMountedRef = React.useRef(false);
 
+  // Persist currentUser and active dashboard view state so going away or network hiccups keep the admin in their workspace
+  useEffect(() => {
+    try {
+      if (currentUser) {
+        localStorage.setItem('kohot_current_user', JSON.stringify(currentUser));
+        if (activeView !== 'landing') {
+          localStorage.setItem(
+            'kohot_active_dashboard_state',
+            JSON.stringify({
+              activeView,
+              selectedSetId,
+              selectedUniversityId,
+              selectedDepartmentId,
+            })
+          );
+        }
+      }
+    } catch {}
+  }, [currentUser, activeView, selectedSetId, selectedUniversityId, selectedDepartmentId]);
+
+  const loadAllD1Data = React.useCallback(async () => {
+    setD1Loading(true);
+    setD1Error(null);
+    try {
+      const [albumsRes, instRes, siteRes, testRes, txRes] = await Promise.all([
+        fetchAlbumsFromD1(),
+        fetchInstitutionsFromD1(),
+        fetchSiteContentFromD1(),
+        fetchTestimonialsFromD1(),
+        fetchTransactionsFromD1(),
+      ]);
+
+      if (!albumsRes.success && albumsRes.error) {
+        setD1Error(albumsRes.error);
+      } else {
+        const d1NonDemo = (albumsRes.albums || []).filter((a: ClassSet) => !isCrownfieldDemoAlbum(a));
+        setSets([...CROWNFIELD_PUBLIC_LAW_SETS, ...d1NonDemo]);
+      }
+
+      if (instRes.success && instRes.institutions.length > 0) {
+        setUniversities(instRes.institutions);
+      }
+
+      if (siteRes.success && siteRes.content) {
+        setContentOverride((prev) => ({ ...prev, ...siteRes.content }));
+      }
+
+      if (testRes.success) {
+        saveStoredTestimonials(testRes.testimonials);
+      }
+
+      if (txRes.success) {
+        setTransactions(txRes.transactions);
+      }
+    } catch (err: any) {
+      setD1Error(err?.message || 'Unable to sync with D1 database.');
+    } finally {
+      setD1Loading(false);
+    }
+  }, []);
+
   useEffect(() => {
     hasMountedRef.current = true;
+    purgeLegacyDataLocalStorage();
     // Apply user theme on startup (default is light mode)
     applyTheme(getTheme());
 
-    // Verify authenticated session cookie from server
+    // Verify authenticated session cookie from server without dropping local dashboard session on network hiccups
     const initSession = async () => {
       try {
         const session = await checkAuthSession();
         if (session.authenticated && session.user) {
-          setCurrentUser(session.user);
+          if (
+            session.user.role === 'master_host' ||
+            (session.user.role === 'class_rep' && Boolean(session.user.assignedSetId))
+          ) {
+            setCurrentUser(session.user);
+            try {
+              localStorage.setItem('kohot_current_user', JSON.stringify(session.user));
+            } catch {}
+            setActiveView((prev) => {
+              if (prev === 'landing') {
+                return session.user!.role === 'master_host' ? 'layer0_master' : 'layer1_rep';
+              }
+              return prev;
+            });
+            if (session.user.role === 'class_rep' && session.user.assignedSetId) {
+              setSelectedSetId((prev) => prev || session.user!.assignedSetId!);
+            }
+          }
         }
-      } catch {}
+      } catch {
+        // Network error or offline: preserve existing local session so the user stays on their dashboard
+      } finally {
+        await loadAllD1Data();
+      }
     };
     initSession();
-  }, []);
+  }, [loadAllD1Data]);
 
   // Ensure scroll is NEVER stuck/frozen on view or route changes
   useEffect(() => {
@@ -359,7 +544,9 @@ export default function App() {
   // Robust global scroll unlock safety - prevents any frozen page glitches
   useEffect(() => {
     const handleSafetyUnlock = () => {
-      const hasActiveModal = document.querySelector('[role="dialog"], [aria-modal="true"], #student-detail-modal-backdrop, #moments-fullscreen-lightbox');
+      const hasActiveModal = document.querySelector(
+        '[role="dialog"], [aria-modal="true"], #login-modal-backdrop, #onboarding-modal-backdrop, #paystack-modal-backdrop, #student-detail-modal-backdrop, #moments-fullscreen-lightbox'
+      );
       if (!hasActiveModal) {
         forceUnlockAllScroll();
       }
@@ -430,6 +617,13 @@ export default function App() {
       }
       setIsOnboardingOpen(false);
       setIsLoginOpen(false);
+      // Prevent logged-in Album Admin or Host from hopping out to the public landing website without logging out
+      if (
+        route.view === 'landing' &&
+        (currentUser?.role === 'class_rep' || currentUser?.role === 'master_host')
+      ) {
+        return;
+      }
       setActiveView(route.view);
       setSelectedSetId(route.setId);
       if (route.uniId) setSelectedUniversityId(route.uniId);
@@ -442,7 +636,7 @@ export default function App() {
       window.removeEventListener('hashchange', handleUrlRouting);
       window.removeEventListener('popstate', handleUrlRouting);
     };
-  }, [sets, universities]);
+  }, [sets, universities, currentUser]);
 
   const handleOpenOnboardingWithInvite = (invite: {
     inviteCode: string;
@@ -465,27 +659,104 @@ export default function App() {
   // Modals
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+  const [verifiedSignupSession, setVerifiedSignupSession] = useState<VerifiedSignupSession | null>(null);
 
-  // Save changes to storage
+  // Save changes to D1 (Crownfield demo albums stay as static code and are never stored in D1)
   const handleUpdateUniversities = (newUnis: UniversityDirectoryItem[]) => {
     setUniversities(newUnis);
-    saveStoredUniversities(newUnis);
+    saveInstitutionsToD1(newUnis);
   };
 
   const handleUpdateSets = (newSets: ClassSet[]) => {
     setSets(newSets);
-    saveStoredSets(newSets);
   };
 
   const handleUpdateSingleSet = (updatedSet: ClassSet) => {
-    const updated = sets.map((s) => (s.id === updatedSet.id ? updatedSet : s));
+    const exists = sets.some((s) => s.id === updatedSet.id);
+    const updated = exists ? sets.map((s) => (s.id === updatedSet.id ? updatedSet : s)) : [updatedSet, ...sets];
     setSets(updated);
-    saveStoredSets(updated);
+
+    // Never store static Crownfield demo albums in D1
+    if (!isCrownfieldDemoAlbum(updatedSet)) {
+      const isHostOnlyRetention = currentUser?.role === 'master_host' && currentUser?.email?.toLowerCase() !== updatedSet.classRepEmail?.toLowerCase();
+      saveAlbumToD1(updatedSet.id, updatedSet, {
+        version: updatedSet.version ?? 1,
+        hostOnlyRetentionUpdate: isHostOnlyRetention,
+      }).then((res) => {
+        if (res.conflict) {
+          setVersionConflictMessage(res.message || 'Conflict: This album was modified in another session. Please reload.');
+        } else if (res.success && res.version) {
+          setSets((prev) =>
+            prev.map((s) => (s.id === updatedSet.id ? { ...s, version: res.version } : s))
+          );
+        }
+      });
+    }
+
+    // If the album is published/active, ensure its department in the university directory links it so it appears on the department's Legacy Wall
+    if ((updatedSet.isPublished || updatedSet.published || updatedSet.activationStatus === 'active') && !updatedSet.isUnpublished && !updatedSet.unpublished && !updatedSet.deletedAt) {
+      let uniChanged = false;
+      const updatedUnis = universities.map((u) => {
+        if (u.id !== updatedSet.institutionId && u.id !== updatedSet.universityId) return u;
+        const depts = u.departments || [];
+        const hasDept = depts.some(
+          (d) =>
+            d.id === updatedSet.departmentId ||
+            d.name.toLowerCase().trim() === (updatedSet.departmentName || '').toLowerCase().trim()
+        );
+        if (hasDept) {
+          return {
+            ...u,
+            departments: depts.map((d) => {
+              if (
+                d.id === updatedSet.departmentId ||
+                d.name.toLowerCase().trim() === (updatedSet.departmentName || '').toLowerCase().trim()
+              ) {
+                const connected = d.connectedClassAlbumIds || [];
+                if (!connected.includes(updatedSet.id)) {
+                  uniChanged = true;
+                  return {
+                    ...d,
+                    legacy_status: 'established' as const,
+                    connectedClassAlbumIds: [...connected, updatedSet.id],
+                  };
+                }
+              }
+              return d;
+            }),
+          };
+        } else if (updatedSet.departmentId && updatedSet.departmentName) {
+          uniChanged = true;
+          const newDept: DepartmentItem = {
+            id: updatedSet.departmentId,
+            universityId: u.id,
+            name: updatedSet.departmentName,
+            code: updatedSet.departmentName.slice(0, 3).toUpperCase(),
+            faculty: updatedSet.faculty || 'Faculty',
+            heroImageUrl: updatedSet.bannerImageUrl || '',
+            caption: updatedSet.classSlogan || `Official Department Legacy Wall for ${updatedSet.departmentName}`,
+            legacy_status: 'established',
+            logoUrl: updatedSet.departmentLogoUrl || u.logoUrl,
+            connectedClassAlbumIds: [updatedSet.id],
+          };
+          return {
+            ...u,
+            departments: [...depts, newDept],
+          };
+        }
+        return u;
+      });
+      if (uniChanged) {
+        handleUpdateUniversities(updatedUnis);
+      }
+    }
   };
 
   const handleUpdateTransactions = (newTxs: FinancialTransaction[]) => {
     setTransactions(newTxs);
-    saveStoredTransactions(newTxs);
+    if (newTxs.length > 0) {
+      saveTransactionToD1(newTxs[0]);
+    }
   };
 
   const handleUpdateAdditionRequests = (newReqs: DepartmentAdditionRequest[]) => {
@@ -691,33 +962,50 @@ export default function App() {
 
   const handleUpdateContentOverride = (newContent: WebsiteContentOverride) => {
     setContentOverride(newContent);
-    saveStoredContentOverride(newContent);
+    saveSiteContentToD1(newContent);
   };
 
   // Role-Based Routing Execution upon Login
   const handleLoginSuccess = (user: UserAccount) => {
-    setCurrentUser(user);
-
+    try {
+      localStorage.setItem('kohot_current_user', JSON.stringify(user));
+    } catch {}
     if (user.role === 'master_host') {
-      // Seamlessly redirect token-verified administrators to hidden Layer 0 Master Host Dashboard
+      setCurrentUser(user);
+      setAlbumOriginView('layer0_master');
       setActiveView('layer0_master');
-    } else if (user.role === 'class_rep') {
-      // Redirect standard Class Representatives to their Layer 1 Admin Dashboard to manage their specific set
-      if (user.assignedSetId) {
-        setSelectedSetId(user.assignedSetId);
-      }
+      try {
+        localStorage.setItem(
+          'kohot_active_dashboard_state',
+          JSON.stringify({ activeView: 'layer0_master', selectedSetId })
+        );
+      } catch {}
+    } else if (user.role === 'class_rep' && user.assignedSetId) {
+      setCurrentUser(user);
+      setAlbumOriginView('layer1_rep');
+      setSelectedSetId(user.assignedSetId);
       setActiveView('layer1_rep');
-    } else {
-      setActiveView('albums_grid');
+      try {
+        localStorage.setItem(
+          'kohot_active_dashboard_state',
+          JSON.stringify({ activeView: 'layer1_rep', selectedSetId: user.assignedSetId })
+        );
+      } catch {}
     }
   };
 
   const handleLogout = async () => {
     try {
+      localStorage.removeItem('kohot_current_user');
+      localStorage.removeItem('kohot_active_dashboard_state');
+    } catch {}
+    try {
       await logoutSession();
     } catch {}
     setCurrentUser(null);
+    setAlbumOriginView('landing');
     setActiveView('landing');
+    window.history.pushState(null, '', '#home');
   };
 
   // Registration of new set via strictly unalterable directory
@@ -763,6 +1051,7 @@ export default function App() {
 
     // 3. Authenticate as the new class rep and navigate to their dashboard
     setCurrentUser(userAccount);
+    setAlbumOriginView('layer1_rep');
     setSelectedSetId(newSet.id);
     setSelectedUniversityId(newSet.institutionId);
     setSelectedDepartmentId(newSet.departmentId);
@@ -783,6 +1072,42 @@ export default function App() {
   return (
     <FeedbackProvider>
       <div id="kohot-root" className="min-h-screen bg-white dark:bg-[#121214] text-zinc-900 dark:text-zinc-100 selection:bg-[#d4af37]/30 selection:text-black">
+      {/* D1 Loading / Error / Version Conflict Status Banner */}
+      {versionConflictMessage && (
+        <div className="sticky top-0 z-[9999] bg-red-950/95 border-b border-red-500/40 px-4 py-2.5 text-white flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs font-mono-tech">
+            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+            <span>{versionConflictMessage}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setVersionConflictMessage(null);
+                loadAllD1Data();
+              }}
+              className="px-3 py-1 rounded-full bg-white text-black font-mono-tech text-[11px] font-bold uppercase flex items-center gap-1 cursor-pointer"
+            >
+              <RefreshCw className="w-3 h-3" /> Reload Latest
+            </button>
+            <button type="button" onClick={() => setVersionConflictMessage(null)} className="p-1 text-zinc-400 hover:text-white cursor-pointer">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+      {d1Error && (
+        <div className="bg-amber-950/90 border-b border-amber-500/30 px-4 py-2 text-amber-200 flex items-center justify-between gap-3 text-xs font-mono-tech">
+          <span>Server sync notice: {d1Error}</span>
+          <button
+            type="button"
+            onClick={() => loadAllD1Data()}
+            className="px-2.5 py-0.5 rounded bg-amber-400 text-black font-bold uppercase text-[10px] cursor-pointer"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {/* Main View Router */}
       <main>
         {activeView === 'landing' && (
@@ -821,7 +1146,10 @@ export default function App() {
               }, 3000);
             }}
             onOpenLogin={() => setIsLoginOpen(true)}
-            onOpenOnboarding={() => setIsOnboardingOpen(true)}
+            onOpenOnboarding={() => {
+              setVerifiedSignupSession(null);
+              setIsOnboardingOpen(true);
+            }}
             onOpenDashboard={() => {
               if (currentUser?.role === 'master_host') {
                 setActiveView('layer0_master');
@@ -883,15 +1211,7 @@ export default function App() {
 
         {activeView === 'department_album' && currentSet && (
           (() => {
-            const effectiveUser = currentUser || (albumOriginView === 'layer0_master' || currentSet.id.startsWith('crownfield-law') ? {
-              id: 'usr-host',
-              email: HOST_EMAIL,
-              fullName: 'Seyi Dan',
-              phone: '09036872687',
-              role: 'master_host' as const,
-              masterToken: 'KOHOT-ROOT-2025',
-              assignedSetId: currentSet.id,
-            } : null);
+            const effectiveUser = currentUser;
 
             const isMasterHost = effectiveUser?.role === 'master_host';
             const isClassRep = effectiveUser?.role === 'class_rep';
@@ -907,8 +1227,13 @@ export default function App() {
             const isViewingOtherAlbum = Boolean(isClassRep && !isCurrentAlbumOwner);
             const isAdminLoggedIn = Boolean(isMasterHost || isClassRep);
 
-            // If the album is deleted or unpublished, anyone visiting the link sees "This album is no longer available" and a link home
-            if ((currentSet.deletedAt || currentSet.isUnpublished) && !isCurrentAlbumOwner && !isMasterHost) {
+            // If the album is soft-deleted or kept by Host only, hide it from public visitors AND the class admin on the public album view (only Master Host can view it)
+            if ((currentSet.deletedAt || currentSet.keptByHostOnly) && !isMasterHost) {
+              const daysPassed = currentSet.deletedAt
+                ? Math.floor((Date.now() - new Date(currentSet.deletedAt).getTime()) / (1000 * 60 * 60 * 24))
+                : 0;
+              const daysRemaining = Math.max(0, 30 - daysPassed);
+
               return (
                 <div className="min-h-screen flex flex-col items-center justify-center bg-[#08090d] text-white p-6 text-center">
                   <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-5">
@@ -916,7 +1241,51 @@ export default function App() {
                   </div>
                   <h1 className="font-syne font-bold text-2xl sm:text-3xl mb-3">This album is no longer available</h1>
                   <p className="font-body text-sm text-zinc-400 max-w-md mb-8">
-                    This digital class album has been unpublished or removed by the department administrator.
+                    {isCurrentAlbumOwner && daysRemaining > 0 && !currentSet.keptByHostOnly
+                      ? `This class album has been deleted and hidden from public view. You have ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} remaining to recover it from your Admin Dashboard.`
+                      : 'This digital class album has been removed by the department administrator.'}
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    {isCurrentAlbumOwner && daysRemaining > 0 && !currentSet.keptByHostOnly && (
+                      <button
+                        onClick={() => {
+                          setSelectedSetId(currentSet.id);
+                          setActiveView('layer1_rep');
+                        }}
+                        className="px-8 py-3.5 rounded-full bg-emerald-500 text-black font-syne font-bold text-xs uppercase tracking-wider hover:bg-emerald-400 transition-colors cursor-pointer shadow-lg active:scale-95"
+                      >
+                        Go to Dashboard to Recover
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setInviteContext(null);
+                        setActiveView('landing');
+                        window.history.pushState(null, '', '#home');
+                        window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+                      }}
+                      className="px-8 py-3.5 rounded-full bg-white text-black font-syne font-bold text-xs uppercase tracking-wider hover:bg-zinc-200 transition-colors cursor-pointer shadow-lg active:scale-95"
+                    >
+                      Return to Home
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            // Public rule: GET album returns only published albums and public fields; drafts, unpublished and deleted return "not available"
+            const isDraftAlbum =
+              !isCrownfieldDemoAlbum(currentSet) &&
+              (currentSet.lifecycleStatus === 'draft' || (!currentSet.isPublished && !currentSet.published));
+            if ((currentSet.isUnpublished || currentSet.unpublished || isDraftAlbum) && !isCurrentAlbumOwner && !isMasterHost) {
+              return (
+                <div className="min-h-screen flex flex-col items-center justify-center bg-[#08090d] text-white p-6 text-center">
+                  <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-5">
+                    <AlertTriangle className="w-8 h-8 text-red-400" />
+                  </div>
+                  <h1 className="font-syne font-bold text-2xl sm:text-3xl mb-3">not available</h1>
+                  <p className="font-body text-sm text-zinc-400 max-w-md mb-8">
+                    This class album is currently a draft or unpublished and is not available for public viewing.
                   </p>
                   <button
                     onClick={() => {
@@ -934,53 +1303,97 @@ export default function App() {
             }
 
             return (
-              <DepartmentAlbumView
-                currentSet={currentSet}
-                originView={albumOriginView}
-                inviteContext={inviteContext}
-                onBackToGrid={() => {
-                  setInviteContext(null);
-                  if (currentSet.departmentId) setSelectedDepartmentId(currentSet.departmentId);
-                  const effectiveUniId = currentSet.institutionId || (currentSet as any).universityId;
-                  if (effectiveUniId) setSelectedUniversityId(effectiveUniId);
-                  setActiveView('albums_grid');
-                  window.history.pushState(null, '', currentSet.departmentId ? `#department/${currentSet.departmentId}` : '#legacy-wall');
-                  window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-                }}
-                onBackToLanding={() => {
-                  setInviteContext(null);
-                  setActiveView('landing');
-                  window.history.pushState(null, '', '#home');
-                  window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-                }}
-                onUpdateSet={(updated) => {
-                  if (isCurrentAlbumOwner) {
-                    handleUpdateSingleSet(updated);
+              <>
+                {isMasterHost && currentSet.deletedAt && (() => {
+                  const daysPassed = Math.floor((Date.now() - new Date(currentSet.deletedAt).getTime()) / (1000 * 60 * 60 * 24));
+                  const daysRemaining = Math.max(0, 30 - daysPassed);
+                  return (
+                    <div className="sticky top-0 z-[9995] bg-red-950/95 border-b border-red-500/40 px-4 sm:px-6 py-2.5 text-white flex flex-wrap items-center justify-between gap-3 backdrop-blur-md">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <span className="px-2.5 py-0.5 rounded-full bg-red-500 text-white font-mono-tech text-[10px] uppercase font-bold">
+                          Deleted Album (Host View Only)
+                        </span>
+                        <span className="font-mono-tech text-xs text-red-200">
+                          {currentSet.keptByHostOnly
+                            ? 'Kept by Host — Permanently retained and visible only to Host'
+                            : `Completely purges after 30 days (${daysRemaining} day${daysRemaining === 1 ? '' : 's'} remaining)`}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextKept = !currentSet.keptByHostOnly;
+                          handleUpdateSingleSet({
+                            ...currentSet,
+                            keptByHostOnly: nextKept,
+                            keptByHostAt: nextKept ? new Date().toISOString() : undefined,
+                          });
+                        }}
+                        className={`px-3.5 py-1 rounded-full font-mono-tech text-[11px] uppercase font-bold transition-colors cursor-pointer border ${
+                          currentSet.keptByHostOnly
+                            ? 'bg-amber-400 text-black border-amber-300 hover:bg-amber-300'
+                            : 'bg-white/10 text-white border-white/25 hover:bg-white/20'
+                        }`}
+                      >
+                        {currentSet.keptByHostOnly ? '✓ Kept (Host Only)' : 'Keep Album (Host Only)'}
+                      </button>
+                    </div>
+                  );
+                })()}
+                <DepartmentAlbumView
+                  currentSet={currentSet}
+                  originView={albumOriginView}
+                  inviteContext={inviteContext}
+                  onBackToGrid={() => {
+                    setInviteContext(null);
+                    if (currentSet.departmentId) setSelectedDepartmentId(currentSet.departmentId);
+                    const effectiveUniId = currentSet.institutionId || (currentSet as any).universityId;
+                    if (effectiveUniId) setSelectedUniversityId(effectiveUniId);
+                    setActiveView('albums_grid');
+                    window.history.pushState(null, '', currentSet.departmentId ? `#department/${currentSet.departmentId}` : '#legacy-wall');
+                    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+                  }}
+                  onBackToLanding={() => {
+                    if (isAdminLoggedIn) return;
+                    setInviteContext(null);
+                    setActiveView('landing');
+                    window.history.pushState(null, '', '#home');
+                    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+                  }}
+                  onUpdateSet={(updated) => {
+                    if (isCurrentAlbumOwner) {
+                      handleUpdateSingleSet(updated);
+                    }
+                  }}
+                  onManageAlbum={
+                    isAdminLoggedIn
+                      ? () => {
+                          if (isViewingOtherAlbum && effectiveUser?.assignedSetId) {
+                            setSelectedSetId(effectiveUser.assignedSetId);
+                          } else {
+                            setSelectedSetId(currentSet.id);
+                          }
+                          setActiveView('layer1_rep');
+                        }
+                      : undefined
                   }
-                }}
-                onManageAlbum={() => {
-                  if (isViewingOtherAlbum && effectiveUser?.assignedSetId) {
-                    setSelectedSetId(effectiveUser.assignedSetId);
-                  } else {
-                    setSelectedSetId(currentSet.id);
-                  }
-                  // Return directly to the dedicated demo album admin edit dashboard
-                  setActiveView('layer1_rep');
-                }}
-                onMainDashboard={() => {
-                  setActiveView('layer0_master');
-                }}
-                showMainButton={Boolean(isMasterHost || albumOriginView === 'layer0_master' || currentSet.id.startsWith('crownfield-law'))}
-                universities={universities}
-                onReturnToMyAlbum={() => {
-                  if (currentUser?.assignedSetId) {
-                    setSelectedSetId(currentUser.assignedSetId);
-                  }
-                }}
-                isAdmin={isAdminLoggedIn}
-                isCurrentAlbumOwner={isCurrentAlbumOwner}
-                isViewingOtherAlbum={isViewingOtherAlbum}
-              />
+                  onMainDashboard={() => {
+                    if (isMasterHost) {
+                      setActiveView('layer0_master');
+                    }
+                  }}
+                  showMainButton={Boolean(isMasterHost)}
+                  universities={universities}
+                  onReturnToMyAlbum={() => {
+                    if (currentUser?.assignedSetId) {
+                      setSelectedSetId(currentUser.assignedSetId);
+                    }
+                  }}
+                  isAdmin={isAdminLoggedIn}
+                  isCurrentAlbumOwner={isCurrentAlbumOwner}
+                  isViewingOtherAlbum={isViewingOtherAlbum}
+                />
+              </>
             );
           })()
         )}
@@ -990,20 +1403,14 @@ export default function App() {
             universities={universities}
             sets={sets}
             contentOverride={contentOverride}
-            currentUser={currentUser || (albumOriginView === 'layer0_master' || selectedDepartmentId === 'dept-crownfield-public-law' ? {
-              id: 'usr-host',
-              email: HOST_EMAIL,
-              fullName: 'Seyi Dan',
-              phone: '09036872687',
-              role: 'master_host',
-              masterToken: 'KOHOT-ROOT-2025',
-            } : null)}
+            currentUser={currentUser}
             selectedUniversityId={selectedUniversityId}
             selectedDepartmentId={selectedDepartmentId}
             onSelectUniversity={setSelectedUniversityId}
             onSelectDepartment={setSelectedDepartmentId}
             inviteContext={inviteContext}
             onOpenOnboardingWithInvite={handleOpenOnboardingWithInvite}
+            onUpdateSet={handleUpdateSingleSet}
             onSelectSet={(id) => {
               const selected = sets.find((s) => s.id === id);
               if (selected) {
@@ -1012,7 +1419,13 @@ export default function App() {
               }
               // Direct instant entry into album from legacy wall without logo load animation
               setSelectedSetId(id);
-              setAlbumOriginView('albums_grid');
+              setAlbumOriginView(
+                currentUser?.role === 'master_host'
+                  ? 'layer0_master'
+                  : currentUser?.role === 'class_rep'
+                  ? 'layer1_rep'
+                  : 'albums_grid'
+              );
               setActiveView('department_album');
               if (inviteContext) {
                 window.history.pushState(null, '', `?next_class_invite=${inviteContext.inviteCode}&dept=${inviteContext.departmentId}&year=${inviteContext.targetYear}&from_year=${inviteContext.fromYear}#album-${id}`);
@@ -1021,7 +1434,10 @@ export default function App() {
               }
               window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
             }}
-            onOpenOnboarding={() => setIsOnboardingOpen(true)}
+            onOpenOnboarding={() => {
+              setVerifiedSignupSession(null);
+              setIsOnboardingOpen(true);
+            }}
             onOpenLogin={() => setIsLoginOpen(true)}
             onOpenDashboard={() => {
               if (currentUser?.role === 'master_host') {
@@ -1032,12 +1448,15 @@ export default function App() {
             }}
             onLogout={handleLogout}
             onBackToLanding={() => {
+              if (currentUser?.role === 'master_host' || currentUser?.role === 'class_rep') {
+                return;
+              }
               setInviteContext(null);
               setActiveView('landing');
               window.history.pushState(null, '', '#home');
               window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
             }}
-            showMainButton={Boolean(currentUser?.role === 'master_host' || albumOriginView === 'layer0_master' || selectedDepartmentId === 'dept-crownfield-public-law')}
+            showMainButton={Boolean(currentUser?.role === 'master_host')}
             onMainDashboard={() => setActiveView('layer0_master')}
           />
         )}
@@ -1057,21 +1476,21 @@ export default function App() {
                   onUpdateSet={handleUpdateSingleSet}
                   onViewAlbum={() => {
                     setSelectedSetId(activeSetForRep.id);
-                    setAlbumOriginView(albumOriginView === 'layer0_master' ? 'layer0_master' : 'layer1_rep');
+                    setAlbumOriginView(currentUser.role === 'master_host' ? 'layer0_master' : 'layer1_rep');
                     setActiveView('department_album');
                   }}
                   onSwitchRole={() => handleLogout()}
                   onBackToLanding={() => {
-                    if (albumOriginView === 'layer0_master' || currentUser.role === 'master_host') {
+                    if (currentUser.role === 'master_host') {
                       setActiveView('layer0_master');
-                    } else {
-                      setActiveView('landing');
                     }
                   }}
                   onMainDashboard={() => {
-                    setActiveView('layer0_master');
+                    if (currentUser.role === 'master_host') {
+                      setActiveView('layer0_master');
+                    }
                   }}
-                  showMainButton={Boolean(albumOriginView === 'layer0_master' || currentUser.role === 'master_host')}
+                  showMainButton={Boolean(currentUser.role === 'master_host')}
                 />
               );
             })()
@@ -1173,6 +1592,13 @@ export default function App() {
         onClose={() => setIsLoginOpen(false)}
         availableSets={sets}
         onLoginSuccess={handleLoginSuccess}
+        onOpenRegister={(session) => {
+          setIsLoginOpen(false);
+          setVerifiedSignupSession(session || null);
+          setIsOnboardingOpen(true);
+        }}
+        logoUrl={contentOverride?.websiteLogoUrl}
+        brandName={contentOverride?.brandName || 'KOHOT'}
       />
 
       {/* Class Rep Onboarding Modal (Unalterable Directory + Request Addition) */}
@@ -1180,12 +1606,14 @@ export default function App() {
         isOpen={isOnboardingOpen}
         onClose={() => {
           setIsOnboardingOpen(false);
+          setVerifiedSignupSession(null);
           setOnboardingPrefill({});
         }}
         universities={universities}
         sets={sets}
         foundingRequests={foundingRequests}
         currentUser={currentUser}
+        verifiedSignupSession={verifiedSignupSession}
         inviteContext={inviteContext}
         onLoginSuccess={handleLoginSuccess}
         onOpenLogin={() => {
@@ -1203,6 +1631,8 @@ export default function App() {
         onRegisterSuccess={handleRegisterSuccess}
         onRequestAddition={handleRequestAddition}
         onSubmitFoundingRequest={handleSubmitFoundingRequest}
+        logoUrl={contentOverride?.websiteLogoUrl}
+        brandName={contentOverride?.brandName || 'KOHOT'}
       />
 
         {/* Persistent Back to Top Arrow Button */}

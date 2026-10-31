@@ -1,78 +1,51 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { UniversityDirectoryItem, ClassSet, StudentProfile, DepartmentItem, EmailEventType, EmailLog, EmailTemplate, WebsiteContentOverride } from '../../types';
-import { DepartmentAnnualRemindersModal } from './DepartmentAnnualRemindersModal';
-import { ImageDropzone } from '../common/ImageDropzone';
+import React, { useState, useMemo } from 'react';
 import {
-  getStoredEmailTemplates,
-  saveStoredEmailTemplates,
-  getStoredEmailLogs,
-  saveStoredEmailLogs,
-  logAndDispatchEmail,
-  exportEmailLogsToCsv,
-  interpolateTemplate,
-  KOHOT_DEFAULT_TEMPLATES
-} from '../../utils/kohotCommunications';
-import { runReminderCheck, fetchReminderLogs, HOST_EMAIL } from '../../utils/apiClient';
-import {
-  Calendar,
-  Mail,
-  FileSpreadsheet,
-  Search,
-  CheckCircle2,
-  Building2,
-  ChevronDown,
-  ChevronRight,
-  Send,
   Users,
+  Search,
+  Send,
+  CheckCircle2,
   Copy,
   Check,
   Sparkles,
   ExternalLink,
-  ShieldCheck,
-  AlertCircle,
-  ImageIcon,
-  Layers,
-  X,
-  Clock,
   Edit3,
-  RotateCcw,
-  Eye,
-  Download,
-  Filter,
-  Sliders,
-  Bell,
+  Image as ImageIcon,
   MessageCircle,
-  Smartphone,
   Share2,
-  ArrowRight
+  Smartphone,
+  Building2,
+  GraduationCap,
 } from 'lucide-react';
+import {
+  UniversityDirectoryItem,
+  ClassSet,
+  WebsiteContentOverride,
+} from '../../types';
+import { ImageDropzone } from '../common/ImageDropzone';
+import { MasterNextClassHandoffsSection } from './MasterNextClassHandoffsSection';
+import { getWhatsAppDigits, formatNigerianPhoneNumber } from '../../utils/phoneFormatter';
+import { logManualCommunication } from '../../utils/kohotCommunications';
 
 interface MasterAnnualRemindersSectionProps {
   universities: UniversityDirectoryItem[];
   sets: ClassSet[];
   contentOverride?: WebsiteContentOverride;
   onUpdateContentOverride?: (content: WebsiteContentOverride) => void;
+  onViewDepartmentLegacyWall?: (deptId: string, uniId?: string) => void;
 }
 
-// Helper to resolve student email with realistic fallback for demo
-export function getGraduateEmail(student: StudentProfile, uniShortCode: string): { email: string; isSubscribed: boolean } {
-  if (student.email && student.email.trim().length > 0) {
-    return { email: student.email.trim(), isSubscribed: true };
-  }
-  const idNum = parseInt(student.id.replace(/\D/g, '') || '1', 10);
-  if (idNum % 9 === 0) {
-    return { email: '', isSubscribed: false };
-  }
-  const clean = student.fullName.toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/);
-  if (clean.length >= 2) {
-    const domain = uniShortCode.toLowerCase() === 'cu' 
-      ? 'covenantuniversity.edu.ng' 
-      : uniShortCode.toLowerCase() === 'ui' 
-      ? 'alumni.ui.edu.ng' 
-      : 'alumni.unilag.edu.ng';
-    return { email: `${clean[0]}.${clean[clean.length - 1]}@${domain}`, isSubscribed: true };
-  }
-  return { email: '', isSubscribed: false };
+interface RegisteredAdminContact {
+  id: string;
+  setId: string;
+  adminName: string;
+  roleLabel: 'Album Admin' | 'Co-Admin';
+  phone: string;
+  departmentName: string;
+  institutionId: string;
+  institutionName: string;
+  graduationYear: number;
+  classSetName: string;
+  isPublished: boolean;
 }
 
 export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSectionProps> = ({
@@ -80,48 +53,33 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
   sets,
   contentOverride,
   onUpdateContentOverride,
+  onViewDepartmentLegacyWall,
 }) => {
-  // Main Section Navigation: Directory & Reminders vs Executive Blast vs Templates vs Audit History vs Testing Tools
-  const [communicationsTab, setCommunicationsTab] = useState<'directory' | 'testing_tools' | 'executive_blast' | 'templates' | 'audit_history'>('directory');
+  // 3 Sub-Clips under KoHot Communications:
+  // 1. Department Executives Blast ('executive_blast')
+  // 2. Message Registered Album Admins ('album_admins')
+  // 3. Next-Class Handoffs ('handoffs')
+  const [communicationsTab, setCommunicationsTab] = useState<
+    'executive_blast' | 'album_admins' | 'handoffs'
+  >('executive_blast');
 
-  // Annual Album Reminder Testing Tools State (Prompt B.8 & B.5)
-  const [dryRunMode, setDryRunMode] = useState(true);
-  const [asOfDateInput, setAsOfDateInput] = useState(() => new Date().toISOString().split('T')[0]);
-  const [isRunningReminderCheck, setIsRunningReminderCheck] = useState(false);
-  const [reminderCheckResult, setReminderCheckResult] = useState<any | null>(null);
-  const [reminderLogsList, setReminderLogsList] = useState<any[]>([]);
-  const [bouncesList, setBouncesList] = useState<any[]>([]);
-  const [reminderErrorMsg, setReminderErrorMsg] = useState('');
-  const [testModeActive, setTestModeActive] = useState(false);
-
-  // Executive Outreach Blast State
-  const defaultBlastImg = contentOverride?.executiveBlastImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85';
-  const [blastImageUrl, setBlastImageUrl] = useState<string>(defaultBlastImg);
+  // =========================================================================
+  // SUB-CLIP 1 STATE: DEPARTMENT EXECUTIVES BLAST (WHATSAPP & SMS ONLY)
+  // =========================================================================
+  const [blastImageUrl, setBlastImageUrl] = useState<string>(
+    (contentOverride as any)?.broadcastLinkContextImageUrl ||
+      contentOverride?.executiveBlastImageUrl ||
+      'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85'
+  );
+  const [blastMessageClip, setBlastMessageClip] = useState<string>(
+    contentOverride?.executiveBlastMessageTemplate ||
+      `Hello Department Executive Team,\n\nGive your graduating class a permanent digital home and a physical Legacy Plaque in your department corridor.\n\nCreate your official Department Class Album on KoHot today:\n{{website_url}}\n\nPreserve your classmates, portraits, moments, and stories forever.`
+  );
   const [targetBlastAudience, setTargetBlastAudience] = useState<string>('all');
-  const [blastMessageClip, setBlastMessageClip] = useState<string>(() => {
-    return contentOverride?.executiveBlastMessageTemplate ||
-`Hello Department Executives & Student Leaders,
-
-Preserve the heritage, memories, and individual student achievements of your department's graduating class on KoHot.
-
-Establish your official Department Class Album, install your corridor Legacy Plaque, and ensure your graduating set is remembered across generations.
-
-Create your Class Album today at:
-{{website_url}}
-
-KoHot — Beautiful graduate memories live here.`;
-  });
-  const [isSendingExecBlast, setIsSendingExecBlast] = useState(false);
   const [execBlastToast, setExecBlastToast] = useState<string | null>(null);
   const [copiedBlastLink, setCopiedBlastLink] = useState(false);
   const [copiedBlastMessage, setCopiedBlastMessage] = useState(false);
   const [imageSaveToast, setImageSaveToast] = useState(false);
-
-  useEffect(() => {
-    if (contentOverride?.executiveBlastImageUrl) {
-      setBlastImageUrl(contentOverride.executiveBlastImageUrl);
-    }
-  }, [contentOverride?.executiveBlastImageUrl]);
 
   const handleUpdateBlastImage = (newUrl: string) => {
     setBlastImageUrl(newUrl);
@@ -135,596 +93,273 @@ KoHot — Beautiful graduate memories live here.`;
     }
   };
 
-  // Directory & Reminders States
-  const [viewMode, setViewMode] = useState<'hierarchy' | 'flat'>('hierarchy');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedUniFilter, setSelectedUniFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'subscribed' | 'unsubscribed'>('all');
-  const [cronActive, setCronActive] = useState(true);
-  const [isSendingBlast, setIsSendingBlast] = useState(false);
-  const [blastToast, setBlastToast] = useState<string | null>(null);
-  const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
-  const [selectedDeptForModal, setSelectedDeptForModal] = useState<{ dept: DepartmentItem; uni: UniversityDirectoryItem } | null>(null);
+  // =========================================================================
+  // SUB-CLIP 2 STATE: REGISTERED ALBUM ADMINS (WHATSAPP & SMS MESSAGING)
+  // =========================================================================
+  const [adminSearchQuery, setAdminSearchQuery] = useState('');
+  const [adminUniFilter, setAdminUniFilter] = useState<string>('all');
+  const [adminMessageTemplate, setAdminMessageTemplate] = useState<string>(
+    `Hello {{admin_name}},\n\nThis is KoHot Host reaching out regarding your {{department_name}} ({{institution_name}}) — Class of {{graduation_year}} album.\n\nAccess your class album here:\n{{album_url}}`
+  );
+  const [copiedAdminPhone, setCopiedAdminPhone] = useState<string | null>(null);
+  const [copiedAllPhones, setCopiedAllPhones] = useState(false);
+  const [copiedAdminTemplate, setCopiedAdminTemplate] = useState(false);
+  const [adminMessageToast, setAdminMessageToast] = useState<string | null>(null);
 
-  // Expanded tree states
-  const [expandedUnis, setExpandedUnis] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    if (universities[0]) init[universities[0].id] = true;
-    return init;
-  });
+  // Extract all registered Album Admins (and Co-Admins) from existing sets
+  const registeredAdmins = useMemo<RegisteredAdminContact[]>(() => {
+    const list: RegisteredAdminContact[] = [];
 
-  const [selectedDeptPerUni, setSelectedDeptPerUni] = useState<Record<string, string>>({});
-  const [setSearchTerms, setSetSearchTerms] = useState<Record<string, string>>({});
+    sets.forEach((set) => {
+      if (set.deletedAt) return;
 
-  // ==========================================
-  // TEMPLATES MANAGEMENT STATE
-  // ==========================================
-  const [templates, setTemplates] = useState<Record<EmailEventType, EmailTemplate>>(getStoredEmailTemplates);
-  const [selectedTemplateKey, setSelectedTemplateKey] = useState<EmailEventType>('class_album_is_live');
-  const [editSubject, setEditSubject] = useState('');
-  const [editBody, setEditBody] = useState('');
-  const [templateSaveSuccess, setTemplateSaveSuccess] = useState(false);
+      // Primary Album Admin phone resolution from existing data
+      const adminStudent = (set.students || []).find(
+        (st) =>
+          ((set as any).classAdminStudentId && st.id === (set as any).classAdminStudentId) ||
+          (set.classRepEmail && st.email?.toLowerCase() === set.classRepEmail.toLowerCase()) ||
+          (set.classRepName && st.fullName?.toLowerCase() === set.classRepName.toLowerCase())
+      );
 
-  // Sync editor inputs when selected template changes
-  useEffect(() => {
-    const current = templates[selectedTemplateKey] || KOHOT_DEFAULT_TEMPLATES[selectedTemplateKey];
-    if (current) {
-      setEditSubject(current.subjectTemplate);
-      setEditBody(current.bodyTemplate);
-    }
-  }, [selectedTemplateKey, templates]);
+      const resolvedPrimaryPhone =
+        set.classRepPhone ||
+        adminStudent?.whatsappNumber ||
+        (adminStudent as any)?.phoneNumber ||
+        '';
 
-  // ==========================================
-  // EMAIL AUDIT HISTORY STATE
-  // ==========================================
-  const [emailLogs, setEmailLogs] = useState<EmailLog[]>(getStoredEmailLogs);
-  const [historySearch, setHistorySearch] = useState('');
-  const [historyEventFilter, setHistoryEventFilter] = useState<string>('all');
-  const [previewLog, setPreviewLog] = useState<EmailLog | null>(null);
-
-  // Refresh logs when opening the tab
-  useEffect(() => {
-    if (communicationsTab === 'audit_history') {
-      setEmailLogs(getStoredEmailLogs());
-    }
-  }, [communicationsTab]);
-
-  const toggleUni = (uniId: string) => {
-    setExpandedUnis((prev) => ({ ...prev, [uniId]: !prev[uniId] }));
-  };
-
-  const handleSelectDepartment = (uniId: string, deptId: string) => {
-    setSelectedDeptPerUni((prev) => ({
-      ...prev,
-      [uniId]: prev[uniId] === deptId ? '' : deptId,
-    }));
-  };
-
-  const handleCopyEmail = (email: string) => {
-    navigator.clipboard?.writeText(email);
-    setCopiedEmail(email);
-    setTimeout(() => setCopiedEmail(null), 2000);
-  };
-
-  // Compile all graduates across all sets with metadata
-  const allGraduates = sets.flatMap((set) => {
-    const uni = universities.find(
-      (u) =>
-        u.id === set.institutionId ||
-        set.institutionName.toLowerCase().includes(u.shortCode.toLowerCase()) ||
-        set.institutionName.toLowerCase().includes(u.name.toLowerCase())
-    );
-    const uniShort = uni?.shortCode || 'UNI';
-    const uniName = uni?.name || set.institutionName;
-
-    return set.students
-      .filter((s) => s.approved !== false)
-      .map((student) => {
-        const { email, isSubscribed } = getGraduateEmail(student, uniShort);
-        return {
-          ...student,
-          resolvedEmail: email,
-          isSubscribed,
-          set,
-          universityName: uniName,
-          universityShortCode: uniShort,
-          departmentName: set.departmentName,
-          classSetName: set.classSetName,
-          graduationYear: set.graduationYear,
-        };
+      list.push({
+        id: `admin-${set.id}`,
+        setId: set.id,
+        adminName: set.classRepName || adminStudent?.fullName || 'Class Album Admin',
+        roleLabel: 'Album Admin',
+        phone: resolvedPrimaryPhone,
+        departmentName: set.departmentName,
+        institutionId: set.institutionId,
+        institutionName: set.institutionName,
+        graduationYear: set.graduationYear,
+        classSetName: set.classSetName,
+        isPublished: Boolean(set.isPublished),
       });
-  });
 
-  // Global KPIs
-  const totalGraduatesCount = allGraduates.length;
-  const subscribedGraduatesCount = allGraduates.filter((g) => g.isSubscribed).length;
-  const coveragePercent = totalGraduatesCount > 0 ? Math.round((subscribedGraduatesCount / totalGraduatesCount) * 100) : 0;
-
-  // Filtered list for search and filters
-  const filteredGraduates = allGraduates.filter((g) => {
-    if (selectedUniFilter !== 'all' && g.set.institutionId !== selectedUniFilter && !g.universityShortCode.toLowerCase().includes(selectedUniFilter.toLowerCase())) {
-      return false;
-    }
-    if (statusFilter === 'subscribed' && !g.isSubscribed) return false;
-    if (statusFilter === 'unsubscribed' && g.isSubscribed) return false;
-
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.toLowerCase();
-    return (
-      g.fullName.toLowerCase().includes(term) ||
-      (g.nickname && g.nickname.toLowerCase().includes(term)) ||
-      (g.resolvedEmail && g.resolvedEmail.toLowerCase().includes(term)) ||
-      g.departmentName.toLowerCase().includes(term) ||
-      g.universityName.toLowerCase().includes(term) ||
-      g.classSetName.toLowerCase().includes(term)
-    );
-  });
-
-  // Export any list of graduates to CSV
-  const exportGraduatesToCsv = (graduatesList: typeof allGraduates, filename: string) => {
-    const headers = [
-      'University',
-      'Department',
-      'Class Set',
-      'Graduation Year',
-      'Full Name',
-      'Nickname',
-      'Position / Role',
-      'Registered Email',
-      'Subscription Status',
-      'Instagram / Twitter',
-      'WhatsApp / Phone',
-      'Parting Quote'
-    ];
-
-    const rows = graduatesList.map((g) => [
-      `"${g.universityName.replace(/"/g, '""')}"`,
-      `"${g.departmentName.replace(/"/g, '""')}"`,
-      `"${g.classSetName.replace(/"/g, '""')}"`,
-      `"${g.graduationYear}"`,
-      `"${g.fullName.replace(/"/g, '""')}"`,
-      `"${(g.nickname || '').replace(/"/g, '""')}"`,
-      `"${(g.position || 'Member').replace(/"/g, '""')}"`,
-      `"${(g.resolvedEmail || '').replace(/"/g, '""')}"`,
-      `"${g.isSubscribed ? 'Active Subscriber' : 'Missing Email'}"`,
-      `"${(g.instagramOrTwitter || '').replace(/"/g, '""')}"`,
-      `"${(g.whatsappNumber || '').replace(/"/g, '""')}"`,
-      `"${(g.quote || '').replace(/"/g, '""')}"`,
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Trigger Annual Reminders Blast and log emails
-  const handleTriggerBlast = () => {
-    setIsSendingBlast(true);
-    setBlastToast(null);
-
-    setTimeout(() => {
-      const activeGrads = allGraduates.filter((g) => g.isSubscribed && g.resolvedEmail);
-      
-      // Dispatch emails for the first batch of subscribers to populate audit history
-      activeGrads.slice(0, 10).forEach((grad) => {
-        logAndDispatchEmail({
-          event: 'annual_legacy_reminder',
-          recipientEmail: grad.resolvedEmail,
-          recipientName: grad.fullName,
-          variables: {
-            recipientName: grad.fullName,
-            departmentName: grad.departmentName,
-            graduationYear: grad.graduationYear,
-            institutionName: grad.universityName,
-            albumUrl: `${window.location.origin}/#album-${grad.set.id}`,
-            legacyPlaqueDetails: `${grad.universityName} Faculty Foyer Wall`,
-          },
-          metadata: {
-            setId: grad.set.id,
-            departmentName: grad.departmentName,
-            graduationYear: grad.graduationYear,
-            studentId: grad.id,
-          },
+      // Include any registered Co-Admins if they have existing data
+      const coAdminsList = (set as any).coAdmins;
+      if (Array.isArray(coAdminsList)) {
+        coAdminsList.forEach((co: any, idx: number) => {
+          const coStudent = (set.students || []).find(
+            (st) =>
+              (co.email && st.email?.toLowerCase() === co.email.toLowerCase()) ||
+              (co.fullName && st.fullName?.toLowerCase() === co.fullName.toLowerCase())
+          );
+          const coPhone = co.phone || coStudent?.whatsappNumber || (coStudent as any)?.phoneNumber || '';
+          list.push({
+            id: `coadmin-${set.id}-${idx}`,
+            setId: set.id,
+            adminName: co.fullName || coStudent?.fullName || 'Co-Admin',
+            roleLabel: 'Co-Admin',
+            phone: coPhone,
+            departmentName: set.departmentName,
+            institutionId: set.institutionId,
+            institutionName: set.institutionName,
+            graduationYear: set.graduationYear,
+            classSetName: set.classSetName,
+            isPublished: Boolean(set.isPublished),
+          });
         });
-      });
+      }
+    });
 
-      setEmailLogs(getStoredEmailLogs());
-      setIsSendingBlast(false);
-      setBlastToast(`Successfully dispatched automated Annual Reminders to ${activeGrads.length} verified graduate inboxes!`);
-      setTimeout(() => setBlastToast(null), 5000);
-    }, 1500);
+    return list;
+  }, [sets]);
+
+  const filteredAdmins = useMemo(() => {
+    return registeredAdmins.filter((admin) => {
+      if (adminUniFilter !== 'all' && admin.institutionId !== adminUniFilter) {
+        return false;
+      }
+      if (adminSearchQuery.trim()) {
+        const q = adminSearchQuery.toLowerCase();
+        const matchName = admin.adminName.toLowerCase().includes(q);
+        const matchDept = admin.departmentName.toLowerCase().includes(q);
+        const matchUni = admin.institutionName.toLowerCase().includes(q);
+        const matchPhone = admin.phone.toLowerCase().includes(q);
+        const matchYear = String(admin.graduationYear).includes(q);
+        return matchName || matchDept || matchUni || matchPhone || matchYear;
+      }
+      return true;
+    });
+  }, [registeredAdmins, adminUniFilter, adminSearchQuery]);
+
+  const buildPersonalizedAdminMessage = (admin: RegisteredAdminContact) => {
+    const albumUrl =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/#album-${admin.setId}`
+        : `https://kohot.com/#album-${admin.setId}`;
+
+    return adminMessageTemplate
+      .replace(/\{\{admin_name\}\}/g, admin.adminName)
+      .replace(/\{\{department_name\}\}/g, admin.departmentName)
+      .replace(/\{\{institution_name\}\}/g, admin.institutionName)
+      .replace(/\{\{graduation_year\}\}/g, String(admin.graduationYear))
+      .replace(/\{\{album_url\}\}/g, albumUrl);
   };
 
-  // Save modified email template
-  const handleSaveTemplate = (e: React.FormEvent) => {
-    e.preventDefault();
-    const updated = {
-      ...templates,
-      [selectedTemplateKey]: {
-        ...templates[selectedTemplateKey],
-        subjectTemplate: editSubject,
-        bodyTemplate: editBody,
+  const handleSendAdminMessage = (admin: RegisteredAdminContact, channel: 'whatsapp' | 'sms') => {
+    const personalizedMsg = buildPersonalizedAdminMessage(admin);
+    const encoded = encodeURIComponent(personalizedMsg);
+
+    logManualCommunication({
+      channel,
+      recipientContact: admin.phone || 'Direct Client Launch',
+      recipientName: admin.adminName,
+      event: 'host_manual_whatsapp_followup',
+      subjectOrSummary: `Host ${channel.toUpperCase()} to Album Admin: ${admin.departmentName} (${admin.graduationYear})`,
+      bodySnippet: personalizedMsg,
+      metadata: {
+        setId: admin.setId,
+        departmentName: admin.departmentName,
+        graduationYear: admin.graduationYear,
+        initiatedBy: 'KoHot Master Host',
       },
-    };
-    setTemplates(updated);
-    saveStoredEmailTemplates(updated);
-    setTemplateSaveSuccess(true);
-    setTimeout(() => setTemplateSaveSuccess(false), 3000);
-  };
+    });
 
-  // Reset current template to default
-  const handleResetTemplate = () => {
-    const def = KOHOT_DEFAULT_TEMPLATES[selectedTemplateKey];
-    setEditSubject(def.subjectTemplate);
-    setEditBody(def.bodyTemplate);
-    const updated = {
-      ...templates,
-      [selectedTemplateKey]: def,
-    };
-    setTemplates(updated);
-    saveStoredEmailTemplates(updated);
-    setTemplateSaveSuccess(true);
-    setTimeout(() => setTemplateSaveSuccess(false), 3000);
-  };
+    if (channel === 'whatsapp') {
+      const waDigits = getWhatsAppDigits(admin.phone);
+      const waUrl = waDigits
+        ? `https://wa.me/${waDigits}?text=${encoded}`
+        : `https://api.whatsapp.com/send?text=${encoded}`;
+      window.open(waUrl, '_blank');
+    } else {
+      const formattedPhone = formatNigerianPhoneNumber(admin.phone);
+      const smsUrl = formattedPhone
+        ? `sms:${formattedPhone}?body=${encoded}`
+        : `sms:?body=${encoded}`;
+      window.location.href = smsUrl;
+    }
 
-  // Insert variable into template body
-  const handleInsertVariable = (varName: string) => {
-    setEditBody((prev) => prev + ` ${varName} `);
-  };
-
-  // Filtered Email Logs
-  const filteredEmailLogs = emailLogs.filter((log) => {
-    if (historyEventFilter !== 'all' && log.event !== historyEventFilter) return false;
-    if (!historySearch.trim()) return true;
-    const term = historySearch.toLowerCase();
-    return (
-      log.recipientName.toLowerCase().includes(term) ||
-      log.recipientEmail.toLowerCase().includes(term) ||
-      log.subject.toLowerCase().includes(term) ||
-      log.body.toLowerCase().includes(term)
+    setAdminMessageToast(
+      `Opened ${channel === 'whatsapp' ? 'WhatsApp' : 'SMS'} for ${admin.adminName} (${admin.departmentName}).`
     );
-  });
+    setTimeout(() => setAdminMessageToast(null), 3500);
+  };
+
+  const handleBulkSmsAllFilteredAdmins = () => {
+    const phones = filteredAdmins
+      .map((a) => formatNigerianPhoneNumber(a.phone))
+      .filter((p) => Boolean(p));
+
+    const genericMsg = adminMessageTemplate
+      .replace(/\{\{admin_name\}\}/g, 'Class Album Admin')
+      .replace(/\{\{department_name\}\}/g, 'your department')
+      .replace(/\{\{institution_name\}\}/g, 'your institution')
+      .replace(/\{\{graduation_year\}\}/g, 'your graduating class')
+      .replace(
+        /\{\{album_url\}\}/g,
+        typeof window !== 'undefined' ? window.location.origin : 'https://kohot.com'
+      );
+
+    const recipientsJoined = phones.join(',');
+    const smsUrl = recipientsJoined
+      ? `sms:${recipientsJoined}?body=${encodeURIComponent(genericMsg)}`
+      : `sms:?body=${encodeURIComponent(genericMsg)}`;
+    window.location.href = smsUrl;
+  };
+
+  const handleCopyAllAdminPhones = () => {
+    const phones = filteredAdmins
+      .map((a) => formatNigerianPhoneNumber(a.phone) || a.phone)
+      .filter(Boolean)
+      .join(', ');
+    navigator.clipboard.writeText(phones);
+    setCopiedAllPhones(true);
+    setTimeout(() => setCopiedAllPhones(false), 2500);
+  };
 
   return (
-    <div className="space-y-8 animate-fadeIn" id="kohot-communications-section">
-      {/* SECTION HEADER & SUB-NAVIGATION */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-5">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="font-mono-tech text-[11px] uppercase tracking-[0.2em] text-zinc-400 font-semibold">
-              KO-HOT SYSTEM ENGINE
-            </span>
+    <div id="master-communications-module" className="space-y-8 animate-fadeIn">
+      {/* =========================================================================
+          HEADER & SUB-CLIP NAVIGATION (WHATSAPP & SMS ONLY)
+          ========================================================================= */}
+      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-[#0e1017] via-[#131622] to-[#0a0b10] border border-white/15 shadow-2xl space-y-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2.5">
+              <span className="px-3 py-1 rounded-full bg-[#25D366]/15 border border-[#25D366]/30 text-[#25D366] font-mono-tech text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5">
+                <MessageCircle className="w-3 h-3" />
+                <span>WhatsApp &amp; SMS Direct Outreach</span>
+              </span>
+              <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-zinc-400 font-mono-tech text-[10px] uppercase tracking-wider">
+                Existing Cohort Data
+              </span>
+            </div>
+
+            <h2 className="font-syne font-bold text-2xl sm:text-3xl text-white flex items-center gap-3">
+              <MessageCircle className="w-7 h-7 text-[#d4af37]" />
+              <span>KoHot Communications</span>
+            </h2>
+
+            <p className="font-body text-xs sm:text-sm text-zinc-400 max-w-2xl leading-relaxed">
+              Centralized WhatsApp and SMS messaging hub for Department Executives outreach, registered Class Album Admins, and sequential Next-Class Handoffs.
+            </p>
           </div>
-          <h2 className="font-syne font-black text-2xl sm:text-3xl text-white tracking-tight flex items-center gap-3">
-            <Mail className="w-7 h-7 text-[#d4af37]" />
-            <span>KoHot Communications</span>
-          </h2>
-          <p className="font-body text-xs sm:text-sm text-zinc-400 mt-1 max-w-2xl">
-            Centralized email hub managing automated Annual Legacy Reminders, graduate delivery directories, editable communication templates, and auditable delivery history.
-          </p>
-        </div>
 
-        {/* Sub-Tabs Selector */}
-        <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-black/60 border border-white/15 self-start md:self-auto shrink-0">
-          <button
-            type="button"
-            id="tab-comms-directory"
-            onClick={() => setCommunicationsTab('directory')}
-            className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              communicationsTab === 'directory'
-                ? 'bg-white text-black font-bold shadow-md'
-                : 'text-zinc-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span>Annual Reminders ({totalGraduatesCount})</span>
-          </button>
+          {/* SUB-CLIP NAVIGATION PILLS */}
+          <div className="flex flex-wrap items-center gap-1.5 p-1.5 rounded-2xl bg-black/60 border border-white/10 self-start">
+            <button
+              type="button"
+              id="comm-tab-executive-blast"
+              onClick={() => setCommunicationsTab('executive_blast')}
+              className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                communicationsTab === 'executive_blast'
+                  ? 'bg-[#d4af37] text-black font-bold shadow'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Department Executives Blast</span>
+            </button>
 
-          <button
-            type="button"
-            id="tab-comms-exec-blast"
-            onClick={() => setCommunicationsTab('executive_blast')}
-            className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              communicationsTab === 'executive_blast'
-                ? 'bg-[#d4af37] text-black font-bold shadow-md'
-                : 'text-zinc-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Send className="w-3.5 h-3.5 text-black" />
-            <span>Department Executives Blast</span>
-          </button>
+            <button
+              type="button"
+              id="comm-tab-album-admins"
+              onClick={() => setCommunicationsTab('album_admins')}
+              className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                communicationsTab === 'album_admins'
+                  ? 'bg-[#25D366] text-black font-bold shadow'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Registered Album Admins</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono-tech font-bold ${
+                  communicationsTab === 'album_admins'
+                    ? 'bg-black/20 text-black'
+                    : 'bg-white/10 text-zinc-300'
+                }`}
+              >
+                {registeredAdmins.length}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            id="tab-comms-templates"
-            onClick={() => setCommunicationsTab('templates')}
-            className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              communicationsTab === 'templates'
-                ? 'bg-white text-black font-bold shadow-md'
-                : 'text-zinc-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-            <span>Email/Messages Templates</span>
-          </button>
-
-          <button
-            type="button"
-            id="tab-comms-testing-tools"
-            onClick={() => {
-              setCommunicationsTab('testing_tools');
-              // Automatically fetch logs when opening tab
-              fetchReminderLogs().then((d) => {
-                setReminderLogsList(d.logs || []);
-                setBouncesList(d.bounces || []);
-              }).catch(() => {});
-            }}
-            className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              communicationsTab === 'testing_tools'
-                ? 'bg-amber-400 text-black font-bold shadow-md'
-                : 'text-zinc-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Sliders className="w-3.5 h-3.5" />
-            <span>Reminder Engine &amp; Testing Tools</span>
-          </button>
-
-          <button
-            type="button"
-            id="tab-comms-history"
-            onClick={() => setCommunicationsTab('audit_history')}
-            className={`px-4 py-2 rounded-xl font-mono-tech text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              communicationsTab === 'audit_history'
-                ? 'bg-white text-black font-bold shadow-md'
-                : 'text-zinc-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>Audit History ({emailLogs.length})</span>
-          </button>
+            <button
+              type="button"
+              id="comm-tab-handoffs"
+              onClick={() => setCommunicationsTab('handoffs')}
+              className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                communicationsTab === 'handoffs'
+                  ? 'bg-white text-black font-bold shadow'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Next-Class Handoffs</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Global Toast */}
-      {blastToast && (
-        <div className="p-4 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs font-mono-tech flex items-center gap-3 animate-fadeIn shadow-xl">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{blastToast}</span>
-        </div>
-      )}
-
       {/* =========================================================================
-          VIEW 1: ANNUAL REMINDERS & GRADUATE SUBSCRIBER DIRECTORY
-          ========================================================================= */}
-      {communicationsTab === 'directory' && (
-        <div className="space-y-8 animate-fadeIn">
-          {/* KPI STATS BAR */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-5 rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1">
-              <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Total Preserved Graduates</span>
-              </span>
-              <p className="font-syne font-black text-2xl sm:text-3xl text-white">
-                {totalGraduatesCount}
-              </p>
-              <p className="text-[10px] text-zinc-500 font-mono-tech">Across {sets.length} Class Albums</p>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1">
-              <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Verified Email Inboxes</span>
-              </span>
-              <p className="font-syne font-black text-2xl sm:text-3xl text-emerald-400">
-                {subscribedGraduatesCount}
-              </p>
-              <p className="text-[10px] text-zinc-500 font-mono-tech">{coveragePercent}% inbox reach coverage</p>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1">
-              <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-blue-400" />
-                <span>Automated Relive Cron</span>
-              </span>
-              <div className="flex items-center gap-2 pt-0.5">
-                <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-mono-tech font-bold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Active
-                </span>
-              </div>
-              <p className="text-[10px] text-zinc-500 font-mono-tech">Perpetual annual convocation anniversary</p>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#0c0d14] border border-white/10 flex flex-col justify-between space-y-2">
-              <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                <FileSpreadsheet className="w-3.5 h-3.5 text-[#d4af37]" />
-                <span>Export Directory</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => exportGraduatesToCsv(allGraduates, `kohot-graduates-registry-${new Date().toISOString().split('T')[0]}.csv`)}
-                className="w-full py-2.5 px-3 rounded-xl bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold flex items-center justify-center gap-1.5 transition-all shadow cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export CSV ({totalGraduatesCount})</span>
-              </button>
-            </div>
-          </div>
-
-          {/* ACTION BAR: SEARCH, FILTERS & MANUAL BLAST */}
-          <div className="p-4 rounded-2xl bg-[#0c0d14] border border-white/10 flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              <div className="relative min-w-[240px] flex-1 sm:flex-initial">
-                <Search className="w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search graduate, email, or dept..."
-                  className="w-full pl-9 pr-4 py-2 rounded-xl bg-black/60 border border-white/10 text-white font-mono-tech text-xs placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
-                />
-              </div>
-
-              <select
-                value={selectedUniFilter}
-                onChange={(e) => setSelectedUniFilter(e.target.value)}
-                className="px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-zinc-300 font-mono-tech text-xs focus:outline-none"
-              >
-                <option value="all">All Universities</option>
-                {universities.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.shortCode} • {u.name}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as any)}
-                className="px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-zinc-300 font-mono-tech text-xs focus:outline-none"
-              >
-                <option value="all">All Statuses</option>
-                <option value="subscribed">Subscribed Only</option>
-                <option value="unsubscribed">Missing Email</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
-              <button
-                type="button"
-                onClick={handleTriggerBlast}
-                disabled={isSendingBlast}
-                className="px-4 py-2 rounded-xl bg-[#d4af37] hover:bg-[#c49f2f] text-black font-tech text-xs tracking-wider uppercase font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow disabled:opacity-50"
-              >
-                <Send className="w-3.5 h-3.5 text-black" />
-                <span>{isSendingBlast ? 'Dispatched Inboxes...' : 'Trigger Annual Blast Now'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* GRADUATE DIRECTORY TABLE */}
-          <div className="rounded-2xl bg-[#0c0d14] border border-white/10 overflow-hidden">
-            <div className="p-4 border-b border-white/10 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Users className="w-4 h-4 text-zinc-400" />
-                <span className="font-syne font-bold text-sm text-white">
-                  Graduate Registry &amp; Annual Delivery List
-                </span>
-                <span className="px-2 py-0.5 rounded-full bg-white/10 text-zinc-400 text-[10px] font-mono-tech">
-                  {filteredGraduates.length} results
-                </span>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-white/10 bg-black/40 font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                    <th className="p-3.5">Graduate</th>
-                    <th className="p-3.5">University &amp; Dept</th>
-                    <th className="p-3.5">Class Set</th>
-                    <th className="p-3.5">Email Destination</th>
-                    <th className="p-3.5">Delivery Status</th>
-                    <th className="p-3.5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5 font-mono-tech">
-                  {filteredGraduates.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-12 text-center text-zinc-500 font-mono-tech text-xs">
-                        No live department class albums registered yet. Demo albums are strictly managed in the dedicated Album Demos section.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredGraduates.slice(0, 50).map((grad) => (
-                    <tr key={`${grad.set.id}-${grad.id}`} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="p-3.5">
-                        <div className="flex items-center gap-2.5">
-                          <img
-                            src={grad.photoUrl}
-                            alt={grad.fullName}
-                            className="w-8 h-8 rounded-lg object-cover border border-white/10 shrink-0"
-                          />
-                          <div>
-                            <p className="font-body font-semibold text-white truncate max-w-[160px]">
-                              {grad.fullName}
-                            </p>
-                            <span className="text-[10px] text-zinc-500">
-                              {grad.position || 'Member'}
-                            </span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-3.5 text-zinc-300">
-                        <p className="truncate max-w-[180px] font-body text-zinc-200">
-                          {grad.departmentName}
-                        </p>
-                        <span className="text-[10px] text-zinc-500">{grad.universityShortCode}</span>
-                      </td>
-                      <td className="p-3.5 text-zinc-300">
-                        Class of {grad.graduationYear}
-                      </td>
-                      <td className="p-3.5">
-                        {grad.resolvedEmail ? (
-                          <div className="flex items-center gap-1.5 text-zinc-300">
-                            <span className="truncate max-w-[180px]">{grad.resolvedEmail}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyEmail(grad.resolvedEmail)}
-                              className="text-zinc-500 hover:text-white cursor-pointer"
-                              title="Copy email"
-                            >
-                              {copiedEmail === grad.resolvedEmail ? (
-                                <Check className="w-3 h-3 text-emerald-400" />
-                              ) : (
-                                <Copy className="w-3 h-3" />
-                              )}
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-zinc-600 italic">No email registered</span>
-                        )}
-                      </td>
-                      <td className="p-3.5">
-                        {grad.isSubscribed ? (
-                          <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px]">
-                            Active Subscriber
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px]">
-                            Pending Contact
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-3.5 text-right">
-                        <a
-                          href={`#album-${grad.set.id}`}
-                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white text-[10px] uppercase font-semibold transition-colors inline-flex items-center gap-1"
-                        >
-                          <span>Album</span>
-                          <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
-                      </td>
-                    </tr>
-                  )))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
-          VIEW 2: DEPARTMENT EXECUTIVES ALBUM BLAST & LINK CONTEXT ASSET MANAGER
-          Clip section where the owner can blast messages to department executives
-          to create their album, landing on the website page with an editable graduate image.
+          SUB-CLIP 1: DEPARTMENT EXECUTIVES BLAST (WHATSAPP & SMS ONLY)
           ========================================================================= */}
       {communicationsTab === 'executive_blast' && (
         <div className="space-y-8 animate-fadeIn" id="executive-blast-section">
@@ -733,14 +368,14 @@ KoHot — Beautiful graduate memories live here.`;
             <div className="flex items-center gap-2 text-[#d4af37]">
               <Sparkles className="w-4 h-4" />
               <span className="font-mono-tech text-[11px] uppercase tracking-wider font-bold">
-                Executive Outreach &amp; Album Creation Engine
+                Executive Outreach &amp; Album Creation Engine • WhatsApp &amp; SMS
               </span>
             </div>
             <h3 className="font-syne font-black text-xl sm:text-2xl text-white">
               Blast Outreach to Department Executives
             </h3>
             <p className="font-body text-xs sm:text-sm text-zinc-300 max-w-3xl leading-relaxed">
-              Compose and dispatch broadcast messages directly to department executive leadership and student union representatives across universities inviting them to create their graduating class album. Links sent here land directly on the <strong>KoHot website homepage</strong>.
+              Compose and dispatch broadcast messages via WhatsApp and SMS directly to department executive leadership and student union representatives across universities inviting them to create their graduating class album. Links sent here land directly on the <strong>KoHot website homepage</strong>.
             </p>
           </div>
 
@@ -779,7 +414,11 @@ KoHot — Beautiful graduate memories live here.`;
 
                   <button
                     type="button"
-                    onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85')}
+                    onClick={() =>
+                      handleUpdateBlastImage(
+                        'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85'
+                      )
+                    }
                     className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs self-start sm:self-auto cursor-pointer transition-colors"
                   >
                     Reset to Default
@@ -822,21 +461,33 @@ KoHot — Beautiful graduate memories live here.`;
                     <span className="text-zinc-500 shrink-0 font-semibold">Presets:</span>
                     <button
                       type="button"
-                      onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85')}
+                      onClick={() =>
+                        handleUpdateBlastImage(
+                          'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85'
+                        )
+                      }
                       className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
                     >
                       Graduation Caps
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1600&auto=format&fit=crop&q=85')}
+                      onClick={() =>
+                        handleUpdateBlastImage(
+                          'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1600&auto=format&fit=crop&q=85'
+                        )
+                      }
                       className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
                     >
                       Cohort Convocation
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleUpdateBlastImage('https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1600&auto=format&fit=crop&q=85')}
+                      onClick={() =>
+                        handleUpdateBlastImage(
+                          'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1600&auto=format&fit=crop&q=85'
+                        )
+                      }
                       className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
                     >
                       Alumni Group Smile
@@ -851,7 +502,7 @@ KoHot — Beautiful graduate memories live here.`;
                   <div className="flex items-center gap-2">
                     <Edit3 className="w-4 h-4 text-[#d4af37]" />
                     <h4 className="font-syne font-bold text-sm text-white">
-                      Executive Outreach Message Clip
+                      Executive Outreach Message Clip (WhatsApp &amp; SMS)
                     </h4>
                   </div>
                   <span className="text-[10px] font-mono-tech text-zinc-500 uppercase">
@@ -870,7 +521,9 @@ KoHot — Beautiful graduate memories live here.`;
                     className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-[#d4af37]"
                   >
                     <option value="all">
-                      All Universities &amp; All Departments ({universities.reduce((acc, u) => acc + (u.departments?.length || 0), 0)} Departments)
+                      All Universities &amp; All Departments (
+                      {universities.reduce((acc, u) => acc + (u.departments?.length || 0), 0)}{' '}
+                      Departments)
                     </option>
                     {universities.map((uni) => (
                       <option key={uni.id} value={uni.id}>
@@ -891,7 +544,9 @@ KoHot — Beautiful graduate memories live here.`;
                     </span>
                   </div>
                   <p className="font-mono-tech text-xs text-[#d4af37] break-all select-all">
-                    {typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast'}
+                    {typeof window !== 'undefined'
+                      ? `${window.location.origin}/?ref=dept_exec_blast`
+                      : 'https://kohot.com/?ref=dept_exec_blast'}
                   </p>
                 </div>
 
@@ -919,7 +574,7 @@ KoHot — Beautiful graduate memories live here.`;
 
                 <div className="flex items-center justify-between pt-1">
                   <span className="text-[10px] font-mono-tech text-zinc-500">
-                    Auto-interpolates website URL when dispatched
+                    Auto-interpolates website URL when dispatched via WhatsApp or SMS
                   </span>
                   <button
                     type="button"
@@ -941,7 +596,7 @@ KoHot — Beautiful graduate memories live here.`;
               </div>
             </div>
 
-            {/* RIGHT COLUMN: LIVE CONTEXT CARD PREVIEW & DISPATCH BAR */}
+            {/* RIGHT COLUMN: LIVE CONTEXT CARD PREVIEW & WHATSAPP / SMS DISPATCH BAR */}
             <div className="lg:col-span-5 space-y-6">
               {/* LIVE SOCIAL / MESSAGING CARD PREVIEW */}
               <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
@@ -958,7 +613,7 @@ KoHot — Beautiful graduate memories live here.`;
                 </div>
 
                 <p className="text-zinc-400 text-xs font-body">
-                  When recipients receive this link via WhatsApp, Telegram, or social media, it displays the visual card below with your graduate image:
+                  When recipients receive this link via WhatsApp or SMS, it displays the visual card below with your graduate image:
                 </p>
 
                 {/* Preview Social Card */}
@@ -994,143 +649,98 @@ KoHot — Beautiful graduate memories live here.`;
                 </div>
               </div>
 
-              {/* MULTI-CHANNEL DISPATCH BAR */}
+              {/* WHATSAPP & SMS DISPATCH BAR (NO EMAIL BUTTON) */}
               <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
                 <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
                   <Send className="w-4 h-4 text-[#d4af37]" />
-                  <span>Outreach &amp; Dispatch Channels</span>
+                  <span>WhatsApp &amp; SMS Dispatch Channels</span>
                 </h4>
 
-                {/* Primary Blast Email Action */}
-                <button
-                  type="button"
-                  id="blast-email-to-executives-btn"
-                  disabled={isSendingExecBlast}
-                  onClick={() => {
-                    setIsSendingExecBlast(true);
-                    setTimeout(() => {
-                      const allDepts = universities
-                        .filter((u) => targetBlastAudience === 'all' || u.id === targetBlastAudience)
-                        .flatMap((u) => (u.departments || []).map((d) => ({ dept: d, uni: u })));
-
-                      allDepts.slice(0, 15).forEach(({ dept, uni }) => {
-                        const email = dept.officialPortal && dept.officialPortal.includes('@')
-                          ? dept.officialPortal
-                          : `executives.${dept.code?.toLowerCase() || 'admin'}@${uni.shortCode.toLowerCase()}.edu.ng`;
-                        logAndDispatchEmail({
-                          event: 'class_album_is_live',
-                          recipientEmail: email,
-                          recipientName: dept.hodName || `${dept.name} Executives`,
-                          variables: {
-                            recipientName: dept.hodName || `${dept.name} Executives`,
-                            departmentName: dept.name,
-                            graduationYear: 2026,
-                            institutionName: uni.name,
-                            albumUrl: `${window.location.origin}/?ref=dept_exec_blast`,
-                            legacyPlaqueDetails: `${uni.name} Corridors`,
-                          },
-                          metadata: {
-                            departmentName: dept.name,
-                          },
-                        });
-                      });
-
-                      setEmailLogs(getStoredEmailLogs());
-                      setIsSendingExecBlast(false);
-                      setExecBlastToast(`Dispatched executive invitation clip to ${allDepts.length} department executive portals!`);
-                      setTimeout(() => setExecBlastToast(null), 5000);
-                    }, 1200);
-                  }}
-                  className="w-full py-3.5 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 disabled:opacity-50"
-                >
-                  <Send className="w-4 h-4 text-black" />
-                  <span>{isSendingExecBlast ? 'Dispatching...' : 'Blast Email to Department Executives'}</span>
-                </button>
-
-                {/* Messaging Channels Grid */}
-                <div className="grid grid-cols-2 gap-3 pt-2">
+                {/* Messaging Channels Grid: Limited to WhatsApp & SMS */}
+                <div className="grid grid-cols-2 gap-3 pt-1">
                   {/* WhatsApp */}
                   <button
                     type="button"
+                    id="exec-blast-whatsapp-btn"
                     onClick={() => {
-                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const webUrl =
+                        typeof window !== 'undefined'
+                          ? `${window.location.origin}/?ref=dept_exec_blast`
+                          : 'https://kohot.com/?ref=dept_exec_blast';
                       const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
-                      window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
+                      window.open(
+                        `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`,
+                        '_blank'
+                      );
                     }}
-                    className="p-3 rounded-2xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/30 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-semibold cursor-pointer transition-all hover:scale-[1.02]"
+                    className="p-3.5 rounded-2xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/40 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-bold cursor-pointer transition-all hover:scale-[1.02]"
                   >
                     <MessageCircle className="w-4 h-4 text-[#25D366]" />
-                    <span>WhatsApp</span>
+                    <span>Send via WhatsApp</span>
                   </button>
 
-                  {/* Telegram */}
+                  {/* SMS */}
                   <button
                     type="button"
+                    id="exec-blast-sms-btn"
                     onClick={() => {
-                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const webUrl =
+                        typeof window !== 'undefined'
+                          ? `${window.location.origin}/?ref=dept_exec_blast`
+                          : 'https://kohot.com/?ref=dept_exec_blast';
                       const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
-                      window.open(`https://t.me/share/url?url=${encodeURIComponent(webUrl)}&text=${encodeURIComponent(msg)}`, '_blank');
+                      window.location.href = `sms:?body=${encodeURIComponent(msg)}`;
                     }}
-                    className="p-3 rounded-2xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-semibold cursor-pointer transition-all hover:scale-[1.02]"
+                    className="p-3.5 rounded-2xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-bold cursor-pointer transition-all hover:scale-[1.02]"
                   >
-                    <Send className="w-4 h-4 text-sky-400" />
-                    <span>Telegram</span>
+                    <Smartphone className="w-4 h-4 text-sky-400" />
+                    <span>Send via SMS</span>
                   </button>
+                </div>
 
-                  {/* Copy Link */}
+                {/* Copy Helpers */}
+                <div className="grid grid-cols-2 gap-3 pt-1">
                   <button
                     type="button"
                     onClick={() => {
-                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const webUrl =
+                        typeof window !== 'undefined'
+                          ? `${window.location.origin}/?ref=dept_exec_blast`
+                          : 'https://kohot.com/?ref=dept_exec_blast';
                       navigator.clipboard.writeText(webUrl);
                       setCopiedBlastLink(true);
                       setTimeout(() => setCopiedBlastLink(false), 3000);
                     }}
-                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all hover:scale-[1.02]"
+                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all"
                   >
-                    {copiedBlastLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    {copiedBlastLink ? (
+                      <Check className="w-4 h-4 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-4 h-4" />
+                    )}
                     <span>{copiedBlastLink ? 'Link Copied!' : 'Copy Link'}</span>
                   </button>
 
-                  {/* Device Native Share */}
                   <button
                     type="button"
                     onClick={() => {
-                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
-                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
-                      if (navigator.share) {
-                        navigator.share({
-                          title: 'Create Your Department Class Album — KoHot',
-                          text: msg,
-                          url: webUrl,
-                        }).catch(() => {});
-                      } else {
-                        navigator.clipboard.writeText(msg);
-                        setCopiedBlastMessage(true);
-                        setTimeout(() => setCopiedBlastMessage(false), 3000);
-                      }
-                    }}
-                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all hover:scale-[1.02]"
-                  >
-                    <Share2 className="w-4 h-4 text-[#d4af37]" />
-                    <span>Native Share</span>
-                  </button>
-                </div>
-
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const webUrl = typeof window !== 'undefined' ? `${window.location.origin}/?ref=dept_exec_blast` : 'https://kohot.com/?ref=dept_exec_blast';
+                      const webUrl =
+                        typeof window !== 'undefined'
+                          ? `${window.location.origin}/?ref=dept_exec_blast`
+                          : 'https://kohot.com/?ref=dept_exec_blast';
                       const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
                       navigator.clipboard.writeText(msg);
                       setCopiedBlastMessage(true);
                       setTimeout(() => setCopiedBlastMessage(false), 3000);
                     }}
-                    className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-300 font-mono-tech text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all"
                   >
-                    {copiedBlastMessage ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedBlastMessage ? 'Full Clip & Link Copied!' : 'Copy Full Message Text & Link'}</span>
+                    {copiedBlastMessage ? (
+                      <Check className="w-4 h-4 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-4 h-4" />
+                    )}
+                    <span>{copiedBlastMessage ? 'Message Copied!' : 'Copy Message'}</span>
                   </button>
                 </div>
               </div>
@@ -1140,235 +750,215 @@ KoHot — Beautiful graduate memories live here.`;
       )}
 
       {/* =========================================================================
-          VIEW 3: EMAIL TEMPLATES STUDIO (WITH DYNAMIC VARIABLES)
+          SUB-CLIP 2: MESSAGE REGISTERED ALBUM ADMINS (WHATSAPP & SMS USING EXISTING DATA)
           ========================================================================= */}
-      {communicationsTab === 'templates' && (
-        <div className="space-y-6 animate-fadeIn">
-          {/* Template Selector Pills */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-white/10 no-scrollbar">
-            {Object.keys(KOHOT_DEFAULT_TEMPLATES).map((key) => {
-              const evtKey = key as EmailEventType;
-              const tmpl = templates[evtKey] || KOHOT_DEFAULT_TEMPLATES[evtKey];
-              return (
-                <button
-                  key={evtKey}
-                  type="button"
-                  onClick={() => setSelectedTemplateKey(evtKey)}
-                  className={`px-4 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider shrink-0 transition-all cursor-pointer flex items-center gap-2 ${
-                    selectedTemplateKey === evtKey
-                      ? 'bg-white text-black font-bold shadow-md'
-                      : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-                  }`}
-                >
-                  <Mail className="w-3.5 h-3.5" />
-                  <span>{tmpl.name}</span>
-                </button>
-              );
-            })}
+      {communicationsTab === 'album_admins' && (
+        <div className="space-y-8 animate-fadeIn" id="registered-album-admins-messaging-section">
+          {/* Overview Header & Quick Metrics */}
+          <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 flex flex-col lg:flex-row lg:items-center justify-between gap-6 shadow-xl">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-[#25D366] font-mono-tech text-[11px] uppercase tracking-wider font-bold">
+                <MessageCircle className="w-4 h-4" />
+                <span>Direct Cohort Admin Outreach • WhatsApp &amp; SMS Only</span>
+              </div>
+              <h3 className="font-syne font-bold text-xl sm:text-2xl text-white">
+                Message Registered Class Album Admins
+              </h3>
+              <p className="font-body text-xs sm:text-sm text-zinc-400 max-w-2xl leading-relaxed">
+                Reach out directly to already-registered Class Album Admins and Co-Admins via WhatsApp or SMS using their existing contact records from album registration.
+              </p>
+            </div>
+
+            {/* Quick Counts */}
+            <div className="flex flex-wrap items-center gap-3 shrink-0 font-mono-tech text-xs">
+              <div className="px-4 py-2.5 rounded-2xl bg-white/[0.04] border border-white/10">
+                <span className="text-[10px] uppercase text-zinc-500 block">Registered Admins</span>
+                <span className="font-bold text-base text-white">{registeredAdmins.length}</span>
+              </div>
+              <div className="px-4 py-2.5 rounded-2xl bg-[#25D366]/10 border border-[#25D366]/25">
+                <span className="text-[10px] uppercase text-[#25D366]/80 block">With Phone / WhatsApp</span>
+                <span className="font-bold text-base text-[#25D366]">
+                  {registeredAdmins.filter((a) => Boolean(a.phone)).length}
+                </span>
+              </div>
+            </div>
           </div>
 
-          {/* Template Editor Grid */}
+          {adminMessageToast && (
+            <div className="p-4 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs font-mono-tech flex items-center gap-3 animate-fadeIn shadow-xl">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{adminMessageToast}</span>
+            </div>
+          )}
+
+          {/* Message Template Composer + Bulk SMS/WhatsApp Bar */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* Left: Editor Form */}
-            <form onSubmit={handleSaveTemplate} className="lg:col-span-7 p-6 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-5 shadow-xl">
-              <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                <div>
-                  <h3 className="font-syne font-bold text-base text-white">
-                    {templates[selectedTemplateKey]?.name || 'Edit Message Template'}
-                  </h3>
-                  <p className="font-body text-xs text-zinc-400 mt-0.5">
-                    {templates[selectedTemplateKey]?.description}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleResetTemplate}
-                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs font-mono-tech flex items-center gap-1.5 transition-colors cursor-pointer"
-                  title="Reset to factory KoHot default template"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>Reset Default</span>
-                </button>
-              </div>
-
-              {/* Dynamic Variables Chips */}
-              <div className="p-4 rounded-2xl bg-black/50 border border-white/10 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                    <Sparkles className="w-3 h-3 text-[#d4af37]" />
-                    <span>Dynamic System Variables (Click to Insert)</span>
-                  </span>
-                  <span className="text-[10px] text-zinc-500 font-mono-tech">
-                    Auto-interpolated on dispatch
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {templates[selectedTemplateKey]?.availableVariables.map((variable) => (
-                    <button
-                      key={variable}
-                      type="button"
-                      onClick={() => handleInsertVariable(variable)}
-                      className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[#d4af37] border border-[#d4af37]/30 text-xs font-mono-tech transition-all cursor-pointer hover:scale-105 active:scale-95"
-                      title={`Click to insert ${variable} into template body`}
-                    >
-                      {variable}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Subject Line */}
-              <div className="space-y-1.5">
-                <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                  Email Subject Line *
-                </label>
-                <input
-                  required
-                  type="text"
-                  value={editSubject}
-                  onChange={(e) => setEditSubject(e.target.value)}
-                  placeholder="e.g. Relive Your Cohort Legacy — Class of {graduationYear}"
-                  className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
-                />
-              </div>
-
-              {/* Body Textarea */}
-              <div className="space-y-1.5">
-                <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                  Email Message Body (Plain Text &amp; Variables) *
-                </label>
-                <textarea
-                  required
-                  rows={10}
-                  value={editBody}
-                  onChange={(e) => setEditBody(e.target.value)}
-                  placeholder="Enter email message body..."
-                  className="w-full px-4 py-3 rounded-xl bg-black/60 border border-white/15 text-white text-xs font-body leading-relaxed focus:outline-none focus:border-white/30 resize-y"
-                />
-              </div>
-
-              <div className="flex items-center justify-between pt-2">
-                <button
-                  type="submit"
-                  className="px-6 py-3 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95"
-                >
-                  Save Template Changes
-                </button>
-
-                {templateSaveSuccess && (
-                  <span className="font-mono-tech text-xs text-emerald-400 flex items-center gap-1.5 animate-fadeIn">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Template saved successfully!</span>
-                  </span>
-                )}
-              </div>
-            </form>
-
-            {/* Right: Live Preview Box */}
-            <div className="lg:col-span-5 p-6 rounded-3xl bg-[#08090e] border border-white/10 space-y-4 shadow-xl flex flex-col">
-              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+            <div className="lg:col-span-7 p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-emerald-400" />
-                  <span className="font-syne font-bold text-sm text-white">
-                    Live Rendered Preview
-                  </span>
+                  <Edit3 className="w-4 h-4 text-[#25D366]" />
+                  <h4 className="font-syne font-bold text-sm text-white">
+                    Album Admin WhatsApp &amp; SMS Message Composer
+                  </h4>
                 </div>
-                <span className="px-2 py-0.5 rounded-full bg-white/10 text-[10px] font-mono-tech text-zinc-400">
-                  Sample Graduate Data
+                <span className="text-[10px] font-mono-tech text-zinc-400">
+                  Auto-fills each admin&apos;s existing data
                 </span>
               </div>
 
-              {/* Sample Email Client Shell */}
-              <div className="flex-1 rounded-2xl bg-black/80 border border-white/15 p-5 space-y-4 font-body text-xs text-zinc-300">
-                <div className="border-b border-white/10 pb-3 space-y-1 font-mono-tech text-[11px]">
-                  <p className="text-zinc-500">
-                    From: <span className="text-zinc-300">KoHot Communications &lt;archive@kohot.live&gt;</span>
-                  </p>
-                  <p className="text-zinc-500">
-                    To: <span className="text-zinc-300">Adewale Fakorede &lt;adewale.f@alumni.unilag.edu.ng&gt;</span>
-                  </p>
-                  <p className="text-white font-bold pt-1 text-xs">
-                    Subject: {interpolateTemplate(editSubject, {
-                      recipientName: 'Adewale Fakorede',
-                      departmentName: 'Computer Sciences',
-                      graduationYear: 2026,
-                      institutionName: 'University of Lagos',
-                      albumUrl: 'https://kohot.live/#album-unilag-cs-2026',
-                    })}
-                  </p>
+              {/* Dynamic Variable Insertion Pills */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-mono-tech uppercase text-zinc-500 mr-1">
+                  Insert Variable:
+                </span>
+                {[
+                  '{{admin_name}}',
+                  '{{department_name}}',
+                  '{{institution_name}}',
+                  '{{graduation_year}}',
+                  '{{album_url}}',
+                ].map((token) => (
+                  <button
+                    key={token}
+                    type="button"
+                    onClick={() => setAdminMessageTemplate((prev) => `${prev} ${token}`)}
+                    className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[#d4af37] font-mono-tech text-[11px] cursor-pointer transition-colors"
+                  >
+                    {token}
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                rows={5}
+                value={adminMessageTemplate}
+                onChange={(e) => setAdminMessageTemplate(e.target.value)}
+                placeholder="Write WhatsApp or SMS message for registered Album Admins..."
+                className="w-full p-4 rounded-2xl bg-black/60 border border-white/15 text-white text-xs font-body leading-relaxed focus:outline-none focus:border-[#25D366] resize-y"
+              />
+            </div>
+
+            {/* Bulk Actions & Existing Data Dispatch Card */}
+            <div className="lg:col-span-5 p-6 rounded-3xl bg-[#0c0d14] border border-white/10 flex flex-col justify-between space-y-4 shadow-xl">
+              <div className="space-y-2">
+                <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-[#25D366]" />
+                  <span>Quick Broadcast to Registered Admins</span>
+                </h4>
+                <p className="text-zinc-400 text-xs font-body leading-relaxed">
+                  Use the buttons below to launch a multi-recipient SMS or WhatsApp broadcast using the phone numbers already captured from registered Album Admins, or message individual admins in the table below.
+                </p>
+              </div>
+
+              <div className="space-y-2.5 pt-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const genericMsg = adminMessageTemplate
+                        .replace(/\{\{admin_name\}\}/g, 'Class Album Admin')
+                        .replace(/\{\{department_name\}\}/g, 'your department')
+                        .replace(/\{\{institution_name\}\}/g, 'your institution')
+                        .replace(/\{\{graduation_year\}\}/g, 'your graduating class')
+                        .replace(
+                          /\{\{album_url\}\}/g,
+                          typeof window !== 'undefined' ? window.location.origin : 'https://kohot.com'
+                        );
+                      window.open(
+                        `https://api.whatsapp.com/send?text=${encodeURIComponent(genericMsg)}`,
+                        '_blank'
+                      );
+                    }}
+                    className="p-3 rounded-2xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/40 text-white font-mono-tech text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  >
+                    <MessageCircle className="w-4 h-4 text-[#25D366]" />
+                    <span>WhatsApp Broadcast</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleBulkSmsAllFilteredAdmins}
+                    className="p-3 rounded-2xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-white font-mono-tech text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  >
+                    <Smartphone className="w-4 h-4 text-sky-400" />
+                    <span>SMS All Admins</span>
+                  </button>
                 </div>
 
-                <div className="whitespace-pre-wrap leading-relaxed font-body text-zinc-200">
-                  {interpolateTemplate(editBody, {
-                    recipientName: 'Adewale Fakorede',
-                    departmentName: 'Computer Sciences',
-                    graduationYear: 2026,
-                    institutionName: 'University of Lagos',
-                    albumUrl: 'https://kohot.live/#album-unilag-cs-2026',
-                    adminContact: 'classrep.unilag@gmail.com',
-                    legacyPlaqueDetails: 'Faculty of Science Foyer, North Wing',
-                    supportEmail: 'support@kohot.live',
-                  })}
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={handleCopyAllAdminPhones}
+                    className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    {copiedAllPhones ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    <span>{copiedAllPhones ? 'Phones Copied!' : 'Copy All Phone Nos'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(adminMessageTemplate);
+                      setCopiedAdminTemplate(true);
+                      setTimeout(() => setCopiedAdminTemplate(false), 2500);
+                    }}
+                    className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    {copiedAdminTemplate ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    <span>{copiedAdminTemplate ? 'Template Copied!' : 'Copy Message Text'}</span>
+                  </button>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* =========================================================================
-          VIEW 3: AUDIT HISTORY LOG (SEARCHABLE & EXPORTABLE)
-          ========================================================================= */}
-      {communicationsTab === 'audit_history' && (
-        <div className="space-y-6 animate-fadeIn">
-          {/* History Controls Bar */}
-          <div className="p-4 rounded-2xl bg-[#0c0d14] border border-white/10 flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              <div className="relative min-w-[260px] flex-1 sm:flex-initial">
-                <Search className="w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-                <input
-                  type="text"
-                  value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
-                  placeholder="Search recipient, email, or subject..."
-                  className="w-full pl-9 pr-4 py-2 rounded-xl bg-black/60 border border-white/10 text-white font-mono-tech text-xs placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
-                />
-              </div>
+          {/* Filter & Search Bar */}
+          <div className="p-4 rounded-2xl bg-[#0c0d14] border border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="relative w-full sm:max-w-md">
+              <Search className="w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                value={adminSearchQuery}
+                onChange={(e) => setAdminSearchQuery(e.target.value)}
+                placeholder="Search admin name, WhatsApp/phone, department, or institution..."
+                className="w-full pl-9 pr-4 py-2 rounded-xl bg-black/60 border border-white/10 text-white font-mono-tech text-xs placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
+              />
+            </div>
 
+            <div className="flex items-center gap-3 w-full sm:w-auto">
               <select
-                value={historyEventFilter}
-                onChange={(e) => setHistoryEventFilter(e.target.value)}
-                className="px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-zinc-300 font-mono-tech text-xs focus:outline-none"
+                value={adminUniFilter}
+                onChange={(e) => setAdminUniFilter(e.target.value)}
+                className="w-full sm:w-auto px-3.5 py-2 rounded-xl bg-black/60 border border-white/10 text-zinc-300 font-mono-tech text-xs focus:outline-none"
               >
-                <option value="all">All Notification Events</option>
-                <option value="album_registration_received">Album Registration Received</option>
-                <option value="album_registration_approved">Album Registration Approved</option>
-                <option value="class_album_is_live">Class Album is Live</option>
-                <option value="annual_legacy_reminder">Annual Legacy Reminder</option>
+                <option value="all">All Institutions ({universities.length})</option>
+                {universities.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
               </select>
             </div>
-
-            <button
-              type="button"
-              onClick={() => exportEmailLogsToCsv(filteredEmailLogs)}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow self-end md:self-auto shrink-0"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export Audit CSV ({filteredEmailLogs.length})</span>
-            </button>
           </div>
 
-          {/* Email Logs Table */}
-          <div className="rounded-2xl bg-[#0c0d14] border border-white/10 overflow-hidden shadow-xl">
+          {/* Registered Album Admins Table */}
+          <div className="rounded-3xl bg-[#0c0d14] border border-white/10 overflow-hidden shadow-2xl">
             <div className="p-4 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-zinc-400" />
+                <GraduationCap className="w-4 h-4 text-[#25D366]" />
                 <span className="font-syne font-bold text-sm text-white">
-                  Audited Communication Logs
+                  Registered Class Album Admins Directory
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-white/10 text-zinc-400 text-[10px] font-mono-tech">
-                  {filteredEmailLogs.length} total dispatches
+                  {filteredAdmins.length} admins
                 </span>
               </div>
             </div>
@@ -1377,76 +967,103 @@ KoHot — Beautiful graduate memories live here.`;
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-white/10 bg-black/40 font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                    <th className="p-3.5">Timestamp</th>
-                    <th className="p-3.5">Channel</th>
-                    <th className="p-3.5">Recipient</th>
-                    <th className="p-3.5">Category</th>
-                    <th className="p-3.5">Subject / Summary</th>
-                    <th className="p-3.5">Status</th>
-                    <th className="p-3.5 text-right">View Message</th>
+                    <th className="p-4">Album Admin</th>
+                    <th className="p-4">Department &amp; Institution</th>
+                    <th className="p-4">Cohort / Set</th>
+                    <th className="p-4">WhatsApp / SMS Phone</th>
+                    <th className="p-4 text-right">Direct Messaging (WhatsApp &amp; SMS)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5 font-mono-tech">
-                  {filteredEmailLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="p-3.5 text-zinc-400 whitespace-nowrap">
-                        {new Date(log.timestamp).toLocaleDateString()} • {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </td>
-                      <td className="p-3.5">
-                        <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold border ${
-                          log.channel === 'whatsapp'
-                            ? 'bg-[#25D366]/10 text-[#25D366] border-[#25D366]/30'
-                            : log.channel === 'sms'
-                            ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
-                            : log.channel === 'telegram'
-                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-                            : 'bg-white/10 text-zinc-300 border-white/20'
-                        }`}>
-                          {log.channel || 'email'}
-                        </span>
-                      </td>
-                      <td className="p-3.5">
-                        <p className="font-body font-semibold text-white truncate max-w-[150px]">
-                          {log.recipientName}
-                        </p>
-                        <p className="text-[10px] text-zinc-500 truncate max-w-[160px]">
-                          {log.recipientEmail}
-                        </p>
-                      </td>
-                      <td className="p-3.5">
-                        <span className={`px-2 py-0.5 rounded-md text-[10px] uppercase font-semibold border ${
-                          log.category === 'owner_routine_alert'
-                            ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
-                            : log.category === 'manual_operational'
-                            ? 'bg-amber-400/10 text-amber-300 border-amber-400/20'
-                            : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
-                        }`}>
-                          {(log.category || 'product_email').replace(/_/g, ' ')}
-                        </span>
-                      </td>
-                      <td className="p-3.5">
-                        <p className="font-body text-zinc-300 truncate max-w-[200px]">
-                          {log.subject}
-                        </p>
-                      </td>
-                      <td className="p-3.5">
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] flex items-center gap-1 w-fit">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          Sent
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setPreviewLog(log)}
-                          className="px-3 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white text-[10px] uppercase font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          <Eye className="w-3 h-3" />
-                          <span>View Body</span>
-                        </button>
+                  {filteredAdmins.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-10 text-center text-zinc-500 font-mono-tech text-xs">
+                        No registered Class Album Admins match your filter criteria yet.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    filteredAdmins.map((admin) => (
+                      <tr key={admin.id} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="p-4">
+                          <div className="space-y-0.5">
+                            <p className="font-body font-bold text-white text-sm">
+                              {admin.adminName}
+                            </p>
+                            <span className="inline-block px-2 py-0.5 rounded bg-white/10 text-[#d4af37] text-[10px] uppercase">
+                              {admin.roleLabel}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="p-4">
+                          <p className="font-body font-semibold text-zinc-200">
+                            {admin.departmentName}
+                          </p>
+                          <p className="text-[11px] text-zinc-500 flex items-center gap-1 mt-0.5">
+                            <Building2 className="w-3 h-3" />
+                            <span>{admin.institutionName}</span>
+                          </p>
+                        </td>
+
+                        <td className="p-4">
+                          <span className="text-white font-semibold">
+                            Class of {admin.graduationYear}
+                          </span>
+                          <span className="block text-[10px] text-zinc-500 mt-0.5">
+                            {admin.isPublished ? 'Published Live' : 'In Progress'}
+                          </span>
+                        </td>
+
+                        <td className="p-4">
+                          {admin.phone ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-emerald-400 font-semibold">
+                                {admin.phone}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(admin.phone);
+                                  setCopiedAdminPhone(admin.id);
+                                  setTimeout(() => setCopiedAdminPhone(null), 2000);
+                                }}
+                                title="Copy phone number"
+                                className="text-zinc-500 hover:text-white cursor-pointer"
+                              >
+                                {copiedAdminPhone === admin.id ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-zinc-600 italic">No phone on record</span>
+                          )}
+                        </td>
+
+                        <td className="p-4 text-right space-x-2 whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handleSendAdminMessage(admin, 'whatsapp')}
+                            className="px-3.5 py-2 rounded-xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/40 text-[#25D366] font-mono-tech text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>WhatsApp</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSendAdminMessage(admin, 'sms')}
+                            className="px-3.5 py-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-400 font-mono-tech text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <Smartphone className="w-3.5 h-3.5" />
+                            <span>SMS</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1454,360 +1071,14 @@ KoHot — Beautiful graduate memories live here.`;
         </div>
       )}
 
-      {/* MODAL: VIEW AUDITED EMAIL BODY */}
-      {previewLog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-          <div className="w-full max-w-xl rounded-3xl bg-[#0c0d14] border border-white/20 p-6 sm:p-7 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
-              <div className="flex items-center gap-2">
-                <Mail className="w-5 h-5 text-[#d4af37]" />
-                <span className="font-syne font-bold text-base text-white">
-                  Audited Email Message
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPreviewLog(null)}
-                className="text-zinc-500 hover:text-white p-1 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-2 p-4 rounded-2xl bg-black/60 border border-white/10 font-mono-tech text-xs text-zinc-300">
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Recipient:</span>
-                <span className="text-white font-semibold">{previewLog.recipientName} &lt;{previewLog.recipientEmail}&gt;</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Event:</span>
-                <span className="text-emerald-400 uppercase">{previewLog.event.replace(/_/g, ' ')}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Timestamp:</span>
-                <span>{new Date(previewLog.timestamp).toLocaleString()}</span>
-              </div>
-              <div className="pt-2 border-t border-white/10">
-                <span className="text-zinc-500 block mb-1">Subject:</span>
-                <span className="text-white font-bold">{previewLog.subject}</span>
-              </div>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-black/40 border border-white/5 font-body text-xs text-zinc-200 whitespace-pre-wrap leading-relaxed max-h-[300px] overflow-y-auto">
-              {previewLog.body}
-            </div>
-
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={() => setPreviewLog(null)}
-                className="px-5 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-all cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* =========================================================================
-          TAB 5: ANNUAL REMINDER ENGINE & TESTING TOOLS (PROMPT B.1-B.8)
+          SUB-CLIP 3: NEXT-CLASS HANDOFFS (WHATSAPP & SMS RELAY TRACKER)
           ========================================================================= */}
-      {communicationsTab === 'testing_tools' && (
-        <div className="space-y-8 animate-fadeIn">
-          {/* Header Card */}
-          <div className="p-6 sm:p-8 rounded-3xl bg-[#14151a] border border-white/10 space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-white/10">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-[#d4af37] flex items-center justify-center shrink-0">
-                  <Sliders className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-syne font-bold text-xl text-white">
-                    Annual Album Reminder Engine
-                  </h3>
-                  <p className="font-body text-xs text-zinc-400">
-                    Resend API Provider • 15-Minute Cloudflare Cron • 40/run subrequest cap • 90/day send cap
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-mono-tech">
-                  Provider: Resend Active
-                </span>
-                <span className="px-3 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs font-mono-tech">
-                  Cloudflare: TODO
-                </span>
-              </div>
-            </div>
-
-            {/* Architecture Details Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono-tech">
-              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
-                <span className="text-zinc-500 text-[10px] uppercase">Anniversary Trigger</span>
-                <p className="text-white font-bold">15-Minute Cron Job</p>
-                <span className="text-zinc-400 text-[11px]">*/15 * * * * trigger</span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
-                <span className="text-zinc-500 text-[10px] uppercase">Class Spread (1-28)</span>
-                <p className="text-white font-bold">Derived Send Day</p>
-                <span className="text-zinc-400 text-[11px]">Fixed day from album ID</span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
-                <span className="text-zinc-500 text-[10px] uppercase">Safety Limits</span>
-                <p className="text-white font-bold">Max 40 / run • 90 / day</p>
-                <span className="text-zinc-400 text-[11px]">Free tier subrequest safe</span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-1">
-                <span className="text-zinc-500 text-[10px] uppercase">D1 Reliability</span>
-                <p className="text-white font-bold">Never Sent Twice</p>
-                <span className="text-zinc-400 text-[11px]">Failed retries next run</span>
-              </div>
-            </div>
-
-            {/* Interactive Testing Controls Form */}
-            <div className="p-6 rounded-2xl bg-[#0b0c10] border border-[#d4af37]/30 space-y-5">
-              <div className="flex items-center justify-between">
-                <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-[#d4af37]" />
-                  <span>Interactive Testing Tools</span>
-                </h4>
-                <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase font-bold tracking-wider">
-                  Host Exclusive
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                {/* 1. Dry Run Toggle */}
-                <div className="space-y-1.5">
-                  <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                    Execution Mode
-                  </label>
-                  <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={dryRunMode}
-                      onChange={(e) => setDryRunMode(e.target.checked)}
-                      className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
-                    />
-                    <span className="font-mono-tech text-xs text-white">
-                      Dry-Run Mode (Test evaluation without sending)
-                    </span>
-                  </label>
-                </div>
-
-                {/* 2. Custom Test Date Picker */}
-                <div className="space-y-1.5">
-                  <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                    Test Date (Run as if today were)
-                  </label>
-                  <input
-                    type="date"
-                    value={asOfDateInput}
-                    onChange={(e) => setAsOfDateInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#14151a] border border-white/15 text-white font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none"
-                  />
-                </div>
-
-                {/* 3. TEST_MODE toggle */}
-                <div className="space-y-1.5">
-                  <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                    Environment TEST_MODE
-                  </label>
-                  <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={testModeActive}
-                      onChange={(e) => setTestModeActive(e.target.checked)}
-                      className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
-                    />
-                    <span className="font-mono-tech text-xs text-white">
-                      Send to {HOST_EMAIL} with [TEST]
-                    </span>
-                  </label>
-                </div>
-              </div>
-
-              {/* Action Button */}
-              <div className="pt-2 flex items-center justify-between flex-wrap gap-4">
-                <p className="font-body text-xs text-zinc-400">
-                  {dryRunMode
-                    ? 'Dry-run evaluates criteria against all active class albums and lists eligible graduates without emailing.'
-                    : 'Live mode dispatches up to 40 emails via Resend with signed unsubscribe tokens and records logs in D1.'}
-                </p>
-
-                <button
-                  type="button"
-                  id="run-reminder-check-btn"
-                  disabled={isRunningReminderCheck}
-                  onClick={async () => {
-                    setIsRunningReminderCheck(true);
-                    setReminderErrorMsg('');
-                    try {
-                      const res = await runReminderCheck({
-                        dryRun: dryRunMode,
-                        asOfDate: asOfDateInput,
-                      });
-                      setReminderCheckResult(res);
-                      const logsData = await fetchReminderLogs();
-                      setReminderLogsList(logsData.logs || []);
-                      setBouncesList(logsData.bounces || []);
-                    } catch (err: any) {
-                      setReminderErrorMsg(err.message || 'Reminder check failed');
-                    } finally {
-                      setIsRunningReminderCheck(false);
-                    }
-                  }}
-                  className="px-6 py-3 rounded-full bg-[#d4af37] hover:bg-[#e6c158] disabled:opacity-50 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95"
-                >
-                  <Send className="w-3.5 h-3.5 text-black" />
-                  <span>{isRunningReminderCheck ? 'Checking...' : 'Run reminder check'}</span>
-                </button>
-              </div>
-
-              {reminderErrorMsg && (
-                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{reminderErrorMsg}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Check Results View */}
-            {reminderCheckResult && (
-              <div className="p-6 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4 animate-fadeIn">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
-                  <div>
-                    <h4 className="font-syne font-bold text-base text-white">
-                      Reminder Check Results ({reminderCheckResult.dryRun ? 'Dry-Run Simulation' : 'Live Execution'})
-                    </h4>
-                    <p className="font-mono-tech text-xs text-zinc-400 mt-0.5">
-                      As of {reminderCheckResult.asOfDate} (Month: {reminderCheckResult.currentMonth}, Day: {reminderCheckResult.currentDay}, Year: {reminderCheckResult.currentYear})
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <span className="px-3 py-1 rounded-full bg-white/10 font-mono-tech text-xs text-white font-bold">
-                      {reminderCheckResult.totalCandidates} Total Eligible
-                    </span>
-                    <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-mono-tech text-xs font-bold border border-emerald-500/30">
-                      {reminderCheckResult.dryRun ? `${reminderCheckResult.candidates?.length || 0} Would Receive` : `${reminderCheckResult.sentCount} Dispatched`}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Candidate Table */}
-                {reminderCheckResult.candidates?.length === 0 ? (
-                  <p className="font-body text-xs text-zinc-400 py-4 text-center">
-                    No graduating class albums matched the reminder anniversary date for day {reminderCheckResult.currentDay} of month {reminderCheckResult.currentMonth}. Try simulating a different date (e.g. December).
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left font-mono-tech text-xs">
-                      <thead>
-                        <tr className="border-b border-white/10 text-zinc-500 text-[10px] uppercase tracking-wider">
-                          <th className="py-2.5 px-3">Student Name</th>
-                          <th className="py-2.5 px-3">Email Address</th>
-                          <th className="py-2.5 px-3">Class Album</th>
-                          <th className="py-2.5 px-3">Convocation Month</th>
-                          <th className="py-2.5 px-3">Send Day (1-28)</th>
-                          <th className="py-2.5 px-3">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {reminderCheckResult.candidates.map((c: any, idx: number) => (
-                          <tr key={idx} className="hover:bg-white/[0.02]">
-                            <td className="py-2.5 px-3 text-white font-medium">{c.studentName}</td>
-                            <td className="py-2.5 px-3 text-zinc-300">{c.studentEmail}</td>
-                            <td className="py-2.5 px-3 text-[#d4af37]">{c.classSetName}</td>
-                            <td className="py-2.5 px-3 text-zinc-400">Month {c.convocationMonth}</td>
-                            <td className="py-2.5 px-3 text-zinc-400">Day {c.sendDay}</td>
-                            <td className="py-2.5 px-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/15 text-emerald-400 font-bold border border-emerald-500/25">
-                                {reminderCheckResult.dryRun ? 'Eligible' : 'Sent'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Reliability & Bounce Inspection Section (Prompt B.5) */}
-            <div className="p-6 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <h4 className="font-syne font-bold text-base text-white">
-                    Reliability &amp; Email Failure Inspection (D1 Log)
-                  </h4>
-                </div>
-                <span className="px-2.5 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-400 text-xs font-mono-tech font-bold">
-                  {bouncesList.length} Failed / Bounces
-                </span>
-              </div>
-
-              <p className="font-body text-xs text-zinc-400">
-                To guarantee reliability, KoHot checks D1 prior to every dispatch so no student receives duplicate reminders in the same calendar year. Any failures or bounces are recorded and queued for automatic retry on the next 15-minute cron run.
-              </p>
-
-              {bouncesList.length === 0 ? (
-                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono-tech flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>No bounced or failed emails recorded. All reminders delivered reliably.</span>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left font-mono-tech text-xs">
-                    <thead>
-                      <tr className="border-b border-white/10 text-zinc-500 text-[10px] uppercase">
-                        <th className="py-2 px-3">Student Email</th>
-                        <th className="py-2 px-3">Album</th>
-                        <th className="py-2 px-3">Year</th>
-                        <th className="py-2 px-3">Provider</th>
-                        <th className="py-2 px-3">Error / Bounce Cause</th>
-                        <th className="py-2 px-3">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                      {bouncesList.map((b, idx) => (
-                        <tr key={idx} className="hover:bg-white/[0.02]">
-                          <td className="py-2.5 px-3 text-white font-bold">{b.student_email}</td>
-                          <td className="py-2.5 px-3 text-zinc-300">{b.set_id}</td>
-                          <td className="py-2.5 px-3 text-zinc-400">{b.year}</td>
-                          <td className="py-2.5 px-3 uppercase text-amber-400">{b.provider}</td>
-                          <td className="py-2.5 px-3 text-red-400">{b.error_message || 'Bounce / rejected by provider'}</td>
-                          <td className="py-2.5 px-3">
-                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                              Retry next run
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* DEPARTMENT MODAL */}
-      {selectedDeptForModal && (
-        <DepartmentAnnualRemindersModal
-          isOpen={true}
-          department={selectedDeptForModal.dept}
-          university={selectedDeptForModal.uni}
+      {communicationsTab === 'handoffs' && (
+        <MasterNextClassHandoffsSection
           sets={sets}
-          onClose={() => setSelectedDeptForModal(null)}
+          universities={universities}
+          onViewDepartmentLegacyWall={onViewDepartmentLegacyWall}
         />
       )}
     </div>

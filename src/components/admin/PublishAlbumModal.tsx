@@ -20,7 +20,10 @@ import {
   AlertCircle, 
   Check,
   Smartphone,
-  ShieldCheck
+  ShieldCheck,
+  Copy,
+  QrCode,
+  MessageCircle
 } from 'lucide-react';
 import { 
   ClassSet, 
@@ -37,6 +40,8 @@ import {
 } from '../../data/initialData';
 import { triggerClassAlbumIsLiveCommunication } from '../../utils/kohotCommunications';
 import { useFeedback } from '../common/FeedbackSystem';
+import { publishAlbumOnServer } from '../../utils/apiClient';
+import { getAlbumUrl, copyUrlToClipboard } from '../../utils/urlHelper';
 
 interface PublishAlbumModalProps {
   isOpen: boolean;
@@ -61,6 +66,8 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishedSuccessSet, setPublishedSuccessSet] = useState<ClassSet | null>(null);
   const [showLearnMoreModal, setShowLearnMoreModal] = useState(false);
+  const [copiedPublishLink, setCopiedPublishLink] = useState(false);
+  const [showPublishQrCode, setShowPublishQrCode] = useState(false);
 
   // Automatically determine next graduation year
   const nextGraduationYear = (currentSet.graduationYear || 2026) + 1;
@@ -186,6 +193,8 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
       // 2. Updated Set Object
       const updatedSet: ClassSet = {
         ...currentSet,
+        isPublished: true,
+        isUnpublished: false,
         activationStatus: 'active',
         publishedAt: nowIso,
         convocationDate: convocationDate.trim(),
@@ -221,6 +230,20 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
       const allSets = getStoredSets();
       const updatedAll = allSets.map((s) => (s.id === updatedSet.id ? updatedSet : s));
       saveStoredSets(updatedAll);
+
+      // Persist to Cloudflare D1 Server
+      publishAlbumOnServer(currentSet.id, {
+        convocationDate: convocationDate.trim(),
+        testimonialResponse: experienceText.trim(),
+        allowPublicFeature: permissionChoice === 'public',
+        nextClassRep: {
+          fullName: nextRepName.trim(),
+          phoneNumber: nextRepPhone.trim(),
+          email: nextRepEmail.trim() || undefined,
+        },
+      }).catch((serverErr) => {
+        console.warn('Background server publish sync:', serverErr);
+      });
 
       // 5. Trigger "Class Album Is Live" automated product email to verified class members
       triggerClassAlbumIsLiveCommunication(updatedSet);
@@ -299,46 +322,94 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
             SUCCESS SCREEN ONCE PUBLISHED
             ========================================================================= */}
         {publishedSuccessSet ? (
-          <div className="p-8 sm:p-10 space-y-7 overflow-y-auto text-center animate-fadeIn">
-            <div className="w-20 h-20 rounded-full bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto shadow-2xl shadow-emerald-500/20">
-              <Check className="w-10 h-10" />
+          <div className="p-6 sm:p-8 space-y-6 overflow-y-auto text-center animate-fadeIn">
+            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto shadow-2xl shadow-emerald-500/20">
+              <Check className="w-8 h-8" />
             </div>
 
-            <div className="space-y-2 max-w-lg mx-auto">
+            <div className="space-y-1.5 max-w-lg mx-auto">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] uppercase tracking-wider font-bold">
+                Published · Live
+              </span>
               <h4 className="font-syne font-bold text-2xl sm:text-3xl text-white">
-                Your Class Album is now live.
+                Share your album
               </h4>
-              <p className="font-body text-sm text-zinc-300 leading-relaxed">
-                Your classmates can return to it whenever they want. The Class of {currentSet.graduationYear} ({currentSet.departmentName}) is permanently preserved.
+              <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                Your Class of {currentSet.graduationYear} ({currentSet.departmentName}) album is now live. Share this link with your classmates.
               </p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 max-w-md mx-auto text-left space-y-3 font-mono-tech text-xs">
-              <div className="flex justify-between items-center text-zinc-400 pb-2 border-b border-white/10">
-                <span>Status:</span>
-                <span className="text-emerald-400 font-bold uppercase flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Live &amp; Preserved
-                </span>
+            {/* Share your album card: album link, Copy link, WhatsApp, QR code */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-white/[0.03] border border-white/10 max-w-md mx-auto text-left space-y-3.5 font-mono-tech text-xs">
+              <div className="p-2.5 rounded-xl bg-[#08090e] border border-white/10 text-zinc-200 text-xs truncate select-all">
+                {getAlbumUrl(publishedSuccessSet)}
               </div>
-              <div className="flex justify-between items-center text-zinc-400 pb-2 border-b border-white/10">
-                <span>Convocation Date:</span>
-                <span className="text-white">{publishedSuccessSet.convocationDate}</span>
+
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  id="post-publish-copy-link-btn"
+                  type="button"
+                  onClick={async () => {
+                    await copyUrlToClipboard(getAlbumUrl(publishedSuccessSet));
+                    setCopiedPublishLink(true);
+                    setTimeout(() => setCopiedPublishLink(false), 2000);
+                  }}
+                  className="py-2.5 px-3 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  {copiedPublishLink ? (
+                    <Check className="w-3.5 h-3.5" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  <span>{copiedPublishLink ? 'Copied' : 'Copy link'}</span>
+                </button>
+
+                <a
+                  id="post-publish-whatsapp-btn"
+                  href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
+                    `Our official Class of ${currentSet.graduationYear} Album (${currentSet.departmentName}) is now live!\n${getAlbumUrl(publishedSuccessSet)}`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 border border-[#25D366]/40 text-emerald-300 font-syne font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </a>
+
+                <button
+                  id="post-publish-qr-btn"
+                  type="button"
+                  onClick={() => setShowPublishQrCode((prev) => !prev)}
+                  className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-syne font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <QrCode className="w-3.5 h-3.5 text-[#d4af37]" />
+                  <span>QR code</span>
+                </button>
               </div>
-              <div className="flex justify-between items-center text-zinc-400">
-                <span>Next Class Handover:</span>
-                <span className="text-amber-400 font-semibold">
-                  Class of {nextGraduationYear} ({nextRepName})
-                </span>
-              </div>
+
+              {showPublishQrCode && (
+                <div className="pt-3 flex flex-col items-center gap-2 border-t border-white/10">
+                  <div className="p-3 bg-white rounded-2xl shadow-lg">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
+                        getAlbumUrl(publishedSuccessSet)
+                      )}`}
+                      alt="Published Album QR Code"
+                      className="w-36 h-36 object-contain"
+                    />
+                  </div>
+                  <span className="text-[10px] text-zinc-400">Scan to open live class album</span>
+                </div>
+              )}
             </div>
 
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-3">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-1">
               <a
                 href={`/#album-${publishedSuccessSet.id}`}
                 target="_blank"
                 rel="noreferrer"
-                className="w-full sm:w-auto px-6 py-3 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg"
               >
                 <span>View Live Album</span>
                 <ExternalLink className="w-3.5 h-3.5" />
@@ -351,7 +422,7 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
                     onClose();
                     onOpenInviteNextClass();
                   }}
-                  className="w-full sm:w-auto px-6 py-3 rounded-full bg-amber-400 hover:bg-amber-300 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-400/20"
+                  className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-amber-400 hover:bg-amber-300 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-400/20"
                 >
                   <Share2 className="w-3.5 h-3.5" />
                   <span>Invite Next Class ({nextGraduationYear})</span>
@@ -361,7 +432,7 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="w-full sm:w-auto px-6 py-3 rounded-full bg-white/10 hover:bg-white/20 text-white font-syne text-xs uppercase tracking-wider transition-colors cursor-pointer"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-syne text-xs uppercase tracking-wider transition-colors cursor-pointer"
               >
                 Done
               </button>

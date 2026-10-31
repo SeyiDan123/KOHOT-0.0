@@ -18,9 +18,10 @@ export function extractSocialUsername(val: string): string {
   // Strip protocol
   clean = clean.replace(/^https?:\/\//i, '');
   // Strip domain names
+  clean = clean.replace(/^(www\.)?(youtube\.com\/(c\/|channel\/|@)?|youtu\.be\/)/i, '');
   clean = clean.replace(/^(www\.)?(instagram\.com|instagr\.am)\/?/i, '');
   clean = clean.replace(/^(www\.)?(x\.com|twitter\.com)\/?/i, '');
-  clean = clean.replace(/^(www\.)?linkedin\.com\/in\/?/i, '');
+  clean = clean.replace(/^(www\.)?linkedin\.com\/(in|company)\/?/i, '');
   clean = clean.replace(/^(www\.)?linkedin\.com\/?/i, '');
   clean = clean.replace(/^(www\.)?tiktok\.com\/@?/i, '');
   clean = clean.replace(/^(www\.)?facebook\.com\/?/i, '');

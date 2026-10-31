@@ -48,7 +48,7 @@ export const UniversalModal: React.FC<UniversalModalProps> = ({
   bodyClassName = '',
   hasUnsavedChanges = false,
   ariaLabel,
-  zIndex = 60,
+  zIndex = 9990,
 }) => {
   const [showDiscardConfirm, setShowDiscardConfirm] = React.useState(false);
   const backdropRef = useRef<HTMLDivElement>(null);

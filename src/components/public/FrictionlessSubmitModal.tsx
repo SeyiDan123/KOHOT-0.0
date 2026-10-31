@@ -8,6 +8,7 @@ import { UniversalModal } from '../common/UniversalModal';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
 import { generateGoogleCalendarUrl, downloadIcsCalendarFile } from '../../utils/calendarHelper';
 import { getAlbumUrl } from '../../utils/urlHelper';
+import { uploadMediaToR2, submitStudentProfileOnServer } from '../../utils/apiClient';
 
 interface FrictionlessSubmitModalProps {
   currentSet: ClassSet;
@@ -67,9 +68,21 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
 
       const result = await compressImageToWebP(file, 800, 0.88);
       setCompressionInfo(result);
-      setPhotoDataUrl(result.dataUrl);
+
+      // Upload to Cloudflare R2 object storage
+      const uploadRes = await uploadMediaToR2(result.dataUrl, {
+        setId: currentSet.id,
+        category: 'portrait',
+        fileName: `${fullName ? fullName.replace(/\s+/g, '-').toLowerCase() : 'student'}-portrait.webp`,
+      });
+
+      if (uploadRes.success && uploadRes.url) {
+        setPhotoDataUrl(uploadRes.url);
+      } else {
+        setPhotoDataUrl(result.dataUrl);
+      }
     } catch (err) {
-      console.error('Compression error:', err);
+      console.error('Compression/upload error:', err);
       setPhotoDataUrl(croppedDataUrl);
     } finally {
       setIsCompressing(false);
@@ -107,6 +120,10 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
       submittedAt: new Date().toISOString().split('T')[0],
       leaderOrder: hasLeaderTitle ? calculateIntuitiveHierarchyRank(trimmedPos) : undefined,
     };
+
+    submitStudentProfileOnServer(currentSet.id, newStudent).catch((err) => {
+      console.warn('Server sync error for student submission:', err);
+    });
 
     onSubmitStudent(newStudent);
     setIsSuccess(true);

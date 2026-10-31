@@ -448,13 +448,8 @@ export const MasterNextClassHandoffsSection: React.FC<MasterNextClassHandoffsSec
                               {rec.contact.name}
                             </p>
                             <p className="text-[11px] text-emerald-400">
-                              {rec.contact.phoneOrWhatsapp}
+                              {rec.contact.phoneOrWhatsapp || 'No phone recorded'}
                             </p>
-                            {rec.contact.email && (
-                              <p className="text-[10px] text-zinc-500 truncate max-w-[160px]">
-                                {rec.contact.email}
-                              </p>
-                            )}
                           </div>
                         ) : (
                           <span className="text-zinc-600 italic">No contact record captured yet</span>

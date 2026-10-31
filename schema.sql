@@ -142,6 +142,95 @@ CREATE TABLE IF NOT EXISTS email_logs (
   sent_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 11. Media Assets (R2 Object Storage Metadata & Reference Index)
+CREATE TABLE IF NOT EXISTS media_assets (
+  id TEXT PRIMARY KEY,
+  object_key TEXT UNIQUE NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  file_name TEXT,
+  uploader_email TEXT,
+  set_id TEXT,
+  category TEXT DEFAULT 'candid', -- 'portrait' | 'candid' | 'award' | 'plaque' | 'banner' | 'voice'
+  public_url TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 12. Department Addition Requests
+CREATE TABLE IF NOT EXISTS department_addition_requests (
+  id TEXT PRIMARY KEY,
+  applicant_name TEXT NOT NULL,
+  applicant_email TEXT NOT NULL,
+  applicant_phone TEXT,
+  university_id TEXT NOT NULL,
+  university_name TEXT NOT NULL,
+  department_name TEXT NOT NULL,
+  faculty_name TEXT,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'approved' | 'rejected'
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 13. Website Content Overrides (Master Host Branding & Homepage Customization)
+CREATE TABLE IF NOT EXISTS website_content_overrides (
+  id TEXT PRIMARY KEY, -- 'current'
+  content_json TEXT NOT NULL,
+  updated_by TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 14. Testimonials (Class Rep Reflections & Milestone Endorsements)
+CREATE TABLE IF NOT EXISTS testimonials (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT,
+  avatar_url TEXT,
+  role TEXT DEFAULT 'Class Album Admin',
+  university TEXT NOT NULL,
+  university_id TEXT NOT NULL,
+  faculty TEXT,
+  department TEXT NOT NULL,
+  department_id TEXT NOT NULL,
+  class_year INTEGER NOT NULL,
+  class_set_name TEXT NOT NULL,
+  set_id TEXT NOT NULL,
+  testimonial_text TEXT NOT NULL,
+  submission_date TEXT NOT NULL,
+  publication_permission TEXT DEFAULT 'public', -- 'public' | 'private'
+  review_status TEXT DEFAULT 'pending', -- 'approved' | 'rejected' | 'pending'
+  is_featured INTEGER DEFAULT 0, -- 1 = true, 0 = false
+  request_status TEXT DEFAULT 'pending',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 15. Next Class Handoff Invites (Relay-Race Baton Tracking)
+CREATE TABLE IF NOT EXISTS next_class_invites (
+  id TEXT PRIMARY KEY,
+  set_id TEXT NOT NULL,
+  token TEXT UNIQUE NOT NULL,
+  target_year INTEGER NOT NULL,
+  rep_name TEXT NOT NULL,
+  rep_email TEXT,
+  rep_phone TEXT,
+  status TEXT DEFAULT 'pending', -- 'pending' | 'followed_up' | 'onboarded'
+  notes TEXT,
+  last_contacted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 16. Album Disputes
+CREATE TABLE IF NOT EXISTS album_disputes (
+  id TEXT PRIMARY KEY,
+  set_id TEXT NOT NULL,
+  reporter_email TEXT NOT NULL,
+  reporter_name TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  details TEXT,
+  status TEXT DEFAULT 'open', -- 'open' | 'investigating' | 'resolved' | 'dismissed'
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for lightning fast lookups
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_reg_lookup ON registrations(institution_id, department_id, graduation_year);
@@ -151,3 +240,97 @@ CREATE INDEX IF NOT EXISTS idx_tx_ref ON transactions(reference);
 CREATE INDEX IF NOT EXISTS idx_reminder_log_lookup ON reminder_logs(student_email, set_id, year);
 CREATE INDEX IF NOT EXISTS idx_support_status ON support_messages(status);
 CREATE INDEX IF NOT EXISTS idx_email_logs_date ON email_logs(sent_at);
+CREATE INDEX IF NOT EXISTS idx_media_key ON media_assets(object_key);
+CREATE INDEX IF NOT EXISTS idx_media_set ON media_assets(set_id);
+CREATE INDEX IF NOT EXISTS idx_dept_req_status ON department_addition_requests(status);
+CREATE INDEX IF NOT EXISTS idx_testimonials_featured ON testimonials(is_featured, review_status);
+CREATE INDEX IF NOT EXISTS idx_next_class_token ON next_class_invites(token);
+CREATE INDEX IF NOT EXISTS idx_disputes_set ON album_disputes(set_id);
+
+-- 14. Platform Settings
+CREATE TABLE IF NOT EXISTS platform_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+INSERT OR IGNORE INTO platform_settings (key, value) VALUES
+  ('student_fee_kobo', '50000'),
+  ('min_funded_to_publish', '10'),
+  ('profile_cap_default', '200'),
+  ('reinstate_days', '7'),
+  ('draft_retention_days', '30'),
+  ('gate_mode', 'publish'),
+  ('default_kohot_slots_per_album', '0');
+
+-- 15. Profile Submissions
+CREATE TABLE IF NOT EXISTS profile_submissions (
+  id TEXT PRIMARY KEY,
+  album_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  photo_key TEXT,
+  email TEXT NOT NULL,
+  consent_at TEXT,
+  source TEXT NOT NULL,
+  payment_status TEXT NOT NULL DEFAULT 'unpaid',
+  paid_reference TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  decline_reason TEXT,
+  declined_at TEXT,
+  status_token_hash TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_submissions_album ON profile_submissions(album_id, status);
+CREATE INDEX IF NOT EXISTS idx_profile_submissions_email ON profile_submissions(album_id, email);
+CREATE INDEX IF NOT EXISTS idx_profile_submissions_token ON profile_submissions(status_token_hash);
+
+-- 16. Slot Ledger
+CREATE TABLE IF NOT EXISTS slot_ledger (
+  id TEXT PRIMARY KEY,
+  album_id TEXT NOT NULL,
+  delta INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  purchase_id TEXT,
+  allocation_id TEXT,
+  sponsor_name TEXT,
+  unit_value_kobo INTEGER,
+  idempotency_key TEXT UNIQUE,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_slot_ledger_album ON slot_ledger(album_id, created_at DESC);
+
+-- 17. Slot Purchases
+CREATE TABLE IF NOT EXISTS slot_purchases (
+  id TEXT PRIMARY KEY,
+  album_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  amount_kobo INTEGER NOT NULL,
+  reference TEXT UNIQUE NOT NULL,
+  sponsor_name TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_slot_purchases_album ON slot_purchases(album_id, created_at DESC);
+
+-- 18. Slot Allocations
+CREATE TABLE IF NOT EXISTS slot_allocations (
+  id TEXT PRIMARY KEY,
+  institution_id TEXT NOT NULL,
+  department_id TEXT NOT NULL,
+  graduation_year INTEGER NOT NULL,
+  quantity INTEGER NOT NULL,
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'waiting',
+  album_id TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(institution_id, department_id, graduation_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_slot_allocations_lookup ON slot_allocations(institution_id, department_id, graduation_year);
+

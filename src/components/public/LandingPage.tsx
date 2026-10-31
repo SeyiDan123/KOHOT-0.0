@@ -58,6 +58,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   useEffect(() => {
     setCurrentTheme(getTheme());
+    const handleThemeChanged = (e: any) => {
+      if (e.detail?.theme) {
+        setCurrentTheme(e.detail.theme);
+      } else {
+        setCurrentTheme(getTheme());
+      }
+    };
+    window.addEventListener('kohot_theme_changed', handleThemeChanged);
+    return () => window.removeEventListener('kohot_theme_changed', handleThemeChanged);
   }, []);
 
   const handleToggleTheme = () => {
@@ -147,8 +156,28 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     }
   };
 
-  const hasUploadedHeroVideo = Boolean(contentOverride?.heroVideoUrl && contentOverride.heroVideoUrl.trim().length > 0);
-  const heroVideoUrl = contentOverride?.heroVideoUrl || '';
+  const rawHeroVideo = (contentOverride?.heroVideoUrl || '').trim();
+  const isDeletedOrSample = 
+    !rawHeroVideo ||
+    rawHeroVideo.includes('ForBiggerBlazes') ||
+    rawHeroVideo === 'hero.mp4' ||
+    rawHeroVideo === '/hero.mp4' ||
+    rawHeroVideo.includes('hero-video') ||
+    rawHeroVideo.includes('kohot_storage') ||
+    rawHeroVideo.includes('hero-poster');
+
+  const hasUploadedHeroVideo = !isDeletedOrSample;
+  const heroVideoUrl = hasUploadedHeroVideo ? rawHeroVideo : '';
+
+  const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+  const [videoLoadError, setVideoLoadError] = useState(false);
+
+  useEffect(() => {
+    setIsVideoLoaded(false);
+    setVideoLoadError(false);
+  }, [heroVideoUrl]);
+
+  const isVideoActive = hasUploadedHeroVideo && isVideoLoaded && !videoLoadError;
 
   return (
     <div 
@@ -214,33 +243,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <span>Help</span>
             </button>
 
-            {currentUser ? (
-              <div className="flex items-center gap-2">
-                <button
-                  id="nav-auth-dashboard-btn"
-                  onClick={onOpenDashboard}
-                  className="font-mono-tech text-xs tracking-wider uppercase font-semibold text-zinc-900 bg-white hover:bg-zinc-50 border border-zinc-300 px-4 py-2 rounded-full transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  <Lock className="w-3 h-3 text-amber-600" />
-                  <span>{currentUser.role === 'master_host' ? 'Master Host' : 'Class Album Admin'}</span>
-                </button>
-                <button
-                  id="nav-logout-btn"
-                  onClick={onLogout}
-                  className="font-mono-tech text-xs text-zinc-500 hover:text-zinc-900 transition-colors px-2 py-1 cursor-pointer"
-                >
-                  Exit
-                </button>
-              </div>
-            ) : (
-              <button
-                id="nav-signin-btn"
-                onClick={onOpenLogin}
-                className="font-mono-tech text-xs tracking-wider uppercase font-semibold text-zinc-900 hover:text-black bg-white hover:bg-zinc-50 border border-zinc-300 hover:border-zinc-400 px-4 py-2 rounded-full transition-all cursor-pointer shadow-xs"
-              >
-                Sign In
-              </button>
-            )}
+            <button
+              id="nav-signin-btn"
+              onClick={onOpenLogin}
+              className="font-mono-tech text-xs tracking-wider uppercase font-semibold text-zinc-900 hover:text-black bg-white hover:bg-zinc-50 border border-zinc-300 hover:border-zinc-400 px-4 py-2 rounded-full transition-all cursor-pointer shadow-xs"
+            >
+              Sign In
+            </button>
           </div>
         </div>
       </header>
@@ -317,8 +326,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 ))}
               </div>
 
-              {/* Video layer over photos permanently when uploaded, or default photo montage transitions when unset */}
-              {hasUploadedHeroVideo && heroVideoUrl && (
+              {/* Video layer over photos ONLY when uploaded and loaded without error */}
+              {hasUploadedHeroVideo && heroVideoUrl && !videoLoadError && (
                 <video
                   ref={heroVideoRef}
                   src={heroVideoUrl}
@@ -326,8 +335,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   loop
                   muted={isVideoMuted}
                   playsInline
+                  onLoadedData={() => {
+                    setIsVideoLoaded(true);
+                    setVideoLoadError(false);
+                  }}
+                  onError={() => {
+                    setVideoLoadError(true);
+                    setIsVideoLoaded(false);
+                  }}
                   className={`relative z-10 w-full h-full object-cover object-center filter contrast-[1.08] brightness-[0.95] group-hover:scale-[1.01] transition-all duration-1000 ease-out ${
-                    isVideoPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                    isVideoPlaying && isVideoLoaded ? 'opacity-100' : 'opacity-0 pointer-events-none'
                   }`}
                 />
               )}
@@ -346,7 +363,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   </span>
                 </div>
 
-                {hasUploadedHeroVideo && (
+                {/* Play and mute buttons ONLY show if a video is uploaded and active */}
+                {isVideoActive && (
                   <div className="flex items-center gap-2 ml-auto">
                     <button
                       onClick={toggleVideoPlay}

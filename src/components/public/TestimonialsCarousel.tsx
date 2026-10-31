@@ -14,9 +14,16 @@ import { ScrollReveal } from '../common/ScrollReveal';
 
 export const TestimonialsCarousel: React.FC = () => {
   const [activeIndex, setActiveIndex] = useState(0);
-  const [testimonials, setTestimonials] = useState<TestimonialRecord[]>([]);
+  const [testimonials, setTestimonials] = useState<TestimonialRecord[]>(() => {
+    const all = getStoredTestimonials();
+    return all.filter(
+      (t) => t.publicationPermission === 'public' && t.reviewStatus === 'approved'
+    );
+  });
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const trackRef = useRef<HTMLDivElement>(null);
+  const isInteractingRef = useRef(false);
+  const interactionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadApprovedTestimonials = () => {
     const all = getStoredTestimonials();
@@ -30,27 +37,119 @@ export const TestimonialsCarousel: React.FC = () => {
 
   useEffect(() => {
     loadApprovedTestimonials();
+    return () => {
+      if (interactionTimeoutRef.current) {
+        clearTimeout(interactionTimeoutRef.current);
+      }
+    };
   }, []);
+
+  const pauseAutoAdvance = () => {
+    isInteractingRef.current = true;
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+    }
+  };
+
+  const resumeAutoAdvanceDelayed = () => {
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+    }
+    interactionTimeoutRef.current = setTimeout(() => {
+      isInteractingRef.current = false;
+    }, 4000);
+  };
+
+  // Synchronize activeIndex immediately during manual scrolling / touch swiping
+  const syncActiveDotFromScroll = () => {
+    const track = trackRef.current;
+    if (!track || testimonials.length <= 1) return;
+
+    const scrollLeft = track.scrollLeft;
+    const maxScroll = Math.max(0, track.scrollWidth - track.clientWidth);
+
+    if (scrollLeft <= 12) {
+      setActiveIndex(0);
+      return;
+    }
+    if (maxScroll > 0 && scrollLeft >= maxScroll - 16) {
+      setActiveIndex(testimonials.length - 1);
+      return;
+    }
+
+    const firstCard = track.children[0] as HTMLElement | undefined;
+    if (!firstCard) return;
+    const baseOffset = firstCard.offsetLeft;
+
+    let closestIdx = 0;
+    let minDistance = Infinity;
+
+    for (let i = 0; i < testimonials.length; i++) {
+      const child = track.children[i] as HTMLElement | undefined;
+      if (!child) continue;
+      const rawTarget = Math.max(0, child.offsetLeft - baseOffset);
+      const clampedTarget = maxScroll > 0 ? Math.min(rawTarget, maxScroll) : rawTarget;
+      const dist = Math.abs(scrollLeft - clampedTarget);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestIdx = i;
+      }
+    }
+
+    setActiveIndex(closestIdx);
+  };
+
+  // Smooth continuous transition timer (auto-advances every 5 seconds when not interacting)
+  useEffect(() => {
+    if (testimonials.length <= 1) return;
+    const timer = setInterval(() => {
+      if (isInteractingRef.current) return;
+      setActiveIndex((prev) => {
+        const next = (prev + 1) % testimonials.length;
+        if (trackRef.current) {
+          const firstCard = trackRef.current.children[0] as HTMLElement | undefined;
+          const card = trackRef.current.children[next] as HTMLElement | undefined;
+          if (card) {
+            const baseOffset = firstCard ? firstCard.offsetLeft : 0;
+            trackRef.current.scrollTo({
+              left: Math.max(0, card.offsetLeft - baseOffset),
+              behavior: 'smooth',
+            });
+          }
+        }
+        return next;
+      });
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [testimonials.length]);
 
   const handleNext = () => {
     if (testimonials.length === 0) return;
+    pauseAutoAdvance();
+    resumeAutoAdvanceDelayed();
     const next = (activeIndex + 1) % testimonials.length;
     scrollToIndex(next);
   };
 
   const handlePrev = () => {
     if (testimonials.length === 0) return;
+    pauseAutoAdvance();
+    resumeAutoAdvanceDelayed();
     const prev = (activeIndex - 1 + testimonials.length) % testimonials.length;
     scrollToIndex(prev);
   };
 
   const scrollToIndex = (idx: number) => {
+    pauseAutoAdvance();
+    resumeAutoAdvanceDelayed();
     setActiveIndex(idx);
     if (trackRef.current) {
-      const card = trackRef.current.children[idx] as HTMLElement;
+      const firstCard = trackRef.current.children[0] as HTMLElement | undefined;
+      const card = trackRef.current.children[idx] as HTMLElement | undefined;
       if (card) {
+        const baseOffset = firstCard ? firstCard.offsetLeft : 0;
         trackRef.current.scrollTo({
-          left: card.offsetLeft - trackRef.current.offsetLeft,
+          left: Math.max(0, card.offsetLeft - baseOffset),
           behavior: 'smooth',
         });
       }
@@ -126,8 +225,16 @@ export const TestimonialsCarousel: React.FC = () => {
         ) : (
           <div
             ref={trackRef}
-            className="flex gap-6 overflow-x-auto snap-x snap-mandatory pb-4 pt-2 scrollbar-none no-scrollbar -mx-6 px-6 sm:-mx-10 sm:px-10"
-            style={{ scrollBehavior: 'smooth' }}
+            onScroll={syncActiveDotFromScroll}
+            onMouseEnter={pauseAutoAdvance}
+            onMouseLeave={resumeAutoAdvanceDelayed}
+            onTouchStart={pauseAutoAdvance}
+            onTouchMove={syncActiveDotFromScroll}
+            onTouchEnd={() => {
+              syncActiveDotFromScroll();
+              resumeAutoAdvanceDelayed();
+            }}
+            className="flex gap-6 overflow-x-auto snap-x snap-mandatory scroll-px-6 sm:scroll-px-10 pb-4 pt-2 scrollbar-none no-scrollbar -mx-6 px-6 sm:-mx-10 sm:px-10"
           >
             {testimonials.map((t) => (
               <div
@@ -199,11 +306,12 @@ export const TestimonialsCarousel: React.FC = () => {
             {testimonials.map((_, idx) => (
               <button
                 key={idx}
+                type="button"
                 onClick={() => scrollToIndex(idx)}
-                className={`h-1.5 transition-all duration-300 rounded-full cursor-pointer ${
+                className={`h-2 transition-all duration-300 rounded-full cursor-pointer ${
                   activeIndex === idx
-                    ? 'w-8 bg-zinc-900'
-                    : 'w-2 bg-zinc-300 hover:bg-zinc-400'
+                    ? 'w-8 bg-[#d4af37] shadow-sm'
+                    : 'w-2 bg-zinc-300 dark:bg-zinc-700 hover:bg-zinc-400 dark:hover:bg-zinc-500'
                 }`}
                 aria-label={`Go to testimonial ${idx + 1}`}
               />

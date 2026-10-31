@@ -308,8 +308,15 @@ html.dark [data-dashboard-theme="dark"] {
 .dashboard-light div[class*="bg-[#07080c]"],
 .dashboard-light div[class*="bg-[#0d0e16]"],
 .dashboard-light div[class*="bg-[#0a0a0c]"],
+.dashboard-light div[class*="bg-[#18181b]"],
+.dashboard-light div[class*="bg-[#121214]"]:not(.dashboard-light),
+.dashboard-light div[class*="bg-[#202024]"],
+.dashboard-light div[class*="from-[#18181b]"],
+.dashboard-light div[class*="bg-zinc-900"],
 .dashboard-light section[class*="bg-[#0c0d14]"],
+.dashboard-light section[class*="bg-[#18181b]"],
 .dashboard-light article[class*="bg-[#0c0d14]"],
+.dashboard-light article[class*="bg-[#18181b]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0c0d14]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#08090e]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#10121a]"],
@@ -324,7 +331,12 @@ html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0e1017]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#07080c]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0d0e16]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0a0a0c]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#18181b]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#202024]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="from-[#18181b]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-zinc-900"],
 html:not(.dark) [data-dashboard-theme="light"] section[class*="bg-[#0c0d14]"],
+html:not(.dark) [data-dashboard-theme="light"] section[class*="bg-[#18181b]"],
 html:not(.dark) [data-dashboard-theme="light"] article[class*="bg-[#0c0d14]"] {
   background-color: #ffffff !important;
   background-image: none !important;
@@ -363,23 +375,30 @@ html.dark [data-dashboard-theme="dark"] article[class*="bg-[#0c0d14]"] {
 .dashboard-light div[class*="bg-white/[0.04]"],
 .dashboard-light div[class*="bg-white/[0.06]"],
 .dashboard-light div[class*="bg-white/[0.08]"],
+.dashboard-light div[class*="bg-black/20"],
+.dashboard-light div[class*="bg-black/30"],
 .dashboard-light div[class*="bg-black/40"],
 .dashboard-light div[class*="bg-black/50"],
 .dashboard-light div[class*="bg-black/60"],
 .dashboard-light div[class*="bg-black/70"],
+.dashboard-light div[class*="bg-zinc-800/"],
+.dashboard-light thead[class*="bg-black/"],
+.dashboard-light tr[class*="hover:bg-white/"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/5"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.02]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.03]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.04]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.06]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.08]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/20"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/30"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/40"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/50"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/60"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/70"] {
   background-color: #f8fafc !important;
   border-color: #e2e8f0 !important;
-  color: #334155 !important;
+  color: #1e293b !important;
 }
 
 /* Dark Mode Sub-cards & Wells */
@@ -410,6 +429,7 @@ html:not(.dark) div.fixed.inset-0 div[class*="bg-[#0c0d14]"],
 html:not(.dark) div.fixed.inset-0 div[class*="bg-[#08090e]"],
 html:not(.dark) div.fixed.inset-0 div[class*="bg-[#11131e]"],
 html:not(.dark) div.fixed.inset-0 div[class*="bg-[#0e1017]"],
+html:not(.dark) div.fixed.inset-0 div[class*="bg-[#18181b]"],
 html:not(.dark) div[id$="-modal-dialog"],
 html:not(.dark) div[id$="-modal-card"],
 html:not(.dark) div[role="dialog"] {
@@ -484,28 +504,32 @@ html:not(.dark) div.fixed.inset-0 div[class*="bg-[#06070a]"] {
 .dashboard-light h2,
 .dashboard-light h3,
 .dashboard-light h4,
+.dashboard-light .text-white:not(button):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-blue-"]):not([class*="bg-purple-"]):not([class*="bg-zinc-900"]):not([class*="bg-zinc-950"]):not([class*="bg-black"]):not(.kohot-keep-color),
+.dashboard-light .text-zinc-100:not(.kohot-keep-color),
+.dashboard-light .text-zinc-200:not(.kohot-keep-color),
 html:not(.dark) [data-dashboard-theme="light"] h1,
 html:not(.dark) [data-dashboard-theme="light"] h2,
 html:not(.dark) [data-dashboard-theme="light"] h3,
 html:not(.dark) [data-dashboard-theme="light"] h4,
-html:not(.dark) div.fixed.inset-0 h1,
-html:not(.dark) div.fixed.inset-0 h2,
-html:not(.dark) div.fixed.inset-0 h3,
-html:not(.dark) div.fixed.inset-0 h4,
-html:not(.dark) div[id$="-modal-dialog"] h1,
-html:not(.dark) div[id$="-modal-dialog"] h2,
-html:not(.dark) div[id$="-modal-dialog"] h3,
-html:not(.dark) div[id$="-modal-dialog"] h4 {
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) h1:not(.kohot-keep-color),
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) h2:not(.kohot-keep-color),
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) h3:not(.kohot-keep-color),
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) h4:not(.kohot-keep-color),
+html:not(.dark) div[id$="-modal-dialog"] h1:not(.kohot-keep-color),
+html:not(.dark) div[id$="-modal-dialog"] h2:not(.kohot-keep-color),
+html:not(.dark) div[id$="-modal-dialog"] h3:not(.kohot-keep-color),
+html:not(.dark) div[id$="-modal-dialog"] h4:not(.kohot-keep-color) {
   color: #0f172a !important;
 }
 
 .dashboard-light h5,
 .dashboard-light h6,
+.dashboard-light .text-zinc-300:not(.kohot-keep-color),
 html:not(.dark) [data-dashboard-theme="light"] h5,
 html:not(.dark) [data-dashboard-theme="light"] h6,
-html:not(.dark) div.fixed.inset-0 h5,
-html:not(.dark) div.fixed.inset-0 h6 {
-  color: #334155 !important;
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) h5:not(.kohot-keep-color),
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) h6:not(.kohot-keep-color) {
+  color: #1e293b !important;
 }
 
 .dashboard-light p,
@@ -516,6 +540,8 @@ html:not(.dark) div.fixed.inset-0 h6 {
 .dashboard-light th,
 .dashboard-light li,
 .dashboard-light small,
+.dashboard-light .text-zinc-400:not(button):not(.kohot-keep-color),
+.dashboard-light .text-zinc-500:not(button):not(.kohot-keep-color),
 html:not(.dark) [data-dashboard-theme="light"] p,
 html:not(.dark) [data-dashboard-theme="light"] label,
 html:not(.dark) [data-dashboard-theme="light"] dt,
@@ -524,8 +550,8 @@ html:not(.dark) [data-dashboard-theme="light"] td,
 html:not(.dark) [data-dashboard-theme="light"] th,
 html:not(.dark) [data-dashboard-theme="light"] li,
 html:not(.dark) [data-dashboard-theme="light"] small,
-html:not(.dark) div.fixed.inset-0 p,
-html:not(.dark) div.fixed.inset-0 label {
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) p:not(.kohot-keep-color),
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) label:not(.kohot-keep-color) {
   color: #475569 !important;
 }
 
@@ -533,16 +559,38 @@ html:not(.dark) div.fixed.inset-0 label {
 .dashboard-light b,
 html:not(.dark) [data-dashboard-theme="light"] strong,
 html:not(.dark) [data-dashboard-theme="light"] b,
-html:not(.dark) div.fixed.inset-0 strong,
-html:not(.dark) div.fixed.inset-0 b {
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) strong:not(.kohot-keep-color),
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) b:not(.kohot-keep-color) {
   color: #0f172a !important;
 }
 
 /* 5. General Dark Borders to Subtle Refined Slate Borders */
 .dashboard-light [class*="border-white/"],
+.dashboard-light [class*="border-zinc-800"],
+.dashboard-light [class*="border-zinc-700"],
+.dashboard-light [class*="divide-white/"],
+.dashboard-light [class*="divide-zinc-800"],
 html:not(.dark) [data-dashboard-theme="light"] [class*="border-white/"],
-html:not(.dark) div.fixed.inset-0 [class*="border-white/"] {
-  border-color: #e2e8f0 !important;
+html:not(.dark) [data-dashboard-theme="light"] [class*="border-zinc-800"],
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) [class*="border-white/"]:not(.kohot-keep-border) {
+  border-color: #cbd5e1 !important;
+}
+
+/* High contrast colored badges in Light Mode */
+.dashboard-light .text-emerald-400:not([class*="bg-emerald-500"]):not([class*="bg-emerald-600"]) {
+  color: #047857 !important;
+}
+.dashboard-light .text-amber-400:not([class*="bg-amber-400"]):not([class*="bg-amber-500"]) {
+  color: #b45309 !important;
+}
+.dashboard-light .text-red-400:not([class*="bg-red-500"]):not([class*="bg-red-600"]) {
+  color: #b91c1c !important;
+}
+.dashboard-light .text-blue-400:not([class*="bg-blue-500"]):not([class*="bg-blue-600"]) {
+  color: #1d4ed8 !important;
+}
+.dashboard-light .text-purple-400:not([class*="bg-purple-500"]):not([class*="bg-purple-600"]) {
+  color: #6d28d9 !important;
 }
 
 /* 6. Active Tabs & Clips: Sleek Charcoal/Black with Pure White Text */
@@ -656,6 +704,7 @@ html.modal-backdrop-locked {
   overflow: hidden !important;
   overscroll-behavior: none !important;
   -webkit-overflow-scrolling: auto !important;
+  touch-action: none !important;
 }
 
 /* Keyframe animations for motion on Legacy Wall & Album Entry */
@@ -781,5 +830,26 @@ html.dark .bg-graduation-watermark {
 .dashboard-light [class*="bg-[#d4af37]"] {
   background-color: #d4af37 !important;
   color: #000000 !important;
+}
+
+/* 10. Solid Bottom Toggle Switch Base: Reserve exact height so footers end at the top of the base and nothing is covered */
+body.has-solid-bottom-switcher {
+  padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+body.has-solid-bottom-switcher #back-to-top-btn,
+body.has-solid-bottom-switcher #floating-create-album-btn,
+body.has-solid-bottom-switcher #album-contextual-invite-bar,
+body.has-solid-bottom-switcher #legacy-wall-contextual-invite-bar {
+  bottom: calc(68px + 1.25rem + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+/* Never allow the bottom toggle switch area to block any pop-up card, modal window, or dialog */
+body.modal-backdrop-locked #album-admin-sticky-toggle-container,
+html.modal-backdrop-locked #album-admin-sticky-toggle-container {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+  z-index: -1 !important;
 }
 

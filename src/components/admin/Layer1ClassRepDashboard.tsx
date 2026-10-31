@@ -23,13 +23,22 @@ import { UniversalModal } from '../common/UniversalModal';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
 import { getYouTubeThumbnailUrl } from '../../utils/youtube';
 import { getAwardVisualConfig } from '../../utils/awardVisuals';
-import { getTheme, applyTheme } from '../../utils/theme';
+import { getTheme, applyTheme, toggleTheme, ThemeMode } from '../../utils/theme';
 import {
   apiClientUnpublishAlbum,
-  apiClientRequestAlbumDeletion,
+  apiClientSoftDeleteAlbum,
+  apiClientRestoreAlbum,
   apiClientDeleteProfile,
   apiClientDeleteMemory,
-  apiClientDeleteAward
+  apiClientDeleteAward,
+  fetchAlbumSlotBalanceOnServer,
+  purchaseAlbumSlotsOnServer,
+  updateAlbumSponsorOnServer,
+  approveAlbumSubmissionsOnServer,
+  declineAlbumSubmissionOnServer,
+  requestChangesAlbumSubmissionOnServer,
+  reinstateAlbumSubmissionOnServer,
+  removeAlbumSubmissionOnServer,
 } from '../../utils/apiClient';
 import { 
   User,
@@ -152,11 +161,11 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const [isRequestDeletionModalOpen, setIsRequestDeletionModalOpen] = useState(false);
   const [deletionReason, setDeletionReason] = useState('');
   const [activeTab, setActiveTab] = useState<
-    'students' | 'memories' | 'awards' | 'voices' | 'story' | 'imagery' | 'videos'
+    'students' | 'memories' | 'awards' | 'voices' | 'story' | 'videos'
   >(() => {
     try {
       const saved = sessionStorage.getItem('kohot_admin_dashboard_tab');
-      if (saved && ['students', 'imagery', 'memories', 'awards', 'voices', 'story', 'videos'].includes(saved)) {
+      if (saved && ['students', 'memories', 'awards', 'voices', 'story', 'videos'].includes(saved)) {
         return saved as any;
       }
     } catch (e) {}
@@ -172,6 +181,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     return 'moments';
   });
   const [isInviteNextClassModalOpen, setIsInviteNextClassModalOpen] = useState(false);
+  const [isAlbumDesignModalOpen, setIsAlbumDesignModalOpen] = useState(false);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
   const [isInviteClassmatesModalOpen, setIsInviteClassmatesModalOpen] = useState(false);
   const [shareAlbumToast, setShareAlbumToast] = useState(false);
@@ -182,10 +192,72 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const compressionResolution = contentOverride?.defaultCompressionResolution || 720;
 
   // Student Directory & Hierarchy Management State
-  const [studentDirectoryTab, setStudentDirectoryTab] = useState<'all' | 'leaders' | 'pending'>('all');
+  const initialPendingCount = useMemo(() => {
+    return (currentSet.students || []).filter(
+      (s) =>
+        s.submissionStatus !== 'removed' &&
+        s.submissionStatus !== 'declined' &&
+        s.submissionStatus !== 'changes_requested' &&
+        (s.submissionStatus === 'pending' || s.approved === false)
+    ).length;
+  }, [currentSet.id]);
+
+  const [studentDirectoryTab, setStudentDirectoryTab] = useState<
+    'all' | 'leaders' | 'pending' | 'changes_requested' | 'declined'
+  >(() => (initialPendingCount > 0 ? 'pending' : 'all'));
   const [studentSortMode, setStudentSortMode] = useState<'recent' | 'alpha'>('recent');
   const [adminStudentSearch, setAdminStudentSearch] = useState('');
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+  const [isPreviewTipDismissed, setIsPreviewTipDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kohot_dismiss_row_preview_tip') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [hierarchyToast, setHierarchyToast] = useState<string | null>(null);
+  const [visiblePeopleCount, setVisiblePeopleCount] = useState<number>(20);
+  const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
+  const [inspectedProfileRow, setInspectedProfileRow] = useState<StudentProfile | null>(null);
+  const [bottomSheetActionMode, setBottomSheetActionMode] = useState<'none' | 'decline' | 'request_changes'>('none');
+  const [bottomSheetReasonInput, setBottomSheetReasonInput] = useState<string>('');
+  const [isProcessingSubmissionAction, setIsProcessingSubmissionAction] = useState<boolean>(false);
+
+  // Profile Slots & Sponsor Management State (kept strictly in sync: available = acquired - used)
+  const initialUsedSlots =
+    typeof currentSet.totalSlotsUsed === 'number'
+      ? currentSet.totalSlotsUsed
+      : (currentSet.students || []).filter(
+          (s) =>
+            (s.approved !== false && s.submissionStatus !== 'pending' && s.submissionStatus !== 'declined' && s.submissionStatus !== 'removed') &&
+            Boolean(s.usedSlot || s.slotConsumed)
+        ).length;
+  const initialAvailableSlots =
+    typeof currentSet.profileSlotBalance === 'number' ? currentSet.profileSlotBalance : 0;
+  const initialCreditedSlots =
+    typeof currentSet.totalSlotsCredited === 'number' && currentSet.totalSlotsCredited >= initialAvailableSlots + initialUsedSlots
+      ? currentSet.totalSlotsCredited
+      : initialAvailableSlots + initialUsedSlots;
+
+  const [slotBalance, setSlotBalance] = useState<number>(initialAvailableSlots);
+  const [totalSlotsCredited, setTotalSlotsCredited] = useState<number>(initialCreditedSlots);
+  const [totalSlotsUsed, setTotalSlotsUsed] = useState<number>(initialUsedSlots);
+  const [slotPriceNaira, setSlotPriceNaira] = useState<number>(500);
+  const [slotPurchasesList, setSlotPurchasesList] = useState<any[]>(currentSet.sponsors || []);
+  const [slotLedgerList, setSlotLedgerList] = useState<any[]>((currentSet as any).slotLedger || []);
+  const [isSlotDetailsSheetOpen, setIsSlotDetailsSheetOpen] = useState<boolean>(false);
+  const [showFullSlotHistory, setShowFullSlotHistory] = useState<boolean>(false);
+  const [isInviteBottomSheetOpen, setIsInviteBottomSheetOpen] = useState<boolean>(false);
+  const [copiedInviteSheetLink, setCopiedInviteSheetLink] = useState<boolean>(false);
+  const [showInviteSheetQr, setShowInviteSheetQr] = useState<boolean>(false);
+  const [isBuySlotsModalOpen, setIsBuySlotsModalOpen] = useState<boolean>(false);
+  const [buySlotsCount, setBuySlotsCount] = useState<number>(25);
+  const [buySlotsSponsorName, setBuySlotsSponsorName] = useState<string>('');
+  const [buySlotsShowSponsor, setBuySlotsShowSponsor] = useState<boolean>(true);
+  const [isBuyingSlots, setIsBuyingSlots] = useState<boolean>(false);
+  const [editingSponsorItem, setEditingSponsorItem] = useState<any | null>(null);
+  const [editSponsorNameText, setEditSponsorNameText] = useState<string>('');
+  const [editSponsorVisibleToggle, setEditSponsorVisibleToggle] = useState<boolean>(true);
 
   // Editing Student Profile State
   const [editingStudent, setEditingStudent] = useState<StudentProfile | null>(null);
@@ -224,7 +296,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   useEffect(() => {
     try {
       const savedTab = sessionStorage.getItem('kohot_admin_dashboard_tab');
-      if (savedTab && ['students', 'imagery', 'memories', 'awards', 'voices', 'story', 'videos'].includes(savedTab)) {
+      if (savedTab && ['students', 'memories', 'awards', 'voices', 'story', 'videos'].includes(savedTab)) {
         setActiveTab(savedTab as any);
       }
       const savedSubtab = sessionStorage.getItem('kohot_admin_dashboard_subtab');
@@ -283,8 +355,33 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Dashboards permanently remain dark with grey shades
-  const isLightMode = false;
+  // Synced Light & Dark mode across website, legacy wall, album, and album admin dashboard
+  const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() => getTheme());
+  const isLightMode = currentTheme === 'light';
+
+  useEffect(() => {
+    const saved = getTheme();
+    setCurrentTheme(saved);
+    applyTheme(saved);
+  }, []);
+
+  useEffect(() => {
+    const handleThemeChanged = (e: any) => {
+      if (e.detail?.theme) {
+        setCurrentTheme(e.detail.theme);
+      } else {
+        setCurrentTheme(getTheme());
+      }
+    };
+    window.addEventListener('kohot_theme_changed', handleThemeChanged);
+    return () => window.removeEventListener('kohot_theme_changed', handleThemeChanged);
+  }, []);
+
+  const handleToggleDashboardTheme = () => {
+    const next = toggleTheme(currentTheme);
+    setCurrentTheme(next);
+  };
+
   const [displayedAdminName, setDisplayedAdminName] = useState(
     currentSet.classRepName || currentUser.fullName || 'Oluwatobi James'
   );
@@ -352,10 +449,17 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
   const handleToggleAlbumLive = () => {
     const nextStatus = currentSet.activationStatus === 'active' ? 'inactive' : 'active';
-    const updated: ClassSet = { ...currentSet, activationStatus: nextStatus };
+    const isNowActive = nextStatus === 'active';
+    const updated: ClassSet = {
+      ...currentSet,
+      activationStatus: nextStatus,
+      isPublished: isNowActive,
+      isUnpublished: !isNowActive,
+      publishedAt: isNowActive ? (currentSet.publishedAt || new Date().toISOString()) : currentSet.publishedAt,
+    };
     onUpdateSet(updated);
-    if (nextStatus === 'active') {
-      showSuccess('Your Class Album is now live.', 'Your classmates can return to it whenever they want.');
+    if (isNowActive) {
+      showSuccess('Your Class Album is now live.', 'It now appears on your department Legacy Wall and classmates can return to it anytime.');
     } else {
       showWarning('Album set to Draft mode.', 'The album is now saved in draft mode.');
     }
@@ -440,17 +544,28 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           'Adjust Album Hero Banner Framing',
           async (croppedUrl) => {
             setIsCompressingHero(true);
+            let finalHeroUrl = croppedUrl;
             try {
               const fetchRes = await fetch(croppedUrl);
               const blob = await fetchRes.blob();
               const croppedFile = new File([blob], 'hero-banner.webp', { type: 'image/webp' });
               const res = await compressImageToWebP(croppedFile, 1600, 0.85);
-              setHeroBannerUrl(res.dataUrl);
+              finalHeroUrl = res.dataUrl;
             } catch (err) {
-              setHeroBannerUrl(croppedUrl);
+              finalHeroUrl = croppedUrl;
             } finally {
               setIsCompressingHero(false);
             }
+            setHeroBannerUrl(finalHeroUrl);
+            onUpdateSet({
+              ...currentSet,
+              bannerImageUrl: finalHeroUrl,
+              legacyGroupImageUrl: legacyFooterUrl,
+              socials: socials,
+              videos: videos,
+            });
+            setImagerySaveToast('✓ Album Hero Banner updated and applied to live album!');
+            setTimeout(() => setImagerySaveToast(null), 3500);
           }
         );
       }
@@ -472,17 +587,28 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           'Adjust Footer Legacy Photo Framing',
           async (croppedUrl) => {
             setIsCompressingFooter(true);
+            let finalFooterUrl = croppedUrl;
             try {
               const fetchRes = await fetch(croppedUrl);
               const blob = await fetchRes.blob();
               const croppedFile = new File([blob], 'footer-photo.webp', { type: 'image/webp' });
               const res = await compressImageToWebP(croppedFile, 1600, 0.85);
-              setLegacyFooterUrl(res.dataUrl);
+              finalFooterUrl = res.dataUrl;
             } catch (err) {
-              setLegacyFooterUrl(croppedUrl);
+              finalFooterUrl = croppedUrl;
             } finally {
               setIsCompressingFooter(false);
             }
+            setLegacyFooterUrl(finalFooterUrl);
+            onUpdateSet({
+              ...currentSet,
+              bannerImageUrl: heroBannerUrl,
+              legacyGroupImageUrl: finalFooterUrl,
+              socials: socials,
+              videos: videos,
+            });
+            setImagerySaveToast('✓ Final Footer Banner updated and applied to live album!');
+            setTimeout(() => setImagerySaveToast(null), 3500);
           }
         );
       }
@@ -501,6 +627,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       videos: videos,
     });
     setImagerySaveToast('✓ Album cover imagery, department social handles, and video embeds saved!');
+    showSuccess('Album Design Saved', 'Your hero banner, footer portrait, and department social icons are now active on the album.');
     setTimeout(() => setImagerySaveToast(null), 3500);
   };
 
@@ -700,30 +827,156 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     setTimeout(() => setHierarchyToast(null), 3500);
   };
 
-  // Separate Pending Submissions vs Approved Directory
+  // Sync slot balance from server on mount & when currentSet.id changes
+  useEffect(() => {
+    setVisiblePeopleCount(20);
+    setSelectedPendingIds([]);
+  }, [studentDirectoryTab, adminStudentSearch, studentSortMode]);
+
+  useEffect(() => {
+    const pendingCount = (currentSet.students || []).filter(
+      (s) =>
+        s.submissionStatus !== 'removed' &&
+        s.submissionStatus !== 'declined' &&
+        s.submissionStatus !== 'changes_requested' &&
+        (s.submissionStatus === 'pending' || s.approved === false)
+    ).length;
+    setStudentDirectoryTab(pendingCount > 0 ? 'pending' : 'all');
+  }, [currentSet.id]);
+
+  useEffect(() => {
+    if (!currentSet?.id) return;
+    fetchAlbumSlotBalanceOnServer(currentSet.id)
+      .then((res) => {
+        if (res.success) {
+          const used = typeof res.totalUsed === 'number' ? res.totalUsed : 0;
+          const credited = typeof res.totalCredited === 'number' ? res.totalCredited : 0;
+          const bal = typeof res.balance === 'number' ? res.balance : Math.max(0, credited - used);
+          setSlotBalance(bal);
+          setTotalSlotsCredited(credited);
+          setTotalSlotsUsed(used);
+          if (Array.isArray(res.purchases)) setSlotPurchasesList(res.purchases);
+          if (Array.isArray(res.ledger)) setSlotLedgerList(res.ledger);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/config', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const feeKobo = Number(data?.settings?.student_fee_kobo || 0);
+        if (feeKobo > 0) {
+          setSlotPriceNaira(Math.round(feeKobo / 100));
+        }
+      })
+      .catch(() => {});
+  }, [currentSet.id]);
+
+  // Helper to determine profile status across legacy `approved` boolean and new `submissionStatus`
+  const getStudentEffectiveStatus = (
+    s: StudentProfile
+  ): 'approved' | 'pending' | 'changes_requested' | 'declined' | 'removed' => {
+    if (s.submissionStatus === 'removed') return 'removed';
+    if (s.submissionStatus === 'declined') return 'declined';
+    if (s.submissionStatus === 'changes_requested') return 'changes_requested';
+    if (s.submissionStatus === 'pending' || s.approved === false) return 'pending';
+    return 'approved';
+  };
+
+  const isStudentSlotFree = (s: StudentProfile): boolean => {
+    return (
+      s.feeChoice === 'paid' ||
+      s.feeChoice === 'waived' ||
+      s.paymentStatus === 'paid' ||
+      s.paymentStatus === 'waived'
+    );
+  };
+
+  // Separate Pending, Approved, Changes Requested, and Declined profiles
   const pendingStudents = useMemo(() => {
-    return currentSet.students.filter((s) => s.approved === false);
-  }, [currentSet.students]);
+    let list = currentSet.students.filter((s) => getStudentEffectiveStatus(s) === 'pending');
+    if (adminStudentSearch.trim()) {
+      const q = adminStudentSearch.toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.fullName.toLowerCase().includes(q) ||
+          (s.nickname && s.nickname.toLowerCase().includes(q)) ||
+          (s.position && s.position.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [currentSet.students, adminStudentSearch]);
+
+  const changesRequestedStudents = useMemo(() => {
+    let list = currentSet.students.filter((s) => getStudentEffectiveStatus(s) === 'changes_requested');
+    if (adminStudentSearch.trim()) {
+      const q = adminStudentSearch.toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.fullName.toLowerCase().includes(q) ||
+          (s.nickname && s.nickname.toLowerCase().includes(q)) ||
+          (s.position && s.position.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [currentSet.students, adminStudentSearch]);
+
+  const declinedStudents = useMemo(() => {
+    let list = currentSet.students.filter((s) => getStudentEffectiveStatus(s) === 'declined');
+    if (adminStudentSearch.trim()) {
+      const q = adminStudentSearch.toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.fullName.toLowerCase().includes(q) ||
+          (s.nickname && s.nickname.toLowerCase().includes(q)) ||
+          (s.position && s.position.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [currentSet.students, adminStudentSearch]);
 
   const approvedStudents = useMemo(() => {
-    return currentSet.students.filter((s) => s.approved !== false);
+    return currentSet.students.filter((s) => getStudentEffectiveStatus(s) === 'approved');
   }, [currentSet.students]);
 
   // Filtered leaders in current set (arranged by executive hierarchy from approved list)
   const adminLeaders = useMemo(() => {
-    const leaders = approvedStudents.filter(isLeaderProfile);
-    return sortLeadersByHierarchy(leaders);
-  }, [approvedStudents]);
+    let leaders = approvedStudents.filter(isLeaderProfile);
+    leaders = sortLeadersByHierarchy(leaders);
+    if (adminStudentSearch.trim()) {
+      const q = adminStudentSearch.toLowerCase().trim();
+      leaders = leaders.filter(
+        (s) =>
+          s.fullName.toLowerCase().includes(q) ||
+          (s.nickname && s.nickname.toLowerCase().includes(q)) ||
+          (s.position && s.position.toLowerCase().includes(q))
+      );
+    }
+    return leaders;
+  }, [approvedStudents, adminStudentSearch]);
 
   // Filtered all approved students for directory view (recent vs alphabetical)
   const adminAllStudents = useMemo(() => {
     let list = [...approvedStudents];
 
     if (studentSortMode === 'recent') {
-      // Sort recently approved or uploaded profiles to the top
       list.sort((a, b) => {
-        const timeA = typeof a.approvedAt === 'number' ? a.approvedAt : (a.approvedAt ? new Date(a.approvedAt).getTime() : (a.submittedAt ? new Date(a.submittedAt).getTime() : 0));
-        const timeB = typeof b.approvedAt === 'number' ? b.approvedAt : (b.approvedAt ? new Date(b.approvedAt).getTime() : (b.submittedAt ? new Date(b.submittedAt).getTime() : 0));
+        const timeA =
+          typeof a.approvedAt === 'number'
+            ? a.approvedAt
+            : a.approvedAt
+            ? new Date(a.approvedAt).getTime()
+            : a.submittedAt
+            ? new Date(a.submittedAt).getTime()
+            : 0;
+        const timeB =
+          typeof b.approvedAt === 'number'
+            ? b.approvedAt
+            : b.approvedAt
+            ? new Date(b.approvedAt).getTime()
+            : b.submittedAt
+            ? new Date(b.submittedAt).getTime()
+            : 0;
         return timeB - timeA;
       });
     } else {
@@ -742,86 +995,398 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     return list;
   }, [approvedStudents, adminStudentSearch, studentSortMode]);
 
-  // Approval Handlers: Admin approves student -> reflects immediately on dashboard at the top with NO empty form
-  const handleApproveStudent = (studentId: string) => {
+  // Count how many slots selected pending rows will consume
+  const selectedPendingSlotsNeeded = useMemo(() => {
+    return selectedPendingIds.reduce((acc, id) => {
+      const st = pendingStudents.find((p) => p.id === id);
+      if (!st) return acc;
+      return acc + (isStudentSlotFree(st) ? 0 : 1);
+    }, 0);
+  }, [selectedPendingIds, pendingStudents]);
+
+  // Single or Batch Approval Handler wired to Slot Ledger
+  const handleApproveStudent = async (studentId: string) => {
     const student = currentSet.students.find((s) => s.id === studentId);
     if (!student) return;
 
-    const trimmedPos = student.position?.trim() || '';
-    const isLeader = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
+    const needsSlot = !isStudentSlotFree(student);
+    if (needsSlot && slotBalance <= 0) {
+      setIsBuySlotsModalOpen(true);
+      return;
+    }
 
-    const approvedStudent: StudentProfile = {
-      ...student,
-      approved: true,
-      approvedAt: Date.now(),
-      leaderOrder: isLeader && !student.leaderOrder ? calculateIntuitiveHierarchyRank(trimmedPos) : student.leaderOrder,
-    };
+    setIsProcessingSubmissionAction(true);
+    try {
+      const serverRes = await approveAlbumSubmissionsOnServer(currentSet.id, [studentId]);
+      const nextBalance =
+        typeof serverRes.balanceLeft === 'number'
+          ? serverRes.balanceLeft
+          : Math.max(0, slotBalance - (needsSlot ? 1 : 0));
+      const nextUsed = needsSlot ? totalSlotsUsed + 1 : totalSlotsUsed;
+      const nextCredited = Math.max(totalSlotsCredited, nextBalance + nextUsed);
+      setSlotBalance(nextBalance);
+      setTotalSlotsUsed(nextUsed);
+      setTotalSlotsCredited(nextCredited);
 
-    // Put newly approved profile at the top of the list
-    const remainingStudents = currentSet.students.filter((s) => s.id !== studentId);
-    const updatedStudents = [approvedStudent, ...remainingStudents];
+      const trimmedPos = student.position?.trim() || '';
+      const isLeader = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
 
-    onUpdateSet({
-      ...currentSet,
-      students: updatedStudents,
-    });
+      const approvedStudent: StudentProfile = {
+        ...student,
+        approved: true,
+        status: 'approved',
+        submissionStatus: 'approved',
+        approvedAt: Date.now(),
+        usedSlot: needsSlot,
+        slotConsumed: needsSlot,
+        leaderOrder:
+          isLeader && !student.leaderOrder
+            ? calculateIntuitiveHierarchyRank(trimmedPos)
+            : student.leaderOrder,
+      };
 
-    // Ensure no empty form is displayed and navigate straight to the Graduates section
-    setIsAddingStudent(false);
-    setEditingStudent(null);
-    setStudentDirectoryTab('all');
-    setStudentSortMode('recent');
+      const remainingStudents = currentSet.students.filter((s) => s.id !== studentId);
+      const updatedStudents = [approvedStudent, ...remainingStudents];
 
-    showSuccess('Classmate approved.', `${student.fullName} is now visible in the live album.`);
-  };
+      onUpdateSet({
+        ...currentSet,
+        profileSlotBalance: nextBalance,
+        totalSlotsCredited: nextCredited,
+        totalSlotsUsed: nextUsed,
+        students: updatedStudents,
+      });
 
-  const handleRejectStudent = (studentId: string) => {
-    const student = currentSet.students.find((s) => s.id === studentId);
-    const updatedStudents = currentSet.students.filter((s) => s.id !== studentId);
-    onUpdateSet({
-      ...currentSet,
-      students: updatedStudents,
-    });
-    showWarning('Submission declined.', `Declined submission from ${student?.fullName || 'student'}.`);
-  };
-
-  const handleApproveAllPending = () => {
-    if (pendingStudents.length === 0) return;
-    const count = pendingStudents.length;
-    const now = Date.now();
-
-    const newlyApprovedList: StudentProfile[] = [];
-    const unchangedStudents: StudentProfile[] = [];
-
-    currentSet.students.forEach((s) => {
-      if (s.approved === false) {
-        const trimmedPos = s.position?.trim() || '';
-        const isLeader = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
-        newlyApprovedList.push({
-          ...s,
-          approved: true,
-          approvedAt: now,
-          leaderOrder: isLeader && !s.leaderOrder ? calculateIntuitiveHierarchyRank(trimmedPos) : s.leaderOrder,
-        });
-      } else {
-        unchangedStudents.push(s);
+      setSelectedPendingIds((prev) => prev.filter((id) => id !== studentId));
+      if (inspectedProfileRow?.id === studentId) {
+        setInspectedProfileRow(approvedStudent);
       }
+
+      const slotMsg =
+        serverRes.message ||
+        (needsSlot ? `1 slot used, ${nextBalance} left` : `Approved · 0 slots used, ${nextBalance} left`);
+      setHierarchyToast(`✓ ${student.fullName} approved — ${slotMsg}`);
+      setTimeout(() => setHierarchyToast(null), 4000);
+      showSuccess('Classmate approved.', slotMsg);
+    } finally {
+      setIsProcessingSubmissionAction(false);
+    }
+  };
+
+  // Batch Approve Selected Pending Profiles (Approves up to available slot balance)
+  const handleApproveSelectedPending = async () => {
+    const targetIds = selectedPendingIds.length > 0 ? selectedPendingIds : pendingStudents.map((s) => s.id);
+    if (targetIds.length === 0) return;
+
+    setIsProcessingSubmissionAction(true);
+    try {
+      const serverRes = await approveAlbumSubmissionsOnServer(currentSet.id, targetIds);
+      let runningBalance = slotBalance;
+      let slotsConsumedCount = 0;
+      const now = Date.now();
+      const approvedIdSet = new Set<string>(serverRes.approvedIds || []);
+
+      // If server didn't return specific IDs (e.g. local fallback), compute up to available balance
+      if (approvedIdSet.size === 0) {
+        for (const id of targetIds) {
+          const st = currentSet.students.find((s) => s.id === id);
+          if (!st) continue;
+          const needsSlot = !isStudentSlotFree(st);
+          if (needsSlot && runningBalance <= 0) continue;
+          if (needsSlot) {
+            runningBalance -= 1;
+            slotsConsumedCount += 1;
+          }
+          approvedIdSet.add(id);
+        }
+      } else {
+        runningBalance = typeof serverRes.balanceLeft === 'number' ? serverRes.balanceLeft : runningBalance;
+        slotsConsumedCount = typeof serverRes.slotsUsedCount === 'number' ? serverRes.slotsUsedCount : 0;
+      }
+
+      if (approvedIdSet.size === 0) {
+        setIsProcessingSubmissionAction(false);
+        setIsBuySlotsModalOpen(true);
+        showWarning('Insufficient slots', 'Buy profile slots to approve unpaid student submissions.');
+        return;
+      }
+
+      const nextUsed = totalSlotsUsed + slotsConsumedCount;
+      const nextCredited = Math.max(totalSlotsCredited, runningBalance + nextUsed);
+      setSlotBalance(runningBalance);
+      setTotalSlotsUsed(nextUsed);
+      setTotalSlotsCredited(nextCredited);
+
+      const newlyApprovedList: StudentProfile[] = [];
+      const unchangedStudents: StudentProfile[] = [];
+
+      currentSet.students.forEach((s) => {
+        if (approvedIdSet.has(s.id)) {
+          const trimmedPos = s.position?.trim() || '';
+          const isLeader = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
+          const needsSlot = !isStudentSlotFree(s);
+          newlyApprovedList.push({
+            ...s,
+            approved: true,
+            status: 'approved',
+            submissionStatus: 'approved',
+            approvedAt: now,
+            usedSlot: needsSlot,
+            slotConsumed: needsSlot,
+            leaderOrder:
+              isLeader && !s.leaderOrder
+                ? calculateIntuitiveHierarchyRank(trimmedPos)
+                : s.leaderOrder,
+          });
+        } else {
+          unchangedStudents.push(s);
+        }
+      });
+
+      const updatedStudents = [...newlyApprovedList, ...unchangedStudents];
+      onUpdateSet({
+        ...currentSet,
+        profileSlotBalance: runningBalance,
+        totalSlotsCredited: nextCredited,
+        totalSlotsUsed: nextUsed,
+        students: updatedStudents,
+      });
+
+      setSelectedPendingIds((prev) => prev.filter((id) => !approvedIdSet.has(id)));
+      const summaryMsg =
+        serverRes.message ||
+        (slotsConsumedCount === 1
+          ? `1 slot used, ${runningBalance} left`
+          : `Approved ${approvedIdSet.size} of ${targetIds.length} selected (${slotsConsumedCount} slots used, ${runningBalance} left)`);
+      setHierarchyToast(`✓ ${summaryMsg}`);
+      setTimeout(() => setHierarchyToast(null), 4500);
+      showSuccess(`Approved ${approvedIdSet.size} profile${approvedIdSet.size === 1 ? '' : 's'}`, summaryMsg);
+    } finally {
+      setIsProcessingSubmissionAction(false);
+    }
+  };
+
+  // Decline submission with required reason (returns +1 slot if previously approved with a slot)
+  const handleDeclineSubmissionWithReason = async (student: StudentProfile, reason: string) => {
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      showError('Reason Required', 'Please enter a reason for declining this profile.');
+      return;
+    }
+    setIsProcessingSubmissionAction(true);
+    try {
+      const wasApprovedWithSlot =
+        getStudentEffectiveStatus(student) === 'approved' && Boolean(student.slotConsumed || student.usedSlot);
+      const serverRes = await declineAlbumSubmissionOnServer(currentSet.id, student.id, trimmedReason);
+      const nextBalance =
+        typeof serverRes.slotSummary?.balance === 'number'
+          ? serverRes.slotSummary.balance
+          : wasApprovedWithSlot
+          ? slotBalance + 1
+          : slotBalance;
+      setSlotBalance(nextBalance);
+
+      const nowIso = new Date().toISOString();
+      const reinstateUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const updatedStudent: StudentProfile = {
+        ...student,
+        approved: false,
+        status: 'declined',
+        submissionStatus: 'declined',
+        declineReason: trimmedReason,
+        declinedAt: nowIso,
+        reinstateUntil,
+        usedSlot: false,
+        slotConsumed: false,
+      };
+
+      const updatedStudents = currentSet.students.map((s) =>
+        s.id === student.id ? updatedStudent : s
+      );
+      onUpdateSet({
+        ...currentSet,
+        profileSlotBalance: nextBalance,
+        students: updatedStudents,
+      });
+      setInspectedProfileRow(updatedStudent);
+      setBottomSheetActionMode('none');
+      setBottomSheetReasonInput('');
+      showWarning(
+        'Profile Declined',
+        wasApprovedWithSlot
+          ? `Declined ${student.fullName}. 1 slot was returned to your balance (${nextBalance} left).`
+          : `Declined ${student.fullName}. Can be reinstated within 7 days.`
+      );
+    } finally {
+      setIsProcessingSubmissionAction(false);
+    }
+  };
+
+  // Request changes with note (student edits via status link)
+  const handleRequestChangesOnSubmission = async (student: StudentProfile, note: string) => {
+    const trimmedNote = note.trim();
+    if (!trimmedNote) {
+      showError('Note Required', 'Please specify what changes the student should make.');
+      return;
+    }
+    setIsProcessingSubmissionAction(true);
+    try {
+      await requestChangesAlbumSubmissionOnServer(currentSet.id, student.id, trimmedNote);
+      const updatedStudent: StudentProfile = {
+        ...student,
+        approved: false,
+        status: 'changes_requested',
+        submissionStatus: 'changes_requested',
+        changesRequestedNote: trimmedNote,
+        changesRequestedAt: new Date().toISOString(),
+      };
+      const updatedStudents = currentSet.students.map((s) =>
+        s.id === student.id ? updatedStudent : s
+      );
+      onUpdateSet({
+        ...currentSet,
+        students: updatedStudents,
+      });
+      setInspectedProfileRow(updatedStudent);
+      setBottomSheetActionMode('none');
+      setBottomSheetReasonInput('');
+      showSuccess('Changes Requested', `Sent change request note for ${student.fullName}.`);
+    } finally {
+      setIsProcessingSubmissionAction(false);
+    }
+  };
+
+  // Reinstate a declined profile within the 7-day window
+  const handleReinstateSubmission = async (student: StudentProfile) => {
+    if (student.reinstateUntil && new Date(student.reinstateUntil).getTime() < Date.now()) {
+      showError('Reinstate Window Expired', 'The 7-day reinstatement window has passed.');
+      return;
+    }
+    setIsProcessingSubmissionAction(true);
+    try {
+      await reinstateAlbumSubmissionOnServer(currentSet.id, student.id);
+      const updatedStudent: StudentProfile = {
+        ...student,
+        approved: false,
+        status: 'pending',
+        submissionStatus: 'pending',
+        declineReason: undefined,
+      };
+      const updatedStudents = currentSet.students.map((s) =>
+        s.id === student.id ? updatedStudent : s
+      );
+      onUpdateSet({
+        ...currentSet,
+        students: updatedStudents,
+      });
+      setInspectedProfileRow(updatedStudent);
+      showSuccess('Profile Reinstated', `${student.fullName} has been moved back to Pending.`);
+    } finally {
+      setIsProcessingSubmissionAction(false);
+    }
+  };
+
+  // Remove a profile (does NOT return any used slot)
+  const handleRemoveSubmissionNoSlotReturn = async (student: StudentProfile) => {
+    setIsProcessingSubmissionAction(true);
+    try {
+      await removeAlbumSubmissionOnServer(currentSet.id, student.id);
+      const updatedStudents = currentSet.students.filter((s) => s.id !== student.id);
+      onUpdateSet({
+        ...currentSet,
+        students: updatedStudents,
+      });
+      setInspectedProfileRow(null);
+      showWarning('Profile Removed', `${student.fullName} was removed. Used slots are not returned on removal.`);
+    } finally {
+      setIsProcessingSubmissionAction(false);
+    }
+  };
+
+  // Purchase Profile Slots Handler
+  const handlePurchaseSlotsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (buySlotsCount <= 0) return;
+    setIsBuyingSlots(true);
+    try {
+      const amountKobo = buySlotsCount * slotPriceNaira * 100;
+      const reference = `SLT-${Date.now()}`;
+      const res = await purchaseAlbumSlotsOnServer(currentSet.id, {
+        quantity: buySlotsCount,
+        amountKobo,
+        reference,
+        sponsorName: buySlotsSponsorName.trim() || displayedAdminName,
+      });
+      if (res.success) {
+        const balRes = await fetchAlbumSlotBalanceOnServer(currentSet.id);
+        const nextUsed =
+          balRes.success && typeof balRes.totalUsed === 'number' ? balRes.totalUsed : totalSlotsUsed;
+        const nextCredited =
+          balRes.success && typeof balRes.totalCredited === 'number'
+            ? balRes.totalCredited
+            : totalSlotsCredited + buySlotsCount;
+        const nextBal =
+          balRes.success && typeof balRes.balance === 'number'
+            ? balRes.balance
+            : typeof res.balance === 'number'
+            ? res.balance
+            : Math.max(0, nextCredited - nextUsed);
+        setSlotBalance(nextBal);
+        setTotalSlotsCredited(nextCredited);
+        setTotalSlotsUsed(nextUsed);
+        if (balRes.success && Array.isArray(balRes.purchases)) {
+          setSlotPurchasesList(balRes.purchases);
+        }
+        if (balRes.success && Array.isArray(balRes.ledger)) {
+          setSlotLedgerList(balRes.ledger);
+        }
+        onUpdateSet({
+          ...currentSet,
+          profileSlotBalance: nextBal,
+          totalSlotsCredited: nextCredited,
+          totalSlotsUsed: nextUsed,
+        });
+        setIsBuySlotsModalOpen(false);
+        setBuySlotsSponsorName('');
+        showSuccess('Slots Credited', `Added ${buySlotsCount} profile slots. Available balance: ${nextBal}.`);
+      } else {
+        showError('Purchase Failed', res.error || 'Unable to credit profile slots.');
+      }
+    } finally {
+      setIsBuyingSlots(false);
+    }
+  };
+
+  // Sponsor Display Edit Handler (Rule 6: Never changes amount, quantity, reference, slots used, or balance, and blocks KoHot credit edit)
+  const handleSaveSponsorEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSponsorItem) return;
+    if (editingSponsorItem.is_kohot_credit || editingSponsorItem.isKoHotCredit) {
+      showError('Protected Credit', 'KoHot slot credits cannot be renamed or removed.');
+      return;
+    }
+    const res = await updateAlbumSponsorOnServer(currentSet.id, {
+      id: editingSponsorItem.id,
+      sponsorName: editSponsorNameText.trim(),
     });
-
-    // Newly approved list placed right at the top
-    const updatedStudents = [...newlyApprovedList, ...unchangedStudents];
-
-    onUpdateSet({
-      ...currentSet,
-      students: updatedStudents,
-    });
-
-    setIsAddingStudent(false);
-    setEditingStudent(null);
-    setStudentDirectoryTab('all');
-    setStudentSortMode('recent');
-
-    showSuccess('Submissions approved.', `All ${count} student submissions are now visible in the album.`);
+    if (!res.success) {
+      showError('Sponsor Update Blocked', res.message || 'Unable to update sponsor display.');
+      return;
+    }
+    setSlotPurchasesList((prev) =>
+      prev.map((p) =>
+        p.id === editingSponsorItem.id
+          ? {
+              ...p,
+              sponsor_name: editSponsorNameText.trim(),
+              sponsorName: editSponsorNameText.trim(),
+              show_sponsor_on_album: editSponsorVisibleToggle ? 1 : 0,
+              showSponsorOnAlbum: editSponsorVisibleToggle,
+            }
+          : p
+      )
+    );
+    setEditingSponsorItem(null);
+    showSuccess('Sponsor Updated', 'Sponsor display updated and logged (quantities and balances remain untouched).');
   };
 
   // Move Leader Up or Down in Hierarchy
@@ -960,8 +1525,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
   // Identify Admin's own profile within the class roster or seed with registration form details
   const myProfile = useMemo(() => {
-    const adminEmail = (currentUser?.email || currentSet.classRepEmail || '').toLowerCase().trim();
-    const adminName = (currentUser?.fullName || currentSet.classRepName || '').toLowerCase().trim();
+    const adminEmail = (currentSet.classRepEmail || currentUser?.email || '').toLowerCase().trim();
+    const adminName = (currentSet.classRepName || currentUser?.fullName || '').toLowerCase().trim();
     const existing = currentSet.students.find((s) => {
       if (s.id === `admin-${currentSet.id}`) return true;
       if (s.email && adminEmail && s.email.toLowerCase().trim() === adminEmail) return true;
@@ -971,7 +1536,13 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       return false;
     });
 
-    if (existing) return existing;
+    if (existing) {
+      return {
+        ...existing,
+        fullName: currentSet.classRepName || existing.fullName,
+        email: currentSet.classRepEmail || existing.email,
+      };
+    }
 
     // Seed default admin profile using album registration form credentials
     const seeded: StudentProfile = {
@@ -1924,28 +2495,53 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     }
   };
 
-  const handleConfirmRequestDeletion = () => {
-    const trimmed = deletionReason.trim();
-    if (!trimmed) {
-      showError('Reason Required', 'Please provide a reason for requesting album deletion.');
-      return;
-    }
+  const isSoftDeleted = Boolean(currentSet.deletedAt);
+  const daysSinceDeleted = currentSet.deletedAt
+    ? Math.floor((Date.now() - new Date(currentSet.deletedAt).getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
+  const daysRemainingToRecover = Math.max(0, 30 - daysSinceDeleted);
+  const isHiddenFromClassAdmin = (isSoftDeleted || Boolean(currentSet.keptByHostOnly)) && currentUser.role !== 'master_host';
 
+  const handleConfirmSoftDelete = () => {
+    const nowIso = new Date().toISOString();
     const updated: ClassSet = {
       ...currentSet,
-      deletionRequest: {
-        requestedAt: new Date().toISOString(),
-        requestedBy: currentSet.classRepName || 'Class Admin',
-        requestedByEmail: currentSet.classRepEmail || 'admin@kohot.app',
-        reason: trimmed,
-        status: 'pending',
-      },
+      deletedAt: nowIso,
+      deletedBy: currentUser.email || currentSet.classRepEmail || 'Class Admin',
+      isPublished: false,
+      isUnpublished: true,
+      activationStatus: 'inactive',
+      deletionRequest: undefined,
     };
     onUpdateSet(updated);
-    apiClientRequestAlbumDeletion(currentSet.id, trimmed);
+    apiClientSoftDeleteAlbum(currentSet.id, currentSet.classSetName || currentSet.departmentName);
     setIsRequestDeletionModalOpen(false);
     setDeletionReason('');
-    showSuccess('Deletion Request Submitted', 'Your deletion request with reason has been forwarded to the Master Host dashboard.');
+    showSuccess(
+      'Album Deleted (30-Day Recovery)',
+      'Your class album has been removed from public view and your dashboard. You can sign in within 30 days to recover it.'
+    );
+  };
+
+  const handleRecoverAlbum = () => {
+    if (daysRemainingToRecover <= 0) {
+      showError('Recovery Expired', 'The 30-day recovery window for this class album has expired.');
+      return;
+    }
+    const updated: ClassSet = {
+      ...currentSet,
+      deletedAt: undefined,
+      deletedBy: undefined,
+      keptByHostOnly: undefined,
+      keptByHostAt: undefined,
+      isUnpublished: false,
+      activationStatus: 'active',
+      deletionRequest: undefined,
+    };
+    onUpdateSet(updated);
+    apiClientRestoreAlbum(currentSet.id);
+    setIsRequestDeletionModalOpen(false);
+    showSuccess('Album Recovered', 'Your class album and all cohort records have been restored to your dashboard.');
   };
 
   const handleSaveStory = () => {
@@ -1968,7 +2564,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       }`}
     >
       {/* Top Header */}
-      <header className={`sticky top-0 z-40 backdrop-blur-xl border-b px-4 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between gap-3 relative transition-colors ${
+      <header className={`sticky top-0 z-40 backdrop-blur-xl border-b px-3 sm:px-6 py-2 sm:py-2.5 flex items-center justify-between gap-2 relative transition-colors ${
         isLightMode 
           ? 'bg-white/95 border-zinc-300 text-black shadow-sm' 
           : 'bg-[#18181b]/90 border-zinc-800 text-white'
@@ -1979,40 +2575,171 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             <div className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-bold">
               Album Admin
             </div>
-            <div className="font-syne font-bold text-xs sm:text-sm truncate text-white">
+            <div className={`font-syne font-bold text-xs sm:text-sm truncate ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>
               {displayedAdminName}
             </div>
           </div>
         </div>
 
-        {/* Center: Centralized Sticky Manage Album & Preview Album Switcher (Permanently Centered) */}
-        <AlbumAdminSwitcher
-          activeMode="manage"
-          showMainButton={Boolean(showMainButton)}
-          onMainDashboard={onMainDashboard}
-          onManageAlbum={() => {
-            // Already on manage album dashboard, keep user here
-          }}
-          onPreviewAlbum={handlePreviewAlbum}
-        />
+        {/* Center: Centralized Sticky Manage Album & Preview Album Switcher (Hidden when album is soft-deleted) */}
+        {!isHiddenFromClassAdmin && (
+          <AlbumAdminSwitcher
+            activeMode="manage"
+            showMainButton={Boolean(showMainButton)}
+            onMainDashboard={onMainDashboard}
+            onManageAlbum={() => {
+              // Already on manage album dashboard, keep user here
+            }}
+            onPreviewAlbum={handlePreviewAlbum}
+          />
+        )}
 
-        {/* Right: Integrated Profile Menu (Theme switch removed) */}
+        {/* Right: Synced Dark/Light Mode Toggle + Integrated Profile Menu (Notifications removed) */}
         <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            id="album-admin-theme-toggle-btn"
+            type="button"
+            onClick={handleToggleDashboardTheme}
+            className="w-8 h-8 rounded-full bg-white hover:bg-zinc-100 dark:bg-zinc-800 dark:hover:bg-zinc-700 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-amber-400 flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
+            title={currentTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            aria-label={currentTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            {currentTheme === 'dark' ? (
+              <Sun className="w-4 h-4 text-amber-400" />
+            ) : (
+              <Moon className="w-4 h-4 text-zinc-700" />
+            )}
+          </button>
+
           <DashboardProfileMenu
             currentUser={currentUser}
             roleTitle="Class Album Admin"
+            showNotifications={false}
             onLogout={() => onSwitchRole('visitor')}
             currentSet={currentSet}
             onUpdateSet={onUpdateSet}
             onAdminTransferred={() => onSwitchRole('visitor')}
+            onOpenInviteNextClass={() => setIsInviteNextClassModalOpen(true)}
+            onOpenRequestDeletion={() => {
+              if (isSoftDeleted && daysRemainingToRecover > 0) {
+                handleRecoverAlbum();
+              } else {
+                setIsRequestDeletionModalOpen(true);
+              }
+            }}
             triggerCropForImage={triggerCropForImage}
           />
         </div>
       </header>
 
       {/* Main Content Area */}
-      <div className="max-w-6xl mx-auto px-6 pt-10 space-y-8">
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 pt-2.5 sm:pt-4 space-y-2.5 sm:space-y-4">
+        {/* Welcome Banner on Immediate Album Access */}
+        {currentSet.showWelcomeMessage && !isHiddenFromClassAdmin && (
+          <div
+            id="class-album-welcome-banner"
+            className="p-6 rounded-3xl bg-gradient-to-r from-[#d4af37]/20 via-emerald-500/10 to-[#0c0d14] border border-[#d4af37]/40 text-white shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fadeIn"
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-11 h-11 rounded-2xl bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center shrink-0 text-[#d4af37]">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] uppercase tracking-wider font-bold">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Registration Complete • Instant Access
+                </span>
+                <h3 className="font-syne font-bold text-lg sm:text-xl text-white">
+                  Welcome to Your Class Album, {displayedAdminName}!
+                </h3>
+                <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed max-w-2xl">
+                  Your official digital class album for <span className="text-white font-semibold">{currentSet.departmentName} (Class of {currentSet.graduationYear})</span> is now live on your dashboard. Customize your album design, invite classmates to submit their profiles, and publish when ready.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onUpdateSet({ ...currentSet, showWelcomeMessage: false })}
+              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs uppercase tracking-wider font-bold transition-colors shrink-0 cursor-pointer self-start sm:self-center"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
+        {/* Soft-Deleted Album State: Album Data Wiped & Hidden from Dashboard (Recoverable within 30 Days) */}
+        {isHiddenFromClassAdmin ? (
+          <div
+            id="soft-deleted-recovery-panel"
+            className="p-8 sm:p-12 rounded-3xl bg-[#0c0d14] border border-red-500/30 shadow-2xl text-center max-w-2xl mx-auto my-8 space-y-6 animate-fadeIn"
+          >
+            <div className="w-16 h-16 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center mx-auto text-red-400">
+              <Trash2 className="w-8 h-8" />
+            </div>
+
+            <div className="space-y-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/15 border border-red-500/30 text-red-300 font-mono-tech text-[11px] uppercase tracking-wider font-bold">
+                Album Deleted • Hidden from Dashboard &amp; Public View
+              </span>
+              <h2 className="font-syne font-bold text-2xl sm:text-3xl text-white">
+                {currentSet.departmentName} • Class of {currentSet.graduationYear}
+              </h2>
+              <p className="font-body text-xs sm:text-sm text-zinc-400 max-w-lg mx-auto leading-relaxed">
+                This class album was deleted on{' '}
+                <span className="text-zinc-200 font-semibold">
+                  {currentSet.deletedAt ? new Date(currentSet.deletedAt).toLocaleDateString() : 'recently'}
+                </span>
+                . All album data is wiped and hidden from your admin dashboard and the public legacy wall.
+              </p>
+            </div>
+
+            {daysRemainingToRecover > 0 && !currentSet.keptByHostOnly ? (
+              <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
+                <div className="flex items-center justify-center gap-2 text-amber-300 font-mono-tech text-xs font-bold uppercase tracking-wider">
+                  <AlertCircle className="w-4 h-4" />
+                  <span>{daysRemainingToRecover} Day{daysRemainingToRecover === 1 ? '' : 's'} Remaining Before Permanent Erasure</span>
+                </div>
+                <p className="font-body text-xs text-zinc-400">
+                  You can recover this class album and restore all profiles, memories, and settings before the 30-day retention window expires.
+                </p>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-1">
+                  <button
+                    id="recover-deleted-album-btn"
+                    type="button"
+                    onClick={handleRecoverAlbum}
+                    className="w-full sm:w-auto px-7 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-500/20"
+                  >
+                    Recover Class Album Now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSwitchRole('visitor')}
+                    className="w-full sm:w-auto px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-5 rounded-2xl bg-red-950/20 border border-red-500/20 space-y-3">
+                <p className="font-mono-tech text-xs text-red-300 uppercase font-bold">
+                  30-Day Recovery Window Closed
+                </p>
+                <p className="font-body text-xs text-zinc-400">
+                  This album is no longer recoverable from the Class Album Admin dashboard.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onSwitchRole('visitor')}
+                  className="px-6 py-2.5 rounded-full bg-white text-black font-syne font-bold text-xs uppercase tracking-wider cursor-pointer"
+                >
+                  Sign Out
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
         {/* Ownership Security Guard Banner */}
         {!isAuthorizedAdmin && (
           <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2034,174 +2761,125 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           </div>
         )}
         
-        {/* Set Activation Status Banner */}
-        <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-5">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2.5">
-              <span
-                title={`Registration Reference: ${currentSet.activationRef}`}
-                className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 font-semibold cursor-default"
-              >
-                <CheckCircle2 className="w-3 h-3" />
-                Verified Class Album
-              </span>
-            </div>
-            <h2 className="font-syne font-bold text-2xl sm:text-3xl text-white tracking-tight">
+        {/* Slim Album Header Card (Row 1: Title + Status line; Row 2: ALBUM DESIGN + Publish buttons) */}
+        <div
+          id="slim-album-header-card"
+          className="p-2.5 sm:p-3.5 rounded-2xl bg-[#0c0d14] border border-white/15 shadow-lg space-y-2"
+        >
+          {/* Row 1: Album title on one line (truncated) + small status line under it */}
+          <div className="min-w-0">
+            <h2 className="font-syne font-bold text-sm sm:text-lg text-white tracking-tight truncate">
               {currentSet.departmentName} • Class of {currentSet.graduationYear}
             </h2>
-            <p className="font-body text-xs sm:text-sm text-zinc-400">
-              Class Album Admin: <span className="text-white font-medium">{displayedAdminName}</span> ({currentSet.classRepEmail})
+            <p className="font-mono-tech text-[11px] text-zinc-400 flex items-center gap-1.5 mt-0.5">
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                  isAlbumPublished || currentSet.activationStatus === 'active'
+                    ? 'bg-emerald-400'
+                    : 'bg-zinc-500'
+                }`}
+              />
+              <span>
+                {isAlbumPublished || currentSet.activationStatus === 'active'
+                  ? 'Published · Live'
+                  : 'Draft'}
+              </span>
             </p>
           </div>
 
-          {/* Main Album Dashboard Actions Card */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
-            <div className="p-3 sm:p-3.5 rounded-3xl bg-[#0c0d14] border border-white/10 shadow-2xl flex flex-col gap-2 min-w-[280px] sm:min-w-[340px]">
-              {/* Row 1: Invite Next Class Button (Above) */}
-              <button
-                id="open-invite-next-class-btn"
-                onClick={() => setIsInviteNextClassModalOpen(true)}
-                className="w-full py-2.5 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black font-syne text-xs tracking-wider uppercase font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md shadow-emerald-500/10 active:scale-98"
-              >
-                <Share2 className="w-3.5 h-3.5 text-black" />
-                <span>Invite Next Class ({(currentSet.graduationYear || 2026) + 1})</span>
-              </button>
-
-              {/* Row 2: Publish Album, Share Album, and Save Album */}
-              <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
-                <button
-                  id="open-publish-modal-btn"
-                  onClick={() => setIsPublishModalOpen(true)}
-                  className={`py-2 px-2.5 rounded-2xl font-syne font-bold text-[11px] sm:text-xs tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-98 text-center ${
-                    isAlbumPublished
-                      ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-md shadow-emerald-500/20'
-                      : 'bg-white hover:bg-zinc-200 text-black shadow-md'
-                  }`}
-                  title={isAlbumPublished ? 'Album is Published (Live)' : 'Complete 3 steps or toggle public to publish'}
-                >
-                  {isAlbumPublished ? (
-                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-black" />
-                  ) : (
-                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                  )}
-                  <span className="truncate">{isAlbumPublished ? 'Published' : 'Publish Album'}</span>
-                </button>
-
-                <button
-                  id="album-admin-share-album-btn"
-                  disabled={!isAlbumPublished}
-                  onClick={handleSharePublishedAlbum}
-                  title={
-                    isAlbumPublished
-                      ? 'Share live class album link with classmates & socials'
-                      : 'Share album activates automatically once the album is published or toggled live'
-                  }
-                  className={`py-2 px-2.5 rounded-2xl font-syne font-bold text-[11px] sm:text-xs tracking-wider uppercase flex items-center justify-center gap-1 transition-all text-center ${
-                    isAlbumPublished
-                      ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20 shadow-md cursor-pointer active:scale-98'
-                      : 'bg-white/5 text-zinc-500 border border-white/5 cursor-not-allowed opacity-40'
-                  }`}
-                >
-                  <Share2 className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">{shareAlbumToast ? 'Copied Link!' : 'Share'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Public Live Status Switch */}
-            <div
-              id="public-live-switch"
-              onClick={handleToggleAlbumLive}
-              className={`px-3.5 py-2.5 rounded-2xl border transition-all flex items-center gap-2.5 cursor-pointer select-none self-start sm:self-center ${
-                currentSet.activationStatus === 'active'
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 shadow-sm'
-                  : 'bg-white/5 border-white/10 text-zinc-400 hover:text-zinc-200'
-              }`}
-              title={currentSet.activationStatus === 'active' ? 'Album is Live to Public (click to toggle draft)' : 'Album is in Draft Mode (click to toggle live)'}
+          {/* Row 2: Two buttons side by side, at least 42px high: wider gold ALBUM DESIGN + existing Publish button */}
+          <div className="flex items-center gap-2">
+            <button
+              id="open-album-design-btn"
+              type="button"
+              onClick={() => setIsAlbumDesignModalOpen(true)}
+              className="flex-[1.35] min-h-[42px] px-3 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne text-xs tracking-wider uppercase font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-[#d4af37]/15 active:scale-98"
             >
-              <span className="text-[11px] font-mono-tech uppercase tracking-wider font-semibold">
-                Public
-              </span>
-              <div className={`w-8 h-4.5 rounded-full transition-colors relative flex items-center p-0.5 ${
-                currentSet.activationStatus === 'active' ? 'bg-emerald-500' : 'bg-zinc-700'
-              }`}>
-                <div className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transition-transform duration-200 ease-out flex items-center justify-center ${
-                  currentSet.activationStatus === 'active' ? 'translate-x-3.5' : 'translate-x-0'
-                }`}>
-                  {currentSet.activationStatus === 'active' && (
-                    <span className="w-1 h-1 rounded-full bg-emerald-500" />
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5 pl-0.5">
-                <span className={`w-2 h-2 rounded-full ${
-                  currentSet.activationStatus === 'active'
-                    ? 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse'
-                    : 'bg-zinc-600'
-                }`} />
-                <span className="text-[10px] font-mono-tech uppercase tracking-wide">
-                  {currentSet.activationStatus === 'active' ? 'Live' : 'Draft'}
-                </span>
-              </div>
-            </div>
+              <Palette className="w-3.5 h-3.5 text-black shrink-0" />
+              <span className="truncate">ALBUM DESIGN</span>
+            </button>
+
+            <button
+              id="open-publish-modal-btn"
+              type="button"
+              onClick={() => setIsPublishModalOpen(true)}
+              className={`flex-1 min-h-[42px] px-3 rounded-xl font-syne font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-98 text-center ${
+                isAlbumPublished
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-md shadow-emerald-500/20'
+                  : 'bg-white hover:bg-zinc-200 text-black shadow-md'
+              }`}
+              title={
+                isAlbumPublished
+                  ? 'Album is Published (Live)'
+                  : 'Complete 3 steps or toggle public to publish'
+              }
+            >
+              {isAlbumPublished ? (
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-black" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+              )}
+              <span className="truncate">{isAlbumPublished ? 'Published' : 'Publish Album'}</span>
+            </button>
           </div>
         </div>
 
-        {/* Dashboard Section Navigation Tabs (Matching Public Album Layout) */}
-        <div className={`flex items-center gap-2 overflow-x-auto no-scrollbar border-b pb-4 ${
-          isLightMode ? 'border-zinc-200' : 'border-white/[0.08]'
-        }`}>
+        {/* Dashboard Section Navigation Tabs (40px high) */}
+        <div
+          className={`flex items-center gap-1.5 overflow-x-auto no-scrollbar border-b pb-1.5 ${
+            isLightMode ? 'border-zinc-200' : 'border-white/[0.08]'
+          }`}
+        >
           <button
             id="tab-btn-students"
             onClick={() => setActiveTab('students')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
               activeTab === 'students'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? isLightMode
+                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
+                  : 'bg-white text-black font-semibold shadow'
+                : isLightMode
+                ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
+                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
             <span>People ({approvedStudents.length})</span>
             {pendingStudents.length > 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-amber-400 text-black font-bold text-[10px] animate-pulse">
-                {pendingStudents.length} pending
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-black font-bold text-[10px]">
+                {pendingStudents.length}
               </span>
             )}
           </button>
 
           <button
-            id="tab-btn-imagery"
-            onClick={() => setActiveTab('imagery')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
-              activeTab === 'imagery'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-            }`}
-          >
-            <Palette className="w-3.5 h-3.5" />
-            <span>Album Design &amp; Privacy</span>
-          </button>
-
-          <button
             id="tab-btn-memories"
             onClick={() => setActiveTab('memories')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
               activeTab === 'memories'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? isLightMode
+                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
+                  : 'bg-white text-black font-semibold shadow'
+                : isLightMode
+                ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
+                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
             }`}
           >
             <Camera className="w-3.5 h-3.5" />
-            <span>Moments &amp; Highlights</span>
+            <span>Moments</span>
           </button>
 
           <button
             id="tab-btn-awards"
             onClick={() => setActiveTab('awards')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
               activeTab === 'awards'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? isLightMode
+                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
+                  : 'bg-white text-black font-semibold shadow'
+                : isLightMode
+                ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
+                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
             }`}
           >
             <Trophy className="w-3.5 h-3.5" />
@@ -2211,10 +2889,14 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           <button
             id="tab-btn-voices"
             onClick={() => setActiveTab('voices')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
               activeTab === 'voices'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? isLightMode
+                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
+                  : 'bg-white text-black font-semibold shadow'
+                : isLightMode
+                ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
+                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
             }`}
           >
             <Quote className="w-3.5 h-3.5" />
@@ -2224,10 +2906,14 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           <button
             id="tab-btn-story"
             onClick={() => setActiveTab('story')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
               activeTab === 'story'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? isLightMode
+                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
+                  : 'bg-white text-black font-semibold shadow'
+                : isLightMode
+                ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
+                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
@@ -2236,295 +2922,376 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         </div>
 
         {/* =========================================================================
-            TAB 1: STUDENTS MANAGEMENT (WITH LEADERS HIERARCHY ARRANGE TOOL)
+            TAB 1: PEOPLE MANAGEMENT (SLIM STICKY SLOTS BAR + COMPACT 44PX PROFILE ROWS)
             ========================================================================= */}
         {activeTab === 'students' && (
-          <div className="space-y-6">
-            {/* Unified Compact Administrative Toolbar */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-[#0c0d14] border border-white/10 space-y-3.5 shadow-md">
-              {/* Row 1: Section Title & Classmate Actions */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-2">
+            {/* STICKY SLOTS BAR (Replaces large Profile Slots Ledger) */}
+            {(() => {
+              const activeProfiles = currentSet.students.filter(
+                (s) =>
+                  getStudentEffectiveStatus(s) !== 'removed' &&
+                  getStudentEffectiveStatus(s) !== 'declined'
+              );
+              const totalProfilesCount = activeProfiles.length;
+              const alreadyFundedCount = activeProfiles.filter(
+                (s) =>
+                  getStudentEffectiveStatus(s) === 'approved' || isStudentSlotFree(s)
+              ).length;
+              const unfundedPendingCount = Math.max(0, totalProfilesCount - alreadyFundedCount);
+              const fundedToPublishCount =
+                alreadyFundedCount + Math.min(unfundedPendingCount, slotBalance);
+
+              return (
+                <div
+                  id="people-slots-card"
+                  className="sticky top-[49px] z-20 px-3 py-2 rounded-2xl bg-[#0c0d14]/95 backdrop-blur-md border border-white/10 shadow-md space-y-1"
+                >
+                  {/* Row 1: Left: bold available number with "slots left" and "₦{price} per slot" under it; Right: gold "Buy slots" button */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="font-syne font-extrabold text-lg sm:text-xl text-white leading-none">
+                          {slotBalance}
+                        </span>
+                        <span className="font-syne font-bold text-xs sm:text-sm text-white">
+                          slots left
+                        </span>
+                      </div>
+                      <p className="font-mono-tech text-[10px] text-zinc-400 leading-tight mt-0.5">
+                        ₦{slotPriceNaira.toLocaleString()} per slot
+                      </p>
+                    </div>
+
+                    <button
+                      id="buy-profile-slots-btn"
+                      type="button"
+                      onClick={() => setIsBuySlotsModalOpen(true)}
+                      className="px-3.5 py-1.5 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer shadow shrink-0"
+                    >
+                      Buy slots
+                    </button>
+                  </div>
+
+                  {/* Row 2: "N of M funded to publish" and "Details ›" */}
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/[0.06] font-mono-tech text-[11px]">
+                    <span className="text-zinc-300">
+                      {fundedToPublishCount} of {totalProfilesCount} funded to publish
+                    </span>
+                    <button
+                      id="open-slot-details-sheet-btn"
+                      type="button"
+                      onClick={() => setIsSlotDetailsSheetOpen(true)}
+                      className="text-[#d4af37] hover:underline font-semibold flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <span>Details ›</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ACTIONS ROW: Two equal buttons, 42px high: gold INVITE + outlined ADD CLASSMATE */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                id="invite-classmates-btn"
+                type="button"
+                onClick={() => setIsInviteBottomSheetOpen(true)}
+                className="h-[42px] px-3 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne text-xs tracking-wider uppercase font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow"
+              >
+                <UserPlus className="w-4 h-4 shrink-0" />
+                <span className="truncate">INVITE</span>
+              </button>
+
+              <button
+                id="add-student-btn"
+                type="button"
+                onClick={() => setIsAddingStudent(true)}
+                className="h-[42px] px-3 rounded-xl bg-transparent hover:bg-white/10 text-white border border-white/25 font-syne text-xs tracking-wider uppercase font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Plus className="w-4 h-4 shrink-0" />
+                <span className="truncate">ADD CLASSMATE</span>
+              </button>
+            </div>
+
+            {/* ONE-TIME DISMISSIBLE TIP */}
+            {!isPreviewTipDismissed && (
+              <div
+                id="one-time-row-preview-tip"
+                className="px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/10 flex items-center justify-between gap-2 text-[11px] font-body text-zinc-300"
+              >
+                <span>Tap any row to preview the profile as it appears on the public album.</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPreviewTipDismissed(true);
+                    try {
+                      localStorage.setItem('kohot_dismiss_row_preview_tip', '1');
+                    } catch {}
+                  }}
+                  className="p-0.5 rounded-md hover:bg-white/10 text-zinc-400 hover:text-white shrink-0 cursor-pointer"
+                  aria-label="Dismiss tip"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Hierarchy / Slot Update Feedback Toast */}
+            {hierarchyToast && (
+              <div className="px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-mono-tech flex items-center justify-between animate-fadeIn">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>{hierarchyToast}</span>
+                </div>
+                <span className="text-[10px] text-emerald-400/80 uppercase">Live Sync</span>
+              </div>
+            )}
+
+            {/* HORIZONTALLY SCROLLABLE FILTER CHIP ROW + SEARCH ICON AT END */}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                <button
+                  id="admin-subtab-pending"
+                  type="button"
+                  onClick={() => setStudentDirectoryTab('pending')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                    studentDirectoryTab === 'pending'
+                      ? 'bg-amber-400 text-black font-bold shadow'
+                      : pendingStudents.length > 0
+                      ? 'text-amber-300 bg-amber-400/15 border border-amber-400/35 font-semibold'
+                      : 'text-zinc-300 hover:text-white bg-[#0c0d14] hover:bg-white/10 border border-white/10'
+                  }`}
+                >
+                  <span>Pending ({pendingStudents.length})</span>
+                </button>
+
+                <button
+                  id="admin-subtab-all"
+                  type="button"
+                  onClick={() => setStudentDirectoryTab('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                    studentDirectoryTab === 'all'
+                      ? 'bg-white text-black font-bold shadow'
+                      : 'text-zinc-300 hover:text-white bg-[#0c0d14] hover:bg-white/10 border border-white/10'
+                  }`}
+                >
+                  <span>All ({approvedStudents.length})</span>
+                </button>
+
+                <button
+                  id="admin-subtab-leaders"
+                  type="button"
+                  onClick={() => setStudentDirectoryTab('leaders')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                    studentDirectoryTab === 'leaders'
+                      ? 'bg-gradient-to-r from-amber-400 to-amber-500 text-black font-bold shadow'
+                      : 'text-amber-300 hover:text-amber-200 bg-amber-400/[0.06] hover:bg-amber-400/15 border border-amber-400/20'
+                  }`}
+                >
+                  <span>Leaders ({adminLeaders.length})</span>
+                </button>
+
+                {changesRequestedStudents.length > 0 && (
+                  <button
+                    id="admin-subtab-changes-requested"
+                    type="button"
+                    onClick={() => setStudentDirectoryTab('changes_requested')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                      studentDirectoryTab === 'changes_requested'
+                        ? 'bg-sky-400 text-black font-bold shadow'
+                        : 'text-zinc-300 hover:text-white bg-[#0c0d14] hover:bg-white/10 border border-white/10'
+                    }`}
+                  >
+                    <span>Changes requested ({changesRequestedStudents.length})</span>
+                  </button>
+                )}
+
+                {declinedStudents.length > 0 && (
+                  <button
+                    id="admin-subtab-declined"
+                    type="button"
+                    onClick={() => setStudentDirectoryTab('declined')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                      studentDirectoryTab === 'declined'
+                        ? 'bg-red-500 text-white font-bold shadow'
+                        : 'text-zinc-300 hover:text-white bg-[#0c0d14] hover:bg-white/10 border border-white/10'
+                    }`}
+                  >
+                    <span>Declined ({declinedStudents.length})</span>
+                  </button>
+                )}
+
+                {/* Search icon at the end */}
+                <button
+                  id="toggle-people-search-btn"
+                  type="button"
+                  onClick={() => setIsSearchExpanded((prev) => !prev)}
+                  className={`ml-auto p-1.5 rounded-xl border transition-colors cursor-pointer shrink-0 ${
+                    isSearchExpanded || adminStudentSearch
+                      ? 'bg-[#d4af37] text-black border-[#d4af37]'
+                      : 'bg-[#0c0d14] text-zinc-300 hover:text-white border-white/10'
+                  }`}
+                  title="Search & Sort"
+                  aria-label="Search profiles"
+                >
+                  <Search className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Expandable Search Field + Small Sort Menu (Recent first, A-Z) */}
+              {isSearchExpanded && (
+                <div className="flex items-center gap-2 pt-1 animate-fadeIn">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={adminStudentSearch}
+                      onChange={(e) => setAdminStudentSearch(e.target.value)}
+                      placeholder="Search profiles..."
+                      className="w-full bg-[#0c0d14] border border-white/15 rounded-xl pl-8 pr-7 py-1.5 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-white/30 font-body"
+                    />
+                    {adminStudentSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setAdminStudentSearch('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center p-0.5 rounded-xl bg-[#0c0d14] border border-white/15 text-[11px] font-mono-tech shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setStudentSortMode('recent')}
+                      className={`px-2 py-1 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                        studentSortMode === 'recent'
+                          ? 'bg-white text-black font-bold shadow'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Recent first
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStudentSortMode('alpha')}
+                      className={`px-2 py-1 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                        studentSortMode === 'alpha'
+                          ? 'bg-white text-black font-bold shadow'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      A-Z
+                    </button>
+                  </div>
+
+                  {studentDirectoryTab === 'leaders' && (
+                    <button
+                      id="reset-intuitive-hierarchy-btn"
+                      type="button"
+                      onClick={handleResetToIntuitiveHierarchy}
+                      className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-[11px] font-mono-tech text-zinc-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                    >
+                      <RefreshCw className="w-3 h-3 text-amber-400" />
+                      <span>Auto-Rank</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* FIRST-TIME STATE: When album has fewer than 5 profiles and nothing is awaiting approval */}
+            {currentSet.students.length < 5 && pendingStudents.length === 0 && (
+              <div
+                id="first-time-share-invite-card"
+                className="p-4 rounded-2xl bg-[#0c0d14] border border-[#d4af37]/35 space-y-3 shadow-md"
+              >
                 <div>
-                  <h3 className="font-syne font-bold text-lg text-white tracking-tight">
-                    Student Profiles
-                  </h3>
-                  <p className="font-body text-xs text-zinc-400">
-                    Manage class member profiles, portraits, quotes, and directory entries for the album.
+                  <h4 className="font-syne font-bold text-sm text-white">
+                    Share your invite link
+                  </h4>
+                  <p className="font-body text-xs text-zinc-400 mt-0.5">
+                    Share this link with your class. Everyone fills in their own profile, and you approve them.
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                  <button
-                    id="invite-classmates-btn"
-                    onClick={() => setIsInviteClassmatesModalOpen(true)}
-                    className="bg-[#d4af37]/15 hover:bg-[#d4af37]/25 text-[#d4af37] border border-[#d4af37]/35 font-tech text-xs tracking-wider uppercase font-bold py-2 px-3.5 sm:px-4 rounded-full flex items-center gap-1.5 transition-colors cursor-pointer shadow"
-                    title="Share invitation link with classmates via WhatsApp, Telegram, or SMS"
-                  >
-                    <Share2 className="w-3.5 h-3.5" />
-                    <span>Invite Classmates</span>
-                  </button>
-
-                  {/* Add My Profile / My Profile button */}
-                  {myProfile ? (
-                    <button
-                      id="view-my-profile-btn"
-                      onClick={() => setEditingStudent(myProfile)}
-                      className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-tech text-xs tracking-wider uppercase font-bold py-2 px-3.5 sm:px-4 rounded-full flex items-center gap-1.5 transition-colors cursor-pointer shadow"
-                      title="View or edit your own class representative profile"
-                    >
-                      <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>My Profile</span>
-                    </button>
-                  ) : (
-                    <button
-                      id="add-my-profile-btn"
-                      onClick={handleOpenAddMyProfile}
-                      className="bg-amber-400 hover:bg-amber-300 text-black font-tech text-xs tracking-wider uppercase font-bold py-2 px-3.5 sm:px-4 rounded-full flex items-center gap-1.5 transition-colors cursor-pointer shadow-md"
-                      title="Add your own profile as class representative to this album"
-                    >
-                      <UserPlus className="w-3.5 h-3.5" />
-                      <span>Add My Profile</span>
-                    </button>
-                  )}
-
-                  <button
-                    id="add-student-btn"
-                    onClick={() => setIsAddingStudent(true)}
-                    className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2 px-3.5 sm:px-4 rounded-full flex items-center gap-1.5 transition-colors cursor-pointer shadow"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Classmate</span>
-                  </button>
+                <div className="p-2.5 rounded-xl bg-[#08090e] border border-white/10 font-mono-tech text-xs text-zinc-300 truncate select-all">
+                  {getSubmitUrl(currentSet)}
                 </div>
-              </div>
 
-              {/* Isolated "My Profile" Featured Card (Becomes isolated but part of the profiles) */}
-              {myProfile && (
-                <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-[#0c0d14] to-transparent border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 animate-fadeIn">
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    {myProfile.photoUrl ? (
-                      <img
-                        src={myProfile.photoUrl}
-                        alt={myProfile.fullName}
-                        className="w-12 h-12 rounded-xl object-cover border-2 border-emerald-400/50 shadow-md shrink-0"
-                      />
+                <div className="grid grid-cols-3 gap-2 font-mono-tech text-xs">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await copyUrlToClipboard(getSubmitUrl(currentSet));
+                      setCopiedInviteSheetLink(true);
+                      setTimeout(() => setCopiedInviteSheetLink(false), 2000);
+                    }}
+                    className="py-2 px-2.5 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    {copiedInviteSheetLink ? (
+                      <Check className="w-3.5 h-3.5" />
                     ) : (
-                      <div className="w-12 h-12 rounded-xl bg-emerald-500/20 border-2 border-emerald-400/40 flex items-center justify-center text-emerald-300 font-syne font-bold text-lg shrink-0">
-                        {myProfile.fullName ? myProfile.fullName.charAt(0).toUpperCase() : 'A'}
-                      </div>
+                      <Copy className="w-3.5 h-3.5" />
                     )}
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-syne font-bold text-sm text-white truncate">
-                          {myProfile.fullName}
-                        </h4>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-mono-tech uppercase font-bold">
-                          My Profile • Admin
-                        </span>
-                      </div>
-                      <p className="font-mono-tech text-xs text-amber-300 truncate">
-                        {myProfile.position || 'Class Representative'}
-                      </p>
-                      {myProfile.quote && (
-                        <p className="font-body text-xs text-zinc-400 italic line-clamp-1 mt-0.5">
-                          "{myProfile.quote}"
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                    <button
-                      type="button"
-                      onClick={() => setEditingStudent(myProfile)}
-                      className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Edit3 className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Edit My Profile</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Hierarchy Update Feedback Toast */}
-              {hierarchyToast && (
-                <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-mono-tech flex items-center justify-between animate-fadeIn">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span>{hierarchyToast}</span>
-                  </div>
-                  <span className="text-[10px] text-emerald-400/80 uppercase">Album Live Sync</span>
-                </div>
-              )}
-
-              {/* Pending Submissions Alert Banner */}
-              {pendingStudents.length > 0 && (
-                <div className="p-3 rounded-xl bg-amber-400/10 border border-amber-400/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-fadeIn">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-amber-400/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0">
-                      <AlertCircle className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h4 className="font-syne font-bold text-xs text-amber-300">
-                        {pendingStudents.length} Submission{pendingStudents.length > 1 ? 's' : ''} Awaiting Review &amp; Approval
-                      </h4>
-                      <p className="font-body text-[11px] text-zinc-300">
-                        Submitted via broadcast link. Classmates will only appear on the live album after approval.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      id="switch-to-pending-btn"
-                      onClick={() => setStudentDirectoryTab('pending')}
-                      className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-tech text-xs uppercase font-bold transition-colors cursor-pointer"
-                    >
-                      Review ({pendingStudents.length})
-                    </button>
-                    <button
-                      id="approve-all-pending-banner-btn"
-                      onClick={handleApproveAllPending}
-                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer"
-                    >
-                      Approve All
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Row 2: Sub-tabs, Sort & Search in one compact horizontal bar */}
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 pt-2 border-t border-white/[0.06]">
-                {/* Segmented Sub-tabs */}
-                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-                  <button
-                    id="admin-subtab-all"
-                    onClick={() => setStudentDirectoryTab('all')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
-                      studentDirectoryTab === 'all'
-                        ? 'bg-white text-black font-bold shadow'
-                        : 'text-zinc-400 hover:text-white hover:bg-white/5 border border-white/5'
-                    }`}
-                  >
-                    <Users className="w-3.5 h-3.5" />
-                    <span>All Profiles ({approvedStudents.length})</span>
+                    <span>{copiedInviteSheetLink ? 'Copied' : 'Copy'}</span>
                   </button>
 
-                  <button
-                    id="admin-subtab-leaders"
-                    onClick={() => setStudentDirectoryTab('leaders')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
-                      studentDirectoryTab === 'leaders'
-                        ? 'bg-gradient-to-r from-amber-400 to-amber-500 text-black font-bold shadow ring-1 ring-amber-400'
-                        : 'text-amber-400/80 hover:text-amber-300 hover:bg-amber-400/10 border border-white/5'
-                    }`}
+                  <a
+                    href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
+                      `Submit your official graduating profile for ${currentSet.departmentName} (Class of ${currentSet.graduationYear}):\n${getSubmitUrl(currentSet)}`
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="py-2 px-2.5 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 border border-[#25D366]/40 text-emerald-300 font-syne font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <Crown className="w-3.5 h-3.5" />
-                    <span>Leaders Hierarchy ({adminLeaders.length})</span>
-                  </button>
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    <span>WhatsApp</span>
+                  </a>
 
                   <button
-                    id="admin-subtab-pending"
-                    onClick={() => setStudentDirectoryTab('pending')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
-                      studentDirectoryTab === 'pending'
-                        ? 'bg-amber-400 text-black font-bold shadow ring-1 ring-amber-400'
-                        : pendingStudents.length > 0
-                          ? 'text-amber-300 bg-amber-400/10 border border-amber-400/25 font-semibold'
-                          : 'text-zinc-400 hover:text-white hover:bg-white/5 border border-white/5'
-                    }`}
+                    type="button"
+                    onClick={() => setShowInviteSheetQr((prev) => !prev)}
+                    className="py-2 px-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-syne font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>Pending Approvals</span>
-                    {pendingStudents.length > 0 && (
-                      <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-black font-mono-tech font-bold text-[10px]">
-                        {pendingStudents.length}
-                      </span>
-                    )}
+                    <QrCode className="w-3.5 h-3.5 text-[#d4af37]" />
+                    <span>QR</span>
                   </button>
                 </div>
 
-                {/* Filters, Sorters & Quick Actions */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  {studentDirectoryTab === 'leaders' ? (
-                    <button
-                      id="reset-intuitive-hierarchy-btn"
-                      onClick={handleResetToIntuitiveHierarchy}
-                      className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-xs font-mono-tech text-zinc-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer"
-                      title="Auto-sort leaders by standard academic executive offices (President, Class Rep, etc.)"
-                    >
-                      <RefreshCw className="w-3 h-3 text-amber-400" />
-                      <span>Auto-Rank Intuitively</span>
-                    </button>
-                  ) : studentDirectoryTab === 'all' ? (
-                    <>
-                      {/* Sort Mode Toggle (Recent vs Alphabetical) */}
-                      <div className="flex items-center p-0.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono-tech">
-                        <button
-                          type="button"
-                          onClick={() => setStudentSortMode('recent')}
-                          className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
-                            studentSortMode === 'recent'
-                              ? 'bg-white text-black font-bold shadow'
-                              : 'text-zinc-400 hover:text-white'
-                          }`}
-                          title="Sort recently uploaded or approved profiles to the top"
-                        >
-                          Recent First
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setStudentSortMode('alpha')}
-                          className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
-                            studentSortMode === 'alpha'
-                              ? 'bg-white text-black font-bold shadow'
-                              : 'text-zinc-400 hover:text-white'
-                          }`}
-                          title="Sort alphabetically A-Z"
-                        >
-                          A–Z
-                        </button>
-                      </div>
-
-                      {/* Filter Search Input */}
-                      <div className="relative min-w-[180px] sm:min-w-[210px]">
-                        <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="text"
-                          value={adminStudentSearch}
-                          onChange={(e) => setAdminStudentSearch(e.target.value)}
-                          placeholder="Filter by name or role..."
-                          className="w-full bg-[#10121a] border border-white/10 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-white/30 font-body"
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    pendingStudents.length > 0 && (
-                      <button
-                        onClick={handleApproveAllPending}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-xs font-mono-tech text-emerald-300 flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        <Check className="w-3 h-3 text-emerald-400" />
-                        <span>Approve All ({pendingStudents.length})</span>
-                      </button>
-                    )
-                  )}
-                </div>
+                {showInviteSheetQr && (
+                  <div className="pt-2 flex flex-col items-center gap-1.5 border-t border-white/10">
+                    <div className="p-2.5 bg-white rounded-xl">
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(
+                          getSubmitUrl(currentSet)
+                        )}`}
+                        alt="Invite Link QR Code"
+                        className="w-32 h-32 object-contain"
+                      />
+                    </div>
+                    <span className="font-mono-tech text-[10px] text-zinc-400">
+                      Scan to submit classmate profile
+                    </span>
+                  </div>
+                )}
               </div>
-            </div>
+            )}
 
             {/* Add Classmate Pop-up Window Modal */}
             <UniversalModal
               isOpen={isAddingStudent}
               onClose={() => setIsAddingStudent(false)}
               title="Add Classmate Profile"
-              subtitle="Submit classmate details, leadership position, parting quote, and photo"
+              subtitle="Only add people who asked you to."
               maxWidth="3xl"
             >
               <form onSubmit={handleSaveStudent} className="space-y-5 text-xs font-body p-1">
-                <div className="flex items-center gap-2 text-white font-mono-tech uppercase text-[11px] tracking-wider pb-3 border-b border-white/10">
-                  <User className="w-4 h-4 text-[#d4af37]" />
-                  <span>Classmate Profile &amp; Portrait Setup</span>
+                <div className="p-3 rounded-xl bg-amber-400/10 border border-amber-400/25 flex items-center gap-2 text-amber-200 font-mono-tech text-xs">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Only add people who asked you to.</span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -2566,9 +3333,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       placeholder="e.g. Department President or Class Rep"
                       className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
                     />
-                    <p className="text-[10px] text-zinc-500 font-mono-tech mt-1">
-                      Official titles automatically qualify for the Leaders hierarchy.
-                    </p>
                   </div>
                 </div>
 
@@ -2612,7 +3376,13 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       className="py-2.5 px-5 rounded-full bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs tracking-wider uppercase transition-colors flex items-center gap-2 cursor-pointer"
                     >
                       <Upload className="w-3.5 h-3.5" />
-                      <span>{isCompressing ? 'Processing Photo...' : newStudentPhotoUrl ? 'Change Portrait' : 'Upload Student Photo'}</span>
+                      <span>
+                        {isCompressing
+                          ? 'Processing Photo...'
+                          : newStudentPhotoUrl
+                          ? 'Change Portrait'
+                          : 'Upload Student Photo'}
+                      </span>
                     </button>
                   </div>
 
@@ -2622,7 +3392,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                         <img
                           src={newStudentPhotoUrl}
                           alt="Preview"
-                          className="w-14 h-14 aspect-square rounded-lg object-cover border border-white/20 filter grayscale-[20%]"
+                          className="w-11 h-11 rounded-lg object-cover border border-white/20"
                         />
                         <span className="text-xs text-zinc-400 font-mono-tech">Photo preview ready</span>
                       </div>
@@ -2666,114 +3436,222 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </form>
             </UniversalModal>
 
-            {/* VIEW 1: LEADERS HIERARCHY ARRANGE MODE */}
-            {studentDirectoryTab === 'leaders' && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-2xl bg-amber-400/[0.04] border border-amber-400/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <Crown className="w-5 h-5 text-amber-400 shrink-0" />
-                    <div>
-                      <h4 className="text-sm font-syne font-bold text-amber-300">
-                        Leaders Hierarchy Sequencing
-                      </h4>
-                      <p className="text-xs text-zinc-400 font-body">
-                        Use the arrow controls to move leaders up or down. Your sequence dictates how they appear on the public album.
-                      </p>
+            {/* =====================================================================
+                VIEW 1: ALL VIEW (COMPACT 44PX ROWS, ADMIN FIRST ROW "You · Admin")
+               ===================================================================== */}
+            {studentDirectoryTab === 'all' && (
+              <div className="space-y-2">
+                <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
+                  {/* First Row: Admin's own profile tagged "You · Admin" with Edit link */}
+                  {myProfile && (
+                    <div
+                      id="admin-top-my-profile-row"
+                      onClick={() => {
+                        setInspectedProfileRow(myProfile);
+                        setBottomSheetActionMode('none');
+                      }}
+                      className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {myProfile.photoUrl ? (
+                          <img
+                            src={myProfile.photoUrl}
+                            alt={myProfile.fullName}
+                            className="w-11 h-11 rounded-lg object-cover border border-[#d4af37]/40 shrink-0 bg-black"
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-lg bg-[#d4af37]/15 border border-[#d4af37]/40 flex items-center justify-center text-[#d4af37] font-syne font-bold text-sm shrink-0">
+                            {myProfile.fullName ? myProfile.fullName.charAt(0).toUpperCase() : 'A'}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-syne font-bold text-sm text-white truncate">
+                              {myProfile.fullName}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] font-bold shrink-0">
+                              You · Admin
+                            </span>
+                          </div>
+                          <p className="font-mono-tech text-xs text-[#d4af37] truncate mt-0.5">
+                            {myProfile.position || 'Class Representative'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <span className="text-[11px] font-mono-tech text-emerald-400">
+                          Approved
+                        </span>
+                        <button
+                          id="edit-top-my-profile-btn"
+                          type="button"
+                          onClick={() => setEditingStudent(myProfile)}
+                          className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-xs font-mono-tech text-amber-400 font-semibold px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/30 shrink-0">
-                    {adminLeaders.length} Leaders Active
-                  </span>
+                  )}
+
+                  {/* Approved Classmate Compact Rows (20 at a time) */}
+                  {adminAllStudents
+                    .filter((s) => s.id !== myProfile?.id)
+                    .slice(0, visiblePeopleCount)
+                    .map((student) => {
+                      const isLeader = isLeaderProfile(student);
+                      const roleLabel = student.position?.trim() || 'Member';
+                      return (
+                        <div
+                          key={student.id}
+                          onClick={() => {
+                            setInspectedProfileRow(student);
+                            setBottomSheetActionMode('none');
+                          }}
+                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <img
+                              src={student.photoUrl}
+                              alt={student.fullName}
+                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-syne font-bold text-sm text-white truncate">
+                                {student.fullName}
+                              </p>
+                              <p
+                                className={`font-mono-tech text-xs truncate mt-0.5 ${
+                                  isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
+                                }`}
+                              >
+                                {roleLabel}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div
+                            className="flex items-center gap-3 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-[11px] font-mono-tech text-emerald-400">
+                              Approved
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setEditingStudent(student)}
+                              className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                 </div>
 
+                {adminAllStudents.filter((s) => s.id !== myProfile?.id).length > visiblePeopleCount && (
+                  <div className="pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setVisiblePeopleCount((prev) => prev + 20)}
+                      className="px-5 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white cursor-pointer"
+                    >
+                      Show more ({adminAllStudents.filter((s) => s.id !== myProfile?.id).length - visiblePeopleCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* =====================================================================
+                VIEW 2: LEADERS VIEW (COMPACT 44PX ROWS, LEADERS ONLY + REORDER)
+               ===================================================================== */}
+            {studentDirectoryTab === 'leaders' && (
+              <div className="space-y-2">
                 {adminLeaders.length === 0 ? (
-                  <div className="p-12 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-2">
-                    <Crown className="w-8 h-8 text-amber-400/40 mx-auto" />
-                    <p className="text-sm font-syne text-white">No leadership titles registered yet</p>
+                  <div className="p-10 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                    <Crown className="w-7 h-7 text-amber-400/40 mx-auto" />
+                    <p className="text-sm font-syne text-white">No leadership profiles yet</p>
                     <p className="text-xs text-zinc-400">
-                      When students submit their profile with an executive role and you approve them, they will automatically appear here.
+                      Approved profiles with leadership roles appear here.
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {adminLeaders.map((leader, index) => {
+                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
+                    {adminLeaders.slice(0, visiblePeopleCount).map((leader, index) => {
                       const isFirst = index === 0;
                       const isLast = index === adminLeaders.length - 1;
-
+                      const isAdminRow = myProfile && leader.id === myProfile.id;
                       return (
                         <div
                           key={leader.id}
                           id={`admin-leader-row-${leader.id}`}
-                          className="p-3 sm:p-4 rounded-2xl bg-[#0c0d14] border border-white/10 hover:border-amber-400/30 transition-all flex items-center justify-between gap-3"
+                          onClick={() => {
+                            setInspectedProfileRow(leader);
+                            setBottomSheetActionMode('none');
+                          }}
+                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
                         >
-                          {/* Rank Badge & Profile Info */}
-                          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-                            <span className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 text-black font-mono-tech font-bold text-xs flex items-center justify-center shrink-0 shadow">
-                              #{index + 1}
-                            </span>
-
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
                             <img
                               src={leader.photoUrl}
                               alt={leader.fullName}
-                              className="w-12 h-12 rounded-xl object-cover border border-white/15 shrink-0"
+                              className="w-11 h-11 rounded-lg object-cover border border-[#d4af37]/30 shrink-0 bg-black"
                             />
-
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-syne font-bold text-sm text-white truncate">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <p className="font-syne font-bold text-sm text-white truncate">
                                   {leader.fullName}
-                                </h4>
-                                {leader.nickname && (
-                                  <span className="font-mono-tech text-xs text-zinc-400 hidden sm:inline">
-                                    "{leader.nickname}"
+                                </p>
+                                {isAdminRow && (
+                                  <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] font-bold shrink-0">
+                                    You · Admin
                                   </span>
                                 )}
                               </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-400/10 border border-amber-400/30 font-mono-tech text-[10px] uppercase text-amber-300 font-semibold truncate">
-                                  <Crown className="w-2.5 h-2.5 text-amber-400 shrink-0" />
-                                  {leader.position}
-                                </span>
-                              </div>
+                              <p className="font-mono-tech text-xs text-[#d4af37] truncate mt-0.5">
+                                {leader.position || 'Leader'}
+                              </p>
                             </div>
                           </div>
 
-                          {/* Reordering & Action Buttons */}
-                          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                          <div
+                            className="flex items-center gap-2.5 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center gap-1">
+                              <button
+                                id={`move-up-${leader.id}`}
+                                type="button"
+                                disabled={isFirst}
+                                onClick={() => handleMoveLeader(leader.id, 'up')}
+                                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-20 text-zinc-300 hover:text-white cursor-pointer"
+                                title="Move up"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                id={`move-down-${leader.id}`}
+                                type="button"
+                                disabled={isLast}
+                                onClick={() => handleMoveLeader(leader.id, 'down')}
+                                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-20 text-zinc-300 hover:text-white cursor-pointer"
+                                title="Move down"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <span className="text-[11px] font-mono-tech text-emerald-400">
+                              Approved
+                            </span>
                             <button
-                              id={`move-up-${leader.id}`}
-                              disabled={isFirst}
-                              onClick={() => handleMoveLeader(leader.id, 'up')}
-                              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 disabled:opacity-20 text-white transition-colors cursor-pointer"
-                              title="Move up in hierarchy"
-                            >
-                              <ArrowUp className="w-4 h-4" />
-                            </button>
-
-                            <button
-                              id={`move-down-${leader.id}`}
-                              disabled={isLast}
-                              onClick={() => handleMoveLeader(leader.id, 'down')}
-                              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 disabled:opacity-20 text-white transition-colors cursor-pointer"
-                              title="Move down in hierarchy"
-                            >
-                              <ArrowDown className="w-4 h-4" />
-                            </button>
-
-                            <button
+                              type="button"
                               onClick={() => setEditingStudent(leader)}
-                              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer ml-0.5"
-                              title="Edit leader profile"
+                              className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer"
                             >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
-
-                            <button
-                              onClick={() => handleDeleteStudent(leader.id)}
-                              className="p-2 rounded-xl hover:bg-red-500/20 text-zinc-500 hover:text-red-400 transition-colors cursor-pointer ml-0.5"
-                              title="Delete leader"
-                            >
-                              <Trash2 className="w-4 h-4" />
+                              Edit
                             </button>
                           </div>
                         </div>
@@ -2781,296 +3659,978 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     })}
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* VIEW 2: ALL APPROVED CLASSMATES DIRECTORY (ARRANGED ALPHABETICALLY) */}
-            {studentDirectoryTab === 'all' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between text-xs font-mono-tech text-zinc-400 px-1">
-                  <span>Showing {adminAllStudents.length} approved classmates (Alphabetical)</span>
-                  {pendingStudents.length > 0 && (
+                {adminLeaders.length > visiblePeopleCount && (
+                  <div className="pt-2 text-center">
                     <button
-                      onClick={() => setStudentDirectoryTab('pending')}
-                      className="text-amber-400 hover:text-amber-300 underline underline-offset-4 cursor-pointer"
+                      type="button"
+                      onClick={() => setVisiblePeopleCount((prev) => prev + 20)}
+                      className="px-5 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white cursor-pointer"
                     >
-                      {pendingStudents.length} pending submissions awaiting review &rarr;
+                      Show more ({adminLeaders.length - visiblePeopleCount} remaining)
                     </button>
-                  )}
-                </div>
-
-                {adminAllStudents.length === 0 ? (
-                  <div className="p-12 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-2">
-                    <Users className="w-8 h-8 text-zinc-600 mx-auto" />
-                    <p className="text-sm font-syne text-white">No approved profiles found</p>
-                    <p className="text-xs text-zinc-400">
-                      Add profiles manually or share the broadcast link with classmates to populate this roster.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {adminAllStudents.map((student) => (
-                      <div
-                        key={student.id}
-                        className="rounded-2xl bg-[#0c0d14] border border-white/10 overflow-hidden p-3.5 flex flex-col justify-between group hover:border-white/25 transition-all"
-                      >
-                        <div className="relative aspect-square rounded-xl overflow-hidden mb-3 bg-black">
-                          <img
-                            src={student.photoUrl}
-                            alt={student.fullName}
-                            className="w-full h-full object-cover filter contrast-[1.05] grayscale-[20%] group-hover:scale-105 transition-transform duration-500"
-                          />
-                          {student.position && (
-                            <span className={`absolute bottom-2 left-2 px-2 py-0.5 rounded-full text-[10px] font-mono-tech uppercase tracking-wider backdrop-blur-md ${
-                              isLeaderProfile(student)
-                                ? 'bg-amber-400/20 border border-amber-400/40 text-amber-300'
-                                : 'bg-black/80 text-white/90'
-                            }`}>
-                              {student.position}
-                            </span>
-                          )}
-                        </div>
-
-                        <div>
-                          <h4 className="font-syne font-bold text-sm text-white truncate">
-                            {student.fullName}
-                          </h4>
-                          {student.nickname && (
-                            <p className="font-mono-tech text-xs text-zinc-400 truncate">
-                              "{student.nickname}"
-                            </p>
-                          )}
-                          {student.quote && (
-                            <p className="font-body text-xs text-zinc-400 italic line-clamp-2 mt-2 leading-relaxed">
-                              "{student.quote}"
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="pt-3 border-t border-white/[0.06] mt-3 flex items-center justify-between">
-                          <span className="text-[10px] font-mono-tech text-emerald-400/90 font-medium">
-                            Approved
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => setEditingStudent(student)}
-                              className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white text-xs font-mono-tech transition-colors cursor-pointer flex items-center gap-1 border border-white/10"
-                              title="Edit profile"
-                            >
-                              <Edit3 className="w-3 h-3 text-[#d4af37]" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              onClick={() => handleDeleteStudent(student.id)}
-                              className="text-zinc-500 hover:text-red-400 text-xs font-mono-tech p-1 transition-colors cursor-pointer"
-                              title="Delete profile"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
                   </div>
                 )}
               </div>
             )}
 
-            {/* VIEW 3: PENDING APPROVALS QUEUE */}
+            {/* =====================================================================
+                VIEW 3: PENDING VIEW (CHECKBOX, SLOT TAGS, BATCH BAR, COMPACT 44PX ROWS)
+               ===================================================================== */}
             {studentDirectoryTab === 'pending' && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-2xl bg-amber-400/[0.04] border border-amber-400/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <Clock className="w-5 h-5 text-amber-400 shrink-0" />
-                    <div>
-                      <h4 className="text-sm font-syne font-bold text-amber-300">
-                        Pending Student Profile Approvals
-                      </h4>
-                      <p className="text-xs text-zinc-400 font-body">
-                        Review submissions sent by students via frictionless broadcast links before they go live on the album.
-                      </p>
+              <div className="space-y-1.5">
+                {/* Compact Pending Header: "N awaiting approval" and "Select all" */}
+                {pendingStudents.length > 0 && (
+                  <div className="px-3 py-1.5 rounded-xl bg-amber-400/[0.06] border border-amber-400/25 flex items-center justify-between gap-2">
+                    <span className="font-mono-tech text-xs text-white font-semibold">
+                      {pendingStudents.length} awaiting approval
+                    </span>
+
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1.5 font-mono-tech text-xs text-zinc-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={
+                            pendingStudents.length > 0 &&
+                            selectedPendingIds.length === pendingStudents.length
+                          }
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedPendingIds(pendingStudents.map((s) => s.id));
+                            } else {
+                              setSelectedPendingIds([]);
+                            }
+                          }}
+                          className="w-3.5 h-3.5 rounded border-zinc-600 text-[#d4af37] focus:ring-[#d4af37] cursor-pointer"
+                        />
+                        <span>Select all</span>
+                      </label>
+
+                      {selectedPendingIds.length > 0 && (
+                        <button
+                          id="approve-selected-pending-btn"
+                          type="button"
+                          disabled={isProcessingSubmissionAction}
+                          onClick={handleApproveSelectedPending}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-syne font-bold text-[11px] uppercase tracking-wider transition-colors cursor-pointer shrink-0"
+                        >
+                          Approve ({selectedPendingIds.length})
+                        </button>
+                      )}
                     </div>
                   </div>
-
-                  {pendingStudents.length > 0 && (
-                    <button
-                      id="approve-all-pending-btn"
-                      onClick={handleApproveAllPending}
-                      className="px-4 py-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-tech text-xs tracking-wider uppercase font-bold transition-colors cursor-pointer flex items-center gap-1.5 shadow shrink-0"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Approve All ({pendingStudents.length})</span>
-                    </button>
-                  )}
-                </div>
+                )}
 
                 {pendingStudents.length === 0 ? (
-                  <div className="p-12 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-3">
-                    <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto">
-                      <CheckCircle2 className="w-6 h-6" />
+                  currentSet.students.length < 5 ? null : (
+                    <div className="p-6 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                      <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto" />
+                      <p className="text-sm font-syne font-bold text-white">No Pending Submissions</p>
+                      <p className="text-xs text-zinc-400">
+                        Share the invitation link to receive classmate profile submissions.
+                      </p>
                     </div>
-                    <h4 className="text-base font-syne font-bold text-white">No Pending Submissions</h4>
-                    <p className="text-xs text-zinc-400 max-w-md mx-auto">
-                      All student submissions have been reviewed and published to the live album. Share the broadcast link above to invite more classmates!
-                    </p>
-                  </div>
+                  )
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {pendingStudents.map((student) => {
-                      const trimmedPos = student.position?.trim() || '';
-                      const isLeader = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
+                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
+                    {pendingStudents.slice(0, visiblePeopleCount).map((student) => {
+                      const isLeader = isLeaderProfile(student);
+                      const isPaid = isStudentSlotFree(student);
+                      const claimsCovered = Boolean(student.claimsToBeCovered);
+                      const isChecked = selectedPendingIds.includes(student.id);
+                      const canApprove = isPaid || slotBalance > 0;
 
                       return (
                         <div
                           key={student.id}
-                          id={`pending-student-card-${student.id}`}
-                          className="rounded-2xl bg-[#0c0d14] border border-amber-400/30 overflow-hidden p-4 flex flex-col justify-between space-y-4 hover:border-amber-400/50 transition-all shadow-lg"
+                          id={`pending-student-row-${student.id}`}
+                          onClick={() => {
+                            setInspectedProfileRow(student);
+                            setBottomSheetActionMode('none');
+                          }}
+                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
                         >
-                          <div className="flex items-start gap-3">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div onClick={(e) => e.stopPropagation()} className="flex items-center">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedPendingIds((prev) => [...prev, student.id]);
+                                  } else {
+                                    setSelectedPendingIds((prev) =>
+                                      prev.filter((id) => id !== student.id)
+                                    );
+                                  }
+                                }}
+                                className="w-4 h-4 rounded border-zinc-600 text-[#d4af37] focus:ring-[#d4af37] cursor-pointer"
+                              />
+                            </div>
+
                             <img
                               src={student.photoUrl}
                               alt={student.fullName}
-                              className="w-20 h-24 rounded-xl object-cover border border-white/15 shrink-0 bg-black"
+                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
                             />
 
-                            <div className="min-w-0 flex-1 space-y-1">
-                              <span className="inline-block px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[10px] font-mono-tech uppercase font-bold">
-                                Pending Review
-                              </span>
-                              <h4 className="font-syne font-bold text-sm text-white truncate">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-syne font-bold text-sm text-white truncate">
                                 {student.fullName}
-                              </h4>
-                              {student.nickname && (
-                                <p className="font-mono-tech text-xs text-zinc-400 truncate">
-                                  "{student.nickname}"
-                                </p>
-                              )}
-                              {student.position && (
-                                <div className="pt-0.5">
-                                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono-tech uppercase ${
-                                    isLeader
-                                      ? 'bg-amber-400/20 text-amber-300 font-semibold border border-amber-400/30'
-                                      : 'bg-white/10 text-zinc-300'
-                                  }`}>
-                                    {isLeader && <Crown className="w-2.5 h-2.5 text-amber-400 shrink-0" />}
-                                    {student.position}
+                              </p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                <span
+                                  className={`font-mono-tech text-xs truncate ${
+                                    isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
+                                  }`}
+                                >
+                                  {student.position || 'Member'}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md font-mono-tech text-[10px] font-semibold ${
+                                    isPaid
+                                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                  }`}
+                                >
+                                  {isPaid ? 'Paid · uses no slot' : 'Not paid · uses 1 slot'}
+                                </span>
+                                {claimsCovered && (
+                                  <span className="px-2 py-0.5 rounded-md bg-sky-500/15 text-sky-300 border border-sky-500/30 font-mono-tech text-[10px] font-semibold">
+                                    Claims to be covered
                                   </span>
-                                </div>
-                              )}
+                                )}
+                              </div>
                             </div>
                           </div>
 
-                          {student.quote && (
-                            <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
-                              <p className="font-body text-xs text-zinc-300 italic line-clamp-3">
-                                "{student.quote}"
-                              </p>
-                            </div>
-                          )}
-
-                          {isLeader && (
-                            <p className="text-[10px] font-mono-tech text-amber-400/90 flex items-center gap-1">
-                              <Crown className="w-3 h-3 shrink-0" />
-                              <span>Recognized executive role — will be added to Leaders Hierarchy on approval.</span>
-                            </p>
-                          )}
-
-                          {/* Action Buttons */}
-                          <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-mono-tech text-zinc-500">
-                              {student.submittedAt ? `Submitted: ${student.submittedAt}` : 'Recent submission'}
-                            </span>
-
-                            <div className="flex items-center gap-2">
-                              <button
-                                id={`edit-pending-btn-${student.id}`}
-                                onClick={() => setEditingStudent(student)}
-                                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 text-xs font-mono-tech transition-colors cursor-pointer flex items-center gap-1"
-                                title="Edit details before approving"
-                              >
-                                <Edit3 className="w-3 h-3 text-[#d4af37]" />
-                                <span>Edit</span>
-                              </button>
-
-                              <button
-                                id={`reject-btn-${student.id}`}
-                                onClick={() => handleRejectStudent(student.id)}
-                                className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs font-mono-tech transition-colors cursor-pointer flex items-center gap-1"
-                                title="Decline and remove"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                <span>Decline</span>
-                              </button>
-
+                          <div
+                            className="flex items-center gap-2.5 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {canApprove ? (
                               <button
                                 id={`approve-btn-${student.id}`}
+                                type="button"
+                                disabled={isProcessingSubmissionAction}
                                 onClick={() => handleApproveStudent(student.id)}
-                                className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-tech text-xs uppercase font-bold transition-colors cursor-pointer flex items-center gap-1 shadow"
-                                title="Approve and publish to live album"
+                                className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-syne font-bold text-xs uppercase tracking-wider cursor-pointer"
                               >
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>Approve</span>
+                                Approve
                               </button>
-                            </div>
+                            ) : (
+                              <button
+                                id={`buy-slots-to-approve-btn-${student.id}`}
+                                type="button"
+                                onClick={() => setIsBuySlotsModalOpen(true)}
+                                className="px-3 py-1.5 rounded-lg bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne font-bold text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap"
+                              >
+                                Buy slots to approve
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
                     })}
                   </div>
                 )}
+
+                {pendingStudents.length > visiblePeopleCount && (
+                  <div className="pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setVisiblePeopleCount((prev) => prev + 20)}
+                      className="px-5 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white cursor-pointer"
+                    >
+                      Show more ({pendingStudents.length - visiblePeopleCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* =====================================================================
+                VIEW 4: CHANGES REQUESTED VIEW (COMPACT 44PX ROWS)
+               ===================================================================== */}
+            {studentDirectoryTab === 'changes_requested' && (
+              <div className="space-y-2">
+                {changesRequestedStudents.length === 0 ? (
+                  <div className="p-10 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                    <p className="text-sm font-syne text-white">No profiles awaiting changes</p>
+                    <p className="text-xs text-zinc-400">
+                      When you request changes on a submission, it appears under this filter chip.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
+                    {changesRequestedStudents.slice(0, visiblePeopleCount).map((student) => {
+                      const isLeader = isLeaderProfile(student);
+                      return (
+                        <div
+                          key={student.id}
+                          onClick={() => {
+                            setInspectedProfileRow(student);
+                            setBottomSheetActionMode('none');
+                          }}
+                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <img
+                              src={student.photoUrl}
+                              alt={student.fullName}
+                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-syne font-bold text-sm text-white truncate">
+                                {student.fullName}
+                              </p>
+                              <p
+                                className={`font-mono-tech text-xs truncate mt-0.5 ${
+                                  isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
+                                }`}
+                              >
+                                {student.position || 'Member'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div
+                            className="flex items-center gap-3 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-[11px] font-mono-tech text-sky-400">
+                              Changes Requested
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setEditingStudent(student)}
+                              className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {changesRequestedStudents.length > visiblePeopleCount && (
+                  <div className="pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setVisiblePeopleCount((prev) => prev + 20)}
+                      className="px-5 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white cursor-pointer"
+                    >
+                      Show more ({changesRequestedStudents.length - visiblePeopleCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* =====================================================================
+                VIEW 5: DECLINED VIEW (COMPACT 44PX ROWS)
+               ===================================================================== */}
+            {studentDirectoryTab === 'declined' && (
+              <div className="space-y-2">
+                {declinedStudents.length === 0 ? (
+                  <div className="p-10 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                    <p className="text-sm font-syne text-white">No declined profiles</p>
+                    <p className="text-xs text-zinc-400">
+                      Declined submissions appear here and can be reinstated within 7 days.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
+                    {declinedStudents.slice(0, visiblePeopleCount).map((student) => {
+                      const isLeader = isLeaderProfile(student);
+                      return (
+                        <div
+                          key={student.id}
+                          onClick={() => {
+                            setInspectedProfileRow(student);
+                            setBottomSheetActionMode('none');
+                          }}
+                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <img
+                              src={student.photoUrl}
+                              alt={student.fullName}
+                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-syne font-bold text-sm text-white truncate">
+                                {student.fullName}
+                              </p>
+                              <p
+                                className={`font-mono-tech text-xs truncate mt-0.5 ${
+                                  isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
+                                }`}
+                              >
+                                {student.position || 'Member'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div
+                            className="flex items-center gap-3 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-[11px] font-mono-tech text-red-400">
+                              Declined
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleReinstateSubmission(student)}
+                              className="text-xs font-mono-tech text-emerald-400 hover:underline font-semibold cursor-pointer"
+                            >
+                              Reinstate
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {declinedStudents.length > visiblePeopleCount && (
+                  <div className="pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setVisiblePeopleCount((prev) => prev + 20)}
+                      className="px-5 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white cursor-pointer"
+                    >
+                      Show more ({declinedStudents.length - visiblePeopleCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* =====================================================================
+                BOTTOM SHEET: PUBLIC ALBUM PROFILE PREVIEW + ADMIN ACTIONS
+               ===================================================================== */}
+            {inspectedProfileRow && (
+              <div
+                id="profile-row-bottom-sheet-backdrop"
+                role="dialog"
+                aria-modal="true"
+                onClick={() => {
+                  setInspectedProfileRow(null);
+                  setBottomSheetActionMode('none');
+                  setBottomSheetReasonInput('');
+                }}
+                className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-end justify-center p-0 sm:p-4 animate-fadeIn"
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full max-w-xl max-h-[88vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-[#121318] border border-white/15 shadow-2xl p-5 sm:p-6 pb-20 sm:pb-6 text-white space-y-5"
+                >
+                  {/* Sheet Handle & Close */}
+                  <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
+                        Public Album Card Preview
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-white/10 text-[10px] font-mono-tech uppercase text-[#d4af37]">
+                        {getStudentEffectiveStatus(inspectedProfileRow).replace('_', ' ')}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInspectedProfileRow(null);
+                        setBottomSheetActionMode('none');
+                        setBottomSheetReasonInput('');
+                      }}
+                      className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-zinc-300 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Exact Public Album Profile Representation */}
+                  <div className="rounded-2xl bg-[#08090e] border border-white/10 p-4 sm:p-5 flex flex-col sm:flex-row gap-4 items-center sm:items-start">
+                    <img
+                      src={inspectedProfileRow.photoUrl}
+                      alt={inspectedProfileRow.fullName}
+                      className="w-28 h-28 sm:w-32 sm:h-32 rounded-2xl object-cover border border-white/15 shrink-0 bg-black"
+                    />
+                    <div className="flex-1 text-center sm:text-left space-y-1.5 min-w-0">
+                      <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                        <h4 className="font-syne font-bold text-lg text-white">
+                          {inspectedProfileRow.fullName}
+                        </h4>
+                        {inspectedProfileRow.nickname && (
+                          <span className="font-mono-tech text-xs text-zinc-400">
+                            "{inspectedProfileRow.nickname}"
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        className={`font-mono-tech text-xs uppercase font-bold ${
+                          isLeaderProfile(inspectedProfileRow) ? 'text-[#d4af37]' : 'text-zinc-400'
+                        }`}
+                      >
+                        {inspectedProfileRow.position || 'Member'}
+                      </p>
+                      {inspectedProfileRow.quote && (
+                        <p className="font-body text-xs text-zinc-300 italic leading-relaxed pt-1">
+                          "{inspectedProfileRow.quote}"
+                        </p>
+                      )}
+                      {inspectedProfileRow.declineReason && (
+                        <p className="font-mono-tech text-[11px] text-red-400 pt-1">
+                          Decline reason: {inspectedProfileRow.declineReason}
+                        </p>
+                      )}
+                      {inspectedProfileRow.changesRequestedNote && (
+                        <p className="font-mono-tech text-[11px] text-sky-400 pt-1">
+                          Requested changes: {inspectedProfileRow.changesRequestedNote}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Inline Reason / Note Prompt for Decline or Request Changes */}
+                  {bottomSheetActionMode !== 'none' && (
+                    <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/15 space-y-3">
+                      <label className="block font-mono-tech text-xs text-white font-semibold">
+                        {bottomSheetActionMode === 'decline'
+                          ? 'Reason for declining this profile (required):'
+                          : 'Note explaining requested changes (required):'}
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={bottomSheetReasonInput}
+                        onChange={(e) => setBottomSheetReasonInput(e.target.value)}
+                        placeholder={
+                          bottomSheetActionMode === 'decline'
+                            ? 'e.g. Portrait is blurry or duplicate entry'
+                            : 'e.g. Please upload a clearer portrait and use your full legal name'
+                        }
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-xs text-white focus:outline-none focus:border-[#d4af37]"
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBottomSheetActionMode('none');
+                            setBottomSheetReasonInput('');
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl bg-white/5 text-xs font-mono-tech text-zinc-400 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isProcessingSubmissionAction}
+                          onClick={() => {
+                            if (bottomSheetActionMode === 'decline') {
+                              handleDeclineSubmissionWithReason(
+                                inspectedProfileRow,
+                                bottomSheetReasonInput
+                              );
+                            } else {
+                              handleRequestChangesOnSubmission(
+                                inspectedProfileRow,
+                                bottomSheetReasonInput
+                              );
+                            }
+                          }}
+                          className="px-4 py-1.5 rounded-xl bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer"
+                        >
+                          {bottomSheetActionMode === 'decline'
+                            ? 'Confirm Decline'
+                            : 'Send Change Request'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Bottom Sheet Action Buttons: Edit, Request changes, Decline (with reason), Reinstate (within window), Remove */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = inspectedProfileRow;
+                          setInspectedProfileRow(null);
+                          setEditingStudent(target);
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5 text-[#d4af37]" />
+                        <span>Edit</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBottomSheetActionMode('request_changes');
+                          setBottomSheetReasonInput(inspectedProfileRow.changesRequestedNote || '');
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 font-mono-tech text-xs cursor-pointer"
+                      >
+                        Request changes
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBottomSheetActionMode('decline');
+                          setBottomSheetReasonInput(inspectedProfileRow.declineReason || '');
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-mono-tech text-xs cursor-pointer"
+                      >
+                        Decline
+                      </button>
+
+                      {getStudentEffectiveStatus(inspectedProfileRow) === 'declined' && (
+                        <button
+                          type="button"
+                          onClick={() => handleReinstateSubmission(inspectedProfileRow)}
+                          className="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-mono-tech text-xs cursor-pointer"
+                        >
+                          Reinstate
+                        </button>
+                      )}
+                    </div>
+
+                    {(!myProfile || inspectedProfileRow.id !== myProfile.id) && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSubmissionNoSlotReturn(inspectedProfileRow)}
+                        className="px-3.5 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 font-mono-tech text-xs cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* BUY PROFILE SLOTS MODAL */}
+            <UniversalModal
+              isOpen={isBuySlotsModalOpen}
+              onClose={() => setIsBuySlotsModalOpen(false)}
+              title="Buy Profile Slots"
+              subtitle="Credit profile slots to approve unpaid classmate profiles"
+              maxWidth="md"
+            >
+              <form onSubmit={handlePurchaseSlotsSubmit} className="space-y-4 p-1 text-xs font-body">
+                <div>
+                  <label className="block font-mono-tech text-[11px] uppercase text-zinc-400 mb-1.5">
+                    Number of Profile Slots *
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    required
+                    value={buySlotsCount}
+                    onChange={(e) => setBuySlotsCount(Math.max(1, Number(e.target.value)))}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-mono-tech text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block font-mono-tech text-[11px] uppercase text-zinc-400 mb-1.5">
+                    Sponsor Display Name (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={buySlotsSponsorName}
+                    onChange={(e) => setBuySlotsSponsorName(e.target.value)}
+                    placeholder="e.g. Class of '26 Exco or Alumni Sponsor"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-body text-xs"
+                  />
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={buySlotsShowSponsor}
+                    onChange={(e) => setBuySlotsShowSponsor(e.target.checked)}
+                    className="w-4 h-4 rounded border-zinc-600 text-[#d4af37]"
+                  />
+                  <span className="text-zinc-300 font-mono-tech text-xs">
+                    Display sponsor credit on album
+                  </span>
+                </label>
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => setIsBuySlotsModalOpen(false)}
+                    className="px-4 py-2 rounded-full bg-white/5 text-zinc-400 font-mono-tech text-xs cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isBuyingSlots}
+                    className="px-5 py-2 rounded-full bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer"
+                  >
+                    {isBuyingSlots ? 'Crediting...' : `Credit ${buySlotsCount} Slots`}
+                  </button>
+                </div>
+              </form>
+            </UniversalModal>
+
+            {/* EDIT SPONSOR DISPLAY MODAL (Rule 6: Never changes amount, quantity, reference, slots used, or balance) */}
+            <UniversalModal
+              isOpen={Boolean(editingSponsorItem)}
+              onClose={() => setEditingSponsorItem(null)}
+              title="Edit Sponsor Display"
+              subtitle="Only display name and visibility can be edited. Amount, quantity, reference, and balances are immutable."
+              maxWidth="md"
+            >
+              {editingSponsorItem && (
+                <form onSubmit={handleSaveSponsorEdit} className="space-y-4 p-1 text-xs font-body">
+                  <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10 font-mono-tech text-[11px] text-zinc-400 space-y-1">
+                    <div>
+                      Reference:{' '}
+                      <span className="text-white">
+                        {editingSponsorItem.payment_reference || editingSponsorItem.paymentReference}
+                      </span>{' '}
+                      (Locked)
+                    </div>
+                    <div>
+                      Quantity:{' '}
+                      <span className="text-[#d4af37] font-bold">
+                        {editingSponsorItem.slots_purchased ?? editingSponsorItem.slotsPurchased} slots
+                      </span>{' '}
+                      (Locked)
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-mono-tech text-[11px] uppercase text-zinc-400 mb-1.5">
+                      Sponsor Display Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={editSponsorNameText}
+                      onChange={(e) => setEditSponsorNameText(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editSponsorVisibleToggle}
+                      onChange={(e) => setEditSponsorVisibleToggle(e.target.checked)}
+                      className="w-4 h-4 rounded border-zinc-600 text-[#d4af37]"
+                    />
+                    <span className="text-zinc-300 font-mono-tech text-xs">
+                      Show sponsor credit on album
+                    </span>
+                  </label>
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => setEditingSponsorItem(null)}
+                      className="px-4 py-2 rounded-full bg-white/5 text-zinc-400 font-mono-tech text-xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2 rounded-full bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer"
+                    >
+                      Save Sponsor Display
+                    </button>
+                  </div>
+                </form>
+              )}
+            </UniversalModal>
+
+            {/* SLOTS DETAILS BOTTOM SHEET (Opened by "Details ›" in the sticky Slots Bar) */}
+            {isSlotDetailsSheetOpen && (
+              <div
+                id="slot-details-bottom-sheet-backdrop"
+                role="dialog"
+                aria-modal="true"
+                onClick={() => setIsSlotDetailsSheetOpen(false)}
+                className="fixed inset-0 z-[9992] bg-black/80 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fadeIn"
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-3xl bg-[#10121a] border-t sm:border border-white/15 p-5 sm:p-6 text-white space-y-4 shadow-2xl max-h-[88vh] overflow-y-auto"
+                >
+                  <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                    <h4 className="font-syne font-bold text-base text-white">
+                      Profile Slots Details
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setIsSlotDetailsSheetOpen(false)}
+                      className="p-1.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Acquired / Used / Available stats */}
+                  <div className="grid grid-cols-3 gap-2 text-center font-mono-tech">
+                    <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+                      <span className="block text-[10px] uppercase text-zinc-400">Acquired</span>
+                      <span className="font-syne font-extrabold text-lg text-white">
+                        {totalSlotsCredited}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+                      <span className="block text-[10px] uppercase text-zinc-400">Used</span>
+                      <span className="font-syne font-extrabold text-lg text-amber-300">
+                        {totalSlotsUsed}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+                      <span className="block text-[10px] uppercase text-zinc-400">Available</span>
+                      <span className="font-syne font-extrabold text-lg text-emerald-400">
+                        {slotBalance}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Explanatory sentence */}
+                  <p className="font-body text-xs text-zinc-300 leading-relaxed">
+                    Paid student profiles use 0 slots. Unpaid profiles use 1 slot when you approve them.
+                  </p>
+
+                  {/* Purchases and sponsors list with sponsor editing */}
+                  <div className="space-y-2">
+                    <span className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400">
+                      Purchases &amp; Sponsors
+                    </span>
+                    {slotPurchasesList.length === 0 ? (
+                      <p className="font-body text-xs text-zinc-500">
+                        No slot purchases or sponsor credits recorded yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {slotPurchasesList.map((sp: any) => {
+                          const isKoHot =
+                            Boolean(sp.is_kohot_credit) ||
+                            Boolean(sp.isKoHotCredit) ||
+                            String(sp.sponsor_name || sp.sponsorName || '').toLowerCase() === 'kohot';
+                          const name = sp.sponsor_name || sp.sponsorName || 'Class Sponsor';
+                          const qty = sp.slots_purchased ?? sp.slotsPurchased ?? 0;
+                          const visible =
+                            sp.show_sponsor_on_album !== undefined
+                              ? Boolean(sp.show_sponsor_on_album)
+                              : sp.showSponsorOnAlbum !== false;
+                          return (
+                            <div
+                              key={sp.id}
+                              className="p-2.5 rounded-xl bg-white/[0.04] border border-white/10 flex items-center justify-between gap-2 text-xs font-mono-tech"
+                            >
+                              <div className="min-w-0">
+                                <span className="text-[#d4af37] font-bold">{name}</span>{' '}
+                                <span className="text-zinc-400">({qty} slots)</span>
+                                {!visible && (
+                                  <span className="text-[10px] text-zinc-500 uppercase ml-1.5">
+                                    [Hidden]
+                                  </span>
+                                )}
+                              </div>
+                              {isKoHot ? (
+                                <span className="text-[10px] text-emerald-400 uppercase font-bold">
+                                  KoHot Credit
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingSponsorItem(sp);
+                                    setEditSponsorNameText(name);
+                                    setEditSponsorVisibleToggle(visible);
+                                  }}
+                                  className="text-zinc-300 hover:text-white underline cursor-pointer shrink-0"
+                                >
+                                  Edit sponsor
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* View full history toggle */}
+                  <div className="space-y-2 pt-1 border-t border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => setShowFullSlotHistory((prev) => !prev)}
+                      className="text-xs font-mono-tech text-[#d4af37] hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>{showFullSlotHistory ? 'Hide full history' : 'View full history'}</span>
+                    </button>
+
+                    {showFullSlotHistory && (
+                      <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                        {slotLedgerList.length === 0 ? (
+                          <p className="font-mono-tech text-[11px] text-zinc-500">
+                            No ledger entries recorded yet.
+                          </p>
+                        ) : (
+                          slotLedgerList.map((entry: any) => (
+                            <div
+                              key={entry.id}
+                              className="p-2 rounded-lg bg-[#08090e] border border-white/10 flex items-center justify-between gap-2 text-[11px] font-mono-tech"
+                            >
+                              <div className="min-w-0">
+                                <span className="text-white uppercase">{entry.entry_type}</span>
+                                {entry.sponsor_name && (
+                                  <span className="text-zinc-400 ml-1.5">· {entry.sponsor_name}</span>
+                                )}
+                                {entry.note && (
+                                  <p className="text-[10px] text-zinc-500 truncate">{entry.note}</p>
+                                )}
+                              </div>
+                              <span
+                                className={`font-bold shrink-0 ${
+                                  Number(entry.quantity) >= 0 ? 'text-emerald-400' : 'text-amber-300'
+                                }`}
+                              >
+                                {Number(entry.quantity) > 0 ? `+${entry.quantity}` : entry.quantity}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Buy slots button */}
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSlotDetailsSheetOpen(false);
+                        setIsBuySlotsModalOpen(true);
+                      }}
+                      className="w-full py-2.5 px-4 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne font-bold text-xs uppercase tracking-wider cursor-pointer"
+                    >
+                      Buy slots
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* INVITE CLASSMATES BOTTOM SHEET (Opened by gold INVITE button) */}
+            {isInviteBottomSheetOpen && (
+              <div
+                id="invite-classmates-bottom-sheet-backdrop"
+                role="dialog"
+                aria-modal="true"
+                onClick={() => setIsInviteBottomSheetOpen(false)}
+                className="fixed inset-0 z-[9992] bg-black/80 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fadeIn"
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-[#10121a] border-t sm:border border-white/15 p-5 sm:p-6 text-white space-y-4 shadow-2xl"
+                >
+                  <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                    <h4 className="font-syne font-bold text-base text-white">
+                      Invite classmates
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setIsInviteBottomSheetOpen(false)}
+                      className="p-1.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <p className="font-body text-xs text-zinc-300 leading-relaxed">
+                    Share this link with your class. Everyone fills in their own profile, and you approve them.
+                  </p>
+
+                  <div className="p-3 rounded-xl bg-[#08090e] border border-white/10 font-mono-tech text-xs text-zinc-200 truncate select-all">
+                    {getSubmitUrl(currentSet)}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 font-mono-tech text-xs">
+                    <button
+                      id="invite-sheet-copy-link-btn"
+                      type="button"
+                      onClick={async () => {
+                        await copyUrlToClipboard(getSubmitUrl(currentSet));
+                        setCopiedInviteSheetLink(true);
+                        setTimeout(() => setCopiedInviteSheetLink(false), 2000);
+                      }}
+                      className="py-2.5 px-3 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedInviteSheetLink ? (
+                        <Check className="w-3.5 h-3.5" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      <span>{copiedInviteSheetLink ? 'Copied' : 'Copy link'}</span>
+                    </button>
+
+                    <a
+                      id="invite-sheet-whatsapp-btn"
+                      href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
+                        `Submit your official graduating profile for ${currentSet.departmentName} (Class of ${currentSet.graduationYear}):\n${getSubmitUrl(currentSet)}`
+                      )}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 border border-[#25D366]/40 text-emerald-300 font-syne font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      <span>WhatsApp</span>
+                    </a>
+
+                    <button
+                      id="invite-sheet-qr-btn"
+                      type="button"
+                      onClick={() => setShowInviteSheetQr((prev) => !prev)}
+                      className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-syne font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <QrCode className="w-3.5 h-3.5 text-[#d4af37]" />
+                      <span>QR code</span>
+                    </button>
+                  </div>
+
+                  {showInviteSheetQr && (
+                    <div className="pt-2 flex flex-col items-center gap-2 border-t border-white/10">
+                      <div className="p-3 bg-white rounded-2xl">
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
+                            getSubmitUrl(currentSet)
+                          )}`}
+                          alt="Invite Classmates QR Code"
+                          className="w-36 h-36 object-contain"
+                        />
+                      </div>
+                      <span className="font-mono-tech text-[10px] text-zinc-400">
+                        Scan to open classmate invite form
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
         )}
 
         {/* =========================================================================
-            TAB: ALBUM DESIGN & PRIVACY (SPLIT INTO DESIGNS AND PRIVACY SUB-SECTIONS)
+            ALBUM DESIGN MODAL (OPENED FROM FRONT DASHBOARD CARD ABOVE PUBLISH)
             ========================================================================= */}
-        {activeTab === 'imagery' && (
-          <div className="space-y-8 animate-fadeIn">
-            {/* Top Sub-Section Navigation: Designs vs Privacy */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-4">
-              <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-black/60 border border-white/10 w-fit">
-                <button
-                  type="button"
-                  id="subtab-designs-btn"
-                  onClick={() => setDesignPrivacySubTab('designs')}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                    designPrivacySubTab === 'designs'
-                      ? 'bg-white text-black font-bold shadow-md'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  <Palette className="w-3.5 h-3.5" />
-                  <span>Designs</span>
-                </button>
-                <button
-                  type="button"
-                  id="subtab-privacy-btn"
-                  onClick={() => setDesignPrivacySubTab('privacy')}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                    designPrivacySubTab === 'privacy'
-                      ? 'bg-white text-black font-bold shadow-md'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  <Shield className="w-3.5 h-3.5" />
-                  <span>Privacy (Plaque QR Access)</span>
-                </button>
-              </div>
-
-              {designPrivacySubTab === 'designs' && (
-                <button
-                  id="save-album-imagery-btn"
-                  onClick={handleSaveImagery}
-                  className="px-6 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-all cursor-pointer shadow-lg flex items-center gap-2 shrink-0 self-start sm:self-auto"
-                >
-                  <Check className="w-4 h-4 text-black" />
-                  <span>Save Designs</span>
-                </button>
-              )}
-            </div>
-
+        <UniversalModal
+          isOpen={isAlbumDesignModalOpen}
+          onClose={() => setIsAlbumDesignModalOpen(false)}
+          title="Album Design & Social Handles"
+          subtitle="Customize your album hero banner, final footer portrait, and official department social handles"
+          maxWidth="4xl"
+        >
+          <div className="space-y-6 p-1">
             {imagerySaveToast && (
               <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-mono-tech text-xs flex items-center gap-2 animate-fadeIn">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -3078,15 +4638,12 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </div>
             )}
 
-            {/* SUB-SECTION 1: DESIGNS */}
-            {designPrivacySubTab === 'designs' && (
-              <div className="space-y-8 animate-fadeIn">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  {/* SECTION 1: ALBUM HERO BANNER IMAGE */}
-                  <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-5 shadow-lg">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* SECTION 1: ALBUM HERO BANNER IMAGE */}
+              <div className="p-5 sm:p-6 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-4 shadow-lg">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-syne font-bold text-lg text-white">Album Hero Banner</h4>
+                    <h4 className="font-syne font-bold text-base text-white">Album Hero Banner</h4>
                     <p className="text-xs text-zinc-400 font-mono-tech">
                       Top cover image of the album &amp; social share thumbnail
                     </p>
@@ -3104,8 +4661,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     className="w-full h-full object-cover filter contrast-[1.05]"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
-
-                  {/* Album Preview Overlay */}
                   <div className="absolute bottom-4 left-4 right-4">
                     <span className="font-mono-tech text-[10px] uppercase text-amber-400 font-bold">
                       {currentSet.classSetName} • Class of {currentSet.graduationYear}
@@ -3116,8 +4671,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   </div>
                 </div>
 
-                {/* Controls */}
-                <div className="space-y-3 pt-2">
+                <div className="space-y-3 pt-1">
                   <input
                     type="file"
                     ref={heroFileInputRef}
@@ -3137,9 +4691,50 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       <span>{isCompressingHero ? 'Processing Photo...' : 'Upload New Hero Photo'}</span>
                     </button>
 
+                    {heroBannerUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerCropForImage(
+                            heroBannerUrl,
+                            '21:9',
+                            'Adjust Album Hero Banner Framing',
+                            (croppedUrl) => {
+                              setHeroBannerUrl(croppedUrl);
+                              onUpdateSet({
+                                ...currentSet,
+                                bannerImageUrl: croppedUrl,
+                                legacyGroupImageUrl: legacyFooterUrl,
+                                socials: socials,
+                                videos: videos,
+                              });
+                              setImagerySaveToast('✓ Hero Banner framing updated!');
+                              setTimeout(() => setImagerySaveToast(null), 3000);
+                            }
+                          );
+                        }}
+                        className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-[#d4af37] font-mono-tech text-xs transition-colors cursor-pointer flex items-center gap-1.5 border border-white/10"
+                      >
+                        <Crop className="w-3.5 h-3.5 text-[#d4af37]" />
+                        <span>Reframe</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
-                      onClick={() => setHeroBannerUrl('https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=1600&auto=format&fit=crop')}
+                      onClick={() => {
+                        const defaultHero = 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=1600&auto=format&fit=crop';
+                        setHeroBannerUrl(defaultHero);
+                        onUpdateSet({
+                          ...currentSet,
+                          bannerImageUrl: defaultHero,
+                          legacyGroupImageUrl: legacyFooterUrl,
+                          socials: socials,
+                          videos: videos,
+                        });
+                        setImagerySaveToast('✓ Hero Banner reset to default!');
+                        setTimeout(() => setImagerySaveToast(null), 3000);
+                      }}
                       className="px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs transition-colors cursor-pointer"
                     >
                       Reset Default
@@ -3149,10 +4744,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </div>
 
               {/* SECTION 2: FINAL FOOTER IMAGE ("THIS IS OUR LEGACY.") */}
-              <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-5 shadow-lg">
+              <div className="p-5 sm:p-6 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-4 shadow-lg">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-syne font-bold text-lg text-white">Final Footer Banner</h4>
+                    <h4 className="font-syne font-bold text-base text-white">Final Footer Banner</h4>
                     <p className="text-xs text-zinc-400 font-mono-tech">
                       "THIS IS OUR LEGACY." celebratory class portrait
                     </p>
@@ -3170,10 +4765,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     className="w-full h-full object-cover filter contrast-[1.05]"
                   />
                   <div className="absolute inset-0 bg-black/50" />
-
-                  {/* Legacy Text Preview Overlay */}
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4">
-                    <p className="font-syne font-bold text-lg sm:text-2xl text-white tracking-widest uppercase drop-shadow">
+                    <p className="font-syne font-bold text-lg sm:text-xl text-white tracking-widest uppercase drop-shadow">
                       THIS IS OUR LEGACY.
                     </p>
                     <p className="font-mono-tech text-[11px] text-zinc-300 mt-1">
@@ -3182,8 +4775,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   </div>
                 </div>
 
-                {/* Controls */}
-                <div className="space-y-3 pt-2">
+                <div className="space-y-3 pt-1">
                   <input
                     type="file"
                     ref={footerFileInputRef}
@@ -3203,9 +4795,50 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       <span>{isCompressingFooter ? 'Processing Photo...' : 'Upload New Footer Photo'}</span>
                     </button>
 
+                    {legacyFooterUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerCropForImage(
+                            legacyFooterUrl,
+                            '16:9',
+                            'Adjust Footer Legacy Photo Framing',
+                            (croppedUrl) => {
+                              setLegacyFooterUrl(croppedUrl);
+                              onUpdateSet({
+                                ...currentSet,
+                                bannerImageUrl: heroBannerUrl,
+                                legacyGroupImageUrl: croppedUrl,
+                                socials: socials,
+                                videos: videos,
+                              });
+                              setImagerySaveToast('✓ Footer Banner framing updated!');
+                              setTimeout(() => setImagerySaveToast(null), 3000);
+                            }
+                          );
+                        }}
+                        className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-[#d4af37] font-mono-tech text-xs transition-colors cursor-pointer flex items-center gap-1.5 border border-white/10"
+                      >
+                        <Crop className="w-3.5 h-3.5 text-[#d4af37]" />
+                        <span>Reframe</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
-                      onClick={() => setLegacyFooterUrl('https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1600&auto=format&fit=crop')}
+                      onClick={() => {
+                        const defaultFooter = 'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1600&auto=format&fit=crop';
+                        setLegacyFooterUrl(defaultFooter);
+                        onUpdateSet({
+                          ...currentSet,
+                          bannerImageUrl: heroBannerUrl,
+                          legacyGroupImageUrl: defaultFooter,
+                          socials: socials,
+                          videos: videos,
+                        });
+                        setImagerySaveToast('✓ Footer Banner reset to default!');
+                        setTimeout(() => setImagerySaveToast(null), 3000);
+                      }}
                       className="px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs transition-colors cursor-pointer"
                     >
                       Reset Default
@@ -3216,10 +4849,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             </div>
 
             {/* SECTION 3: DEPARTMENT SOCIAL MEDIA CHANNELS */}
-            <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-5 shadow-lg">
+            <div className="p-5 sm:p-6 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-4 shadow-lg">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                  <h4 className="font-syne font-bold text-lg text-white flex items-center gap-2">
+                  <h4 className="font-syne font-bold text-base text-white flex items-center gap-2">
                     <Share2 className="w-4 h-4 text-amber-400" />
                     <span>Official Department Social Handles</span>
                   </h4>
@@ -3233,7 +4866,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
-                {/* YouTube */}
                 <SocialUrlInputField
                   label="YouTube Channel"
                   prefix="youtube.com/@"
@@ -3243,7 +4875,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   icon={<Youtube className="w-3.5 h-3.5 text-red-500" />}
                 />
 
-                {/* Instagram */}
                 <SocialUrlInputField
                   label="Instagram Handle"
                   prefix="instagram.com/"
@@ -3253,7 +4884,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   icon={<Instagram className="w-3.5 h-3.5 text-pink-500" />}
                 />
 
-                {/* X */}
                 <SocialUrlInputField
                   label="X (Twitter)"
                   prefix="x.com/"
@@ -3267,7 +4897,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   }
                 />
 
-                {/* LinkedIn */}
                 <SocialUrlInputField
                   label="LinkedIn Alumni Page"
                   prefix="linkedin.com/company/"
@@ -3277,7 +4906,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   icon={<Linkedin className="w-3.5 h-3.5 text-blue-400" />}
                 />
 
-                {/* Official Website */}
                 <div className="sm:col-span-2">
                   <SocialUrlInputField
                     label="Official Department Website / Portal"
@@ -3290,279 +4918,30 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 </div>
               </div>
             </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setIsAlbumDesignModalOpen(false)}
+                className="px-5 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                id="save-album-imagery-btn"
+                type="button"
+                onClick={() => {
+                  handleSaveImagery();
+                  setIsAlbumDesignModalOpen(false);
+                }}
+                className="px-6 py-2.5 rounded-full bg-[#d4af37] hover:bg-[#e5c14d] text-black font-tech text-xs tracking-wider uppercase font-bold transition-all cursor-pointer shadow-lg flex items-center gap-2"
+              >
+                <Check className="w-4 h-4 text-black" />
+                <span>Save Designs</span>
+              </button>
+            </div>
           </div>
-        )}
-
-          {/* SUB-SECTION 2: PRIVACY (PLAQUE QR CODE ACCESS CONTROL) */}
-          {designPrivacySubTab === 'privacy' && (
-            <div className="space-y-6 animate-fadeIn">
-              {/* Context Banner */}
-              <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-4 shadow-xl">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
-                      <QrCode className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-syne font-bold text-base sm:text-lg text-white flex items-center gap-2">
-                        <span>Legacy Plaque QR Code Access Privacy</span>
-                        <span className="text-[10px] font-mono-tech uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          Active Policy
-                        </span>
-                      </h3>
-                      <p className="font-body text-xs text-zinc-400 mt-0.5 leading-relaxed">
-                        Control exactly what public visitors see when scanning the physical acrylic or wooden Legacy Plaque QR code mounted in your department or hall of fame.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Preset Quick Actions */}
-                  <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-                    <button
-                      type="button"
-                      onClick={() => handleSetAllPlaquePrivacy(false)}
-                      className="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-mono-tech text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>Show All</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSetAllPlaquePrivacy(true)}
-                      className="px-3.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-300 hover:text-white font-mono-tech text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      <Lock className="w-3.5 h-3.5" />
-                      <span>Curated Privacy</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/5 flex items-start gap-3 text-xs font-mono-tech text-zinc-400 leading-relaxed">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <p>
-                    <strong className="text-zinc-200">Important Distinction:</strong> These privacy toggles apply <em>only</em> to visitors entering via the physical Legacy Plaque QR code scan (<span className="text-amber-300 font-mono">?entry=plaque</span>). Direct web links shared via WhatsApp, email, or saved to Google Drive retain full album visibility.
-                  </p>
-                </div>
-              </div>
-
-              {/* 6 Section Toggle Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {[
-                  {
-                    key: 'hideStudents' as keyof PlaquePrivacySettings,
-                    title: 'Class Directory & Student Profiles',
-                    description: 'Graduating classmate portraits, nicknames, quotes, department positions, and social handles.',
-                    icon: Users,
-                    color: 'text-sky-400',
-                    bg: 'bg-sky-500/10 border-sky-500/20',
-                  },
-                  {
-                    key: 'hideMemories' as keyof PlaquePrivacySettings,
-                    title: 'Moments & Campus Memories',
-                    description: 'Curated photo archive collections, matriculation galleries, and dinner party highlights.',
-                    icon: Camera,
-                    color: 'text-amber-400',
-                    bg: 'bg-amber-500/10 border-amber-500/20',
-                  },
-                  {
-                    key: 'hideAwards' as keyof PlaquePrivacySettings,
-                    title: 'Class Awards & Superlatives',
-                    description: 'Superlative trophies, peer recognitions, honorary plaques, and official citations.',
-                    icon: Trophy,
-                    color: 'text-[#d4af37]',
-                    bg: 'bg-[#d4af37]/10 border-[#d4af37]/20',
-                  },
-                  {
-                    key: 'hideVoices' as keyof PlaquePrivacySettings,
-                    title: 'Final Thoughts & Lecturer Wisdom',
-                    description: 'Parting words, faculty advice, and student leader farewell messages.',
-                    icon: Quote,
-                    color: 'text-emerald-400',
-                    bg: 'bg-emerald-500/10 border-emerald-500/20',
-                  },
-                  {
-                    key: 'hideStory' as keyof PlaquePrivacySettings,
-                    title: 'Our Set Story Narrative',
-                    description: 'The collective historical chronicle of your class journey through matriculation to final year.',
-                    icon: BookOpen,
-                    color: 'text-purple-400',
-                    bg: 'bg-purple-500/10 border-purple-500/20',
-                  },
-                  {
-                    key: 'hideVideos' as keyof PlaquePrivacySettings,
-                    title: 'Department Videos & Convocation Reel',
-                    description: 'Embedded YouTube video clips, convocation streams, and department memories.',
-                    icon: Film,
-                    color: 'text-rose-400',
-                    bg: 'bg-rose-500/10 border-rose-500/20',
-                  },
-                ].map((item) => {
-                  const Icon = item.icon;
-                  const isHidden = Boolean((currentSet.plaquePrivacy || {})[item.key]);
-                  const isVisible = !isHidden;
-
-                  return (
-                    <div
-                      key={item.key}
-                      onClick={() => handleTogglePlaquePrivacy(item.key)}
-                      className={`p-5 rounded-3xl border transition-all cursor-pointer flex flex-col justify-between gap-4 select-none ${
-                        isVisible
-                          ? 'bg-[#0c0d14] border-white/15 hover:border-emerald-500/40 shadow-lg'
-                          : 'bg-[#08090e] border-white/5 opacity-80 hover:opacity-100 hover:border-white/20'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3 min-w-0">
-                          <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border ${item.bg} ${item.color}`}>
-                            <Icon className="w-5 h-5" />
-                          </div>
-                          <div className="min-w-0">
-                            <h4 className="font-syne font-bold text-sm text-white truncate">
-                              {item.title}
-                            </h4>
-                            <p className="font-body text-xs text-zinc-400 mt-1 leading-relaxed">
-                              {item.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Animated Toggle Switch */}
-                        <div className="shrink-0 flex flex-col items-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleTogglePlaquePrivacy(item.key);
-                            }}
-                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                              isVisible ? 'bg-emerald-500' : 'bg-zinc-700'
-                            }`}
-                            aria-label={`Toggle ${item.title}`}
-                          >
-                            <span
-                              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                                isVisible ? 'translate-x-5' : 'translate-x-0'
-                              }`}
-                            />
-                          </button>
-                          <span
-                            className={`font-mono-tech text-[10px] uppercase tracking-wider font-semibold ${
-                              isVisible ? 'text-emerald-400' : 'text-zinc-500'
-                            }`}
-                          >
-                            {isVisible ? 'Visible' : 'Hidden'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Status indicator bar */}
-                      <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[11px] font-mono-tech">
-                        <span className="text-zinc-500">Plaque Visitors:</span>
-                        {isVisible ? (
-                          <span className="text-emerald-400 flex items-center gap-1">
-                            <Eye className="w-3 h-3" /> Can View on Plaque Scan
-                          </span>
-                        ) : (
-                          <span className="text-amber-400/90 flex items-center gap-1">
-                            <EyeOff className="w-3 h-3" /> Hidden from Plaque Scan
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Red-outlined Danger Zone Box */}
-            <div className="p-6 sm:p-8 rounded-3xl border-2 border-red-500/50 bg-red-950/10 space-y-6">
-              <div className="flex items-center gap-3 pb-4 border-b border-red-500/20">
-                <div className="w-10 h-10 rounded-2xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-syne font-bold text-lg text-white">Danger Zone</h3>
-                  <p className="font-body text-xs text-zinc-400 mt-0.5">
-                    Critical album visibility and administrative removal actions
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {/* 1. Unpublish / Republish Album */}
-                <div className="p-4 sm:p-5 rounded-2xl bg-black/40 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1 max-w-lg">
-                    <div className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                      <span>{currentSet.isUnpublished ? 'Republish Album' : 'Unpublish Album'}</span>
-                      {currentSet.isUnpublished && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono-tech uppercase font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                          Currently Unpublished
-                        </span>
-                      )}
-                    </div>
-                    <p className="font-body text-xs text-zinc-400 leading-relaxed">
-                      {currentSet.isUnpublished
-                        ? 'This album is hidden from public visitors and the legacy wall. Click to make it publicly viewable again.'
-                        : 'Temporarily hide this album from visitors and the legacy wall. All profiles and data are preserved and restorable at any time.'}
-                    </p>
-                  </div>
-                  {currentSet.isUnpublished ? (
-                    <button
-                      type="button"
-                      onClick={handleToggleUnpublishAlbum}
-                      className="px-5 py-2.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-mono-tech text-xs font-bold uppercase tracking-wider transition-colors shrink-0 cursor-pointer shadow-md"
-                    >
-                      Republish Album
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleToggleUnpublishAlbum}
-                      className="px-5 py-2.5 rounded-full border border-red-500/50 hover:bg-red-500/20 text-red-400 font-mono-tech text-xs font-bold uppercase tracking-wider transition-colors shrink-0 cursor-pointer"
-                    >
-                      Unpublish Album
-                    </button>
-                  )}
-                </div>
-
-                {/* 2. Request Album Deletion */}
-                <div className="p-4 sm:p-5 rounded-2xl bg-black/40 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1 max-w-lg">
-                    <div className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                      <span>Request Album Deletion</span>
-                      {currentSet.deletionRequest?.status === 'pending' && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono-tech uppercase font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                          Request Pending
-                        </span>
-                      )}
-                    </div>
-                    <p className="font-body text-xs text-zinc-400 leading-relaxed">
-                      Album administrators cannot delete class albums directly. You may request official deletion from the KoHot Master Host. A specific reason is required.
-                    </p>
-                    {currentSet.deletionRequest?.status === 'pending' && (
-                      <div className="mt-2 text-xs font-mono-tech text-amber-300/90 bg-amber-400/10 border border-amber-400/20 p-2.5 rounded-xl">
-                        <span className="font-bold text-amber-400">Submitted reason:</span> "{currentSet.deletionRequest.reason}"
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsRequestDeletionModalOpen(true)}
-                    disabled={currentSet.deletionRequest?.status === 'pending'}
-                    className={`px-5 py-2.5 rounded-full font-mono-tech text-xs font-bold uppercase tracking-wider transition-all shrink-0 ${
-                      currentSet.deletionRequest?.status === 'pending'
-                        ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-white/5'
-                        : 'border border-red-500 bg-red-600/20 hover:bg-red-600/40 text-red-300 cursor-pointer shadow-md'
-                    }`}
-                  >
-                    {currentSet.deletionRequest?.status === 'pending' ? 'Request Pending' : 'Request Deletion'}
-                  </button>
-                </div>
-              </div>
-            </div>
-        </div>
-      )}
+        </UniversalModal>
 
         {/* =========================================================================
             TAB 2: MOMENTS & HIGHLIGHTS MANAGEMENT (SPLIT INTO 2 SUB-TABS)
@@ -3886,16 +5265,15 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   <div className="flex items-center gap-2">
                     <button
                       id="create-batch-btn"
-                      onClick={() => setIsAddingBatch(!isAddingBatch)}
+                      type="button"
+                      onClick={() => setIsAddingBatch(true)}
                       className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-5 rounded-full flex items-center gap-2 transition-colors cursor-pointer shadow"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      <span>{isAddingBatch ? 'Cancel' : 'Create New Category'}</span>
+                      <span>Create New Category</span>
                     </button>
                   </div>
                 </div>
-
-
 
             {/* Album Image Limit & Capacity Card */}
             <div className="p-5 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-3">
@@ -3941,32 +5319,23 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </p>
             </div>
 
-            {/* CREATE NEW BATCH FORM */}
-            {isAddingBatch && (
-              <form onSubmit={handleSaveBatch} className="p-6 rounded-3xl bg-[#0c0d14] border border-white/20 space-y-5 text-xs font-body animate-fadeIn">
-                <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                  <div className="flex items-center gap-2 text-white font-mono-tech uppercase text-xs tracking-wider">
-                    <Layers className="w-4 h-4 text-emerald-400" />
-                    <span>Create New Event Category</span>
-                  </div>
-                  <span className="text-[11px] font-mono-tech text-zinc-400">
-                    Step 1: Set Details &rarr; Step 2: Add Images &amp; Extract Date
-                  </span>
-                </div>
-
+            {/* CREATE NEW CATEGORY POP-UP MODAL */}
+            <UniversalModal
+              isOpen={isAddingBatch}
+              onClose={() => setIsAddingBatch(false)}
+              title="Create New Category"
+              maxWidth="xl"
+              zIndex={9980}
+            >
+              <form onSubmit={handleSaveBatch} className="space-y-5 text-xs font-body">
+                {/* Category Name & Quick Presets */}
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                      Event Category *
-                    </label>
-                    <span className="text-[11px] font-mono-tech text-zinc-500">
-                      Select preset or type custom category
-                    </span>
-                  </div>
+                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                    Category Name <span className="text-red-400">*</span>
+                  </label>
                   <input
                     required
                     type="text"
-                    list="moments-category-presets"
                     value={batchCategory}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -3977,22 +5346,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       }
                     }}
                     placeholder="e.g. Sign-out Day, Dinner & Awards, Convocation..."
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none font-mono-tech text-xs"
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none font-mono-tech text-xs transition-colors"
                   />
-                  <datalist id="moments-category-presets">
-                    <option value="Convocation" />
-                    <option value="Sign-out Day" />
-                    <option value="Dinner & Awards" />
-                    <option value="Project Defense" />
-                    <option value="Lecture Hall Life" />
-                    <option value="Sports & Picnics" />
-                    <option value="Matriculation" />
-                    <option value="Campus Culture" />
-                  </datalist>
 
-                  {/* Preset Pocket List Chips */}
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    <span className="text-[10px] font-mono-tech uppercase text-zinc-500 mr-1">Quick Select:</span>
                     {[
                       'Convocation',
                       'Sign-out Day',
@@ -4001,7 +5358,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       'Lecture Hall Life',
                       'Sports & Picnics',
                       'Matriculation',
-                      'Campus Culture'
+                      'Campus Culture',
                     ].map((cat) => (
                       <button
                         key={cat}
@@ -4025,134 +5382,75 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   </div>
                 </div>
 
-                {/* Structured Event Date Section */}
-                <div className="p-4 rounded-2xl bg-[#08090e] border border-white/10 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <label className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Event Date (Day • Month • Year)</span>
-                      {extractedDateResult && (
-                        <span className="px-2 py-0.5 rounded-full text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono-tech">
-                          Auto-Extracted from Photos
-                        </span>
-                      )}
-                    </label>
-                  </div>
-
-                  <p className="text-[11px] font-mono-tech text-zinc-400">
-                    Since uploads usually happen days, weeks, or months after the event, the system extracts the date from your photos automatically. If you can't remember the exact day, saving the Month &amp; Year is accepted.
-                  </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                    {/* Day Input */}
-                    <div>
-                      <label className="block text-[10px] font-mono-tech uppercase text-zinc-400 mb-1">
-                        Day (1-31)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={31}
-                        disabled={isBatchDayUnknown}
-                        value={isBatchDayUnknown ? '' : batchDay}
-                        onChange={(e) => {
-                          const val = e.target.value === '' ? '' : parseInt(e.target.value, 10);
-                          setBatchDay(val);
-                          setBatchDate(formatDateComponents(val === '' ? undefined : val, batchMonth, batchYear));
-                        }}
-                        placeholder={isBatchDayUnknown ? 'Day unknown' : 'e.g. 18'}
-                        className={`w-full px-3 py-2 rounded-xl border text-xs font-mono-tech text-white focus:outline-none transition-all ${
-                          isBatchDayUnknown 
-                            ? 'bg-black/30 border-white/5 text-zinc-600 cursor-not-allowed'
-                            : 'bg-black/50 border-white/15 focus:border-emerald-500/50'
-                        }`}
-                      />
-                      <label className="flex items-center gap-1.5 text-[10px] font-mono-tech text-zinc-400 cursor-pointer pt-1">
-                        <input
-                          type="checkbox"
-                          checked={isBatchDayUnknown}
-                          onChange={(e) => {
-                            setIsBatchDayUnknown(e.target.checked);
-                            if (e.target.checked) {
-                              setBatchDay('');
-                              setBatchDate(formatDateComponents(undefined, batchMonth, batchYear));
-                            } else {
-                              setBatchDate(formatDateComponents(typeof batchDay === 'number' ? batchDay : undefined, batchMonth, batchYear));
-                            }
-                          }}
-                          className="rounded bg-black/40 border-white/20 text-emerald-500 focus:ring-0 cursor-pointer"
-                        />
-                        <span>Day unknown (Month &amp; Year only)</span>
-                      </label>
-                    </div>
-
-                    {/* Month Select */}
-                    <div>
-                      <label className="block text-[10px] font-mono-tech uppercase text-zinc-400 mb-1">
-                        Month *
-                      </label>
-                      <select
-                        value={batchMonth}
-                        onChange={(e) => {
-                          const m = parseInt(e.target.value, 10);
-                          setBatchMonth(m);
-                          setBatchDate(formatDateComponents(isBatchDayUnknown ? undefined : (typeof batchDay === 'number' ? batchDay : undefined), m, batchYear));
-                        }}
-                        className="w-full px-3 py-2 rounded-xl bg-black/50 border border-white/15 text-xs font-mono-tech text-white focus:outline-none cursor-pointer"
-                      >
-                        {MONTH_NAMES.map((mName, idx) => (
-                          <option key={mName} value={idx + 1}>
-                            {mName} ({String(idx + 1).padStart(2, '0')})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Year Input */}
-                    <div>
-                      <label className="block text-[10px] font-mono-tech uppercase text-zinc-400 mb-1">
-                        Year *
-                      </label>
-                      <input
-                        type="number"
-                        min={1990}
-                        max={2035}
-                        value={batchYear}
-                        onChange={(e) => {
-                          const y = parseInt(e.target.value, 10) || currentSet.graduationYear || 2026;
-                          setBatchYear(y);
-                          setBatchDate(formatDateComponents(isBatchDayUnknown ? undefined : (typeof batchDay === 'number' ? batchDay : undefined), batchMonth, y));
-                        }}
-                        className="w-full px-3 py-2 rounded-xl bg-black/50 border border-white/15 text-xs font-mono-tech text-white focus:outline-none"
-                      />
-                    </div>
-                  </div>
+                {/* Event Date (Calendar Picker like Publish Album Date Choosing) */}
+                <div className="space-y-2">
+                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                    Event Date
+                  </label>
+                  <input
+                    type="date"
+                    value={
+                      typeof batchDay === 'number' && batchMonth && batchYear
+                        ? `${String(batchYear).padStart(4, '0')}-${String(batchMonth).padStart(2, '0')}-${String(batchDay).padStart(2, '0')}`
+                        : ''
+                    }
+                    onClick={(e) => {
+                      try {
+                        (e.currentTarget as any).showPicker?.();
+                      } catch {}
+                    }}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) {
+                        setBatchDate('');
+                        setBatchDay('');
+                        return;
+                      }
+                      const [yStr, mStr, dStr] = val.split('-');
+                      const y = parseInt(yStr, 10);
+                      const m = parseInt(mStr, 10);
+                      const d = parseInt(dStr, 10);
+                      if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                        setBatchYear(y);
+                        setBatchMonth(m);
+                        setBatchDay(d);
+                        setIsBatchDayUnknown(false);
+                        setBatchDate(formatDateComponents(d, m, y));
+                      }
+                    }}
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-amber-400 transition-colors cursor-pointer"
+                  />
                 </div>
 
-                <div>
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                    Event Category Narrative / Caption
+                {/* Short Caption (Optional) */}
+                <div className="space-y-1.5">
+                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400">
+                    Short Caption (Optional)
                   </label>
                   <textarea
                     rows={2}
                     value={batchCaption}
                     onChange={(e) => setBatchCaption(e.target.value)}
-                    placeholder="e.g. Unforgettable memories as we wore our convocation gowns and celebrated our collective perseverance."
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none"
+                    placeholder="Brief description of this moment..."
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none resize-none transition-colors"
                   />
                 </div>
 
-                {/* Upload Images Under Event Category */}
-                <div className="p-5 rounded-2xl bg-[#08090e] border border-white/10 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div>
-                      <label className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 block">
-                        Upload Photos for this Category ({batchImages.length} ready)
-                      </label>
-                      <span className="text-[10px] font-mono-tech text-zinc-500">
-                        Multi-file selection supported with automatic image optimization.
-                      </span>
-                    </div>
+                {/* Upload Photos */}
+                <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                      Photos ({batchImages.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => batchFileInputRef.current?.click()}
+                      disabled={isCompressingBatch}
+                      className="py-2 px-4 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{isCompressingBatch ? 'Processing...' : 'Select Photos'}</span>
+                    </button>
                   </div>
 
                   <input
@@ -4164,97 +5462,73 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     className="hidden"
                   />
 
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => batchFileInputRef.current?.click()}
-                      disabled={isCompressingBatch}
-                      className="py-2.5 px-5 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-colors flex items-center gap-2 cursor-pointer shadow"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>{isCompressingBatch ? 'Processing Category Photos...' : 'Select Multiple Photos'}</span>
-                    </button>
-                  </div>
-
-                  {/* Category Images Queue */}
                   {batchImages.length > 0 && (
-                    <div className="space-y-3 pt-2">
-                      <span className="text-[11px] font-mono-tech text-zinc-400">
-                        Draft Category Photos ({batchImages.length}):
-                      </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {batchImages.map((img, index) => (
-                          <div
-                            key={index}
-                            className="p-2.5 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3"
-                          >
-                            <img
-                              src={img.url}
-                              alt={`Draft photo ${index + 1}`}
-                              className="w-16 h-16 rounded-lg object-cover border border-white/15 shrink-0"
-                            />
-                            <div className="min-w-0 flex-1 space-y-1">
-                              <div className="flex items-center justify-between text-[11px] font-mono-tech text-zinc-400">
-                                <span className="font-semibold text-white">Photo #{index + 1}</span>
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      triggerCropForImage(
-                                        img.url,
-                                        'free',
-                                        `Crop Photo #${index + 1}`,
-                                        (croppedUrl) => {
-                                          const updated = [...batchImages];
-                                          updated[index].url = croppedUrl;
-                                          setBatchImages(updated);
-                                        }
-                                      );
-                                    }}
-                                    className="text-amber-400 hover:text-amber-300 cursor-pointer flex items-center gap-1"
-                                    title="Crop photo"
-                                  >
-                                    <Crop className="w-2.5 h-2.5" />
-                                    <span>Crop</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setBatchImages(batchImages.filter((_, i) => i !== index));
-                                    }}
-                                    className="text-red-400 hover:text-red-300 cursor-pointer"
-                                  >
-                                    Remove
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1 max-h-56 overflow-y-auto pr-1">
+                      {batchImages.map((img, index) => (
+                        <div
+                          key={img.id || index}
+                          className="p-2 rounded-xl bg-black/60 border border-white/10 flex items-center gap-2.5"
+                        >
+                          <img
+                            src={img.url}
+                            alt={`Photo ${index + 1}`}
+                            className="w-12 h-12 rounded-lg object-cover border border-white/15 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1 flex flex-col gap-1 text-[11px] font-mono-tech">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                triggerCropForImage(
+                                  img.url,
+                                  'free',
+                                  `Crop Photo #${index + 1}`,
+                                  (croppedUrl) => {
+                                    const updated = [...batchImages];
+                                    updated[index].url = croppedUrl;
+                                    setBatchImages(updated);
+                                  }
+                                );
+                              }}
+                              className="text-amber-400 hover:text-amber-300 cursor-pointer flex items-center gap-1 text-left"
+                            >
+                              <Crop className="w-2.5 h-2.5 shrink-0" />
+                              <span>Crop</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBatchImages(batchImages.filter((_, i) => i !== index));
+                              }}
+                              className="text-red-400 hover:text-red-300 cursor-pointer text-left"
+                            >
+                              Remove
+                            </button>
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
 
-                <div className="flex items-center gap-3 pt-2">
-                  <button
-                    type="submit"
-                    disabled={!batchCategory.trim() || batchImages.length === 0}
-                    className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-tech text-xs tracking-wider uppercase font-bold py-3 px-6 rounded-full transition-colors cursor-pointer shadow"
-                  >
-                    Save Moments Category ({batchImages.length} Photos)
-                  </button>
-
+                {/* Modal Actions */}
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
                   <button
                     type="button"
                     onClick={() => setIsAddingBatch(false)}
-                    className="py-3 px-5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs transition-colors cursor-pointer"
+                    className="py-2.5 px-5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs transition-colors cursor-pointer"
                   >
                     Cancel
                   </button>
+                  <button
+                    type="submit"
+                    disabled={!batchCategory.trim() || batchImages.length === 0}
+                    className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-6 rounded-full transition-colors cursor-pointer shadow"
+                  >
+                    Save Category ({batchImages.length})
+                  </button>
                 </div>
               </form>
-            )}
+            </UniversalModal>
 
             {/* Hidden Input for Replacing a Single Image in Any Category */}
             <input
@@ -5391,6 +6665,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             </button>
           </div>
         )}
+          </>
+        )}
       </div>
 
       {/* Edit Student Modal for Class Rep */}
@@ -5514,7 +6790,9 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       {/* Share Published Album Modal with Hero Context Preview */}
       {isShareAlbumModalOpen && (
         <div 
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn select-none"
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-[9990] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn select-none"
           onClick={() => setIsShareAlbumModalOpen(false)}
         >
           <div 
@@ -5637,7 +6915,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
       {/* Pop-up Window: Edit Class Award Modal */}
       {editingAwardModalItem && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[9990] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn">
           <div className="w-full max-w-lg bg-[#0c0d14] border border-white/20 rounded-3xl p-6 sm:p-7 shadow-2xl space-y-5 my-8">
             <div className="flex items-center justify-between pb-3 border-b border-white/10">
               <div className="flex items-center gap-2.5">
@@ -5831,7 +7109,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
       {/* Pop-up Window: Edit Final Thought Modal */}
       {editingVoiceModalItem && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[9990] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn">
           <div className="w-full max-w-lg bg-[#0c0d14] border border-white/20 rounded-3xl p-6 sm:p-7 shadow-2xl space-y-5 my-8">
             <div className="flex items-center justify-between pb-3 border-b border-white/10">
               <div className="flex items-center gap-2.5">
@@ -6031,21 +7309,21 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         </div>
       )}
 
-      {/* Request Album Deletion Modal */}
+      {/* Direct 30-Day Recoverable Soft Delete Modal */}
       {isRequestDeletionModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-fadeIn">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[9990] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-fadeIn">
           <div className="relative w-full max-w-md rounded-3xl bg-[#121318] border border-red-500/30 p-6 sm:p-7 text-white space-y-5 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-white/10">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400">
-                  <AlertTriangle className="w-4 h-4" />
+                  <Trash2 className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="font-syne font-bold text-base text-white">
-                    Request Album Deletion
+                    Delete Class Album
                   </h3>
-                  <p className="text-[11px] font-mono-tech text-zinc-400">
-                    Host review required
+                  <p className="text-[11px] font-mono-tech text-amber-400">
+                    Recoverable within 30 days
                   </p>
                 </div>
               </div>
@@ -6058,22 +7336,20 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </button>
             </div>
 
-            <p className="font-body text-xs text-zinc-300 leading-relaxed">
-              Are you sure you want to request deletion of <span className="text-white font-bold">{currentSet.departmentName} (Class of {currentSet.graduationYear})</span>? The Host will review your request in the dashboard.
-            </p>
-
-            <div className="space-y-1.5">
-              <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold">
-                Reason for Deletion *
-              </label>
-              <textarea
-                required
-                rows={3}
-                value={deletionReason}
-                onChange={(e) => setDeletionReason(e.target.value)}
-                placeholder="State the specific reason for requesting this class album's deletion..."
-                className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-red-400 focus:outline-none resize-none font-body text-xs"
-              />
+            <div className="space-y-3 font-body text-xs text-zinc-300 leading-relaxed">
+              <p>
+                Are you sure you want to delete <span className="text-white font-bold">{currentSet.departmentName} (Class of {currentSet.graduationYear})</span>?
+              </p>
+              <div className="p-3.5 rounded-2xl bg-red-500/10 border border-red-500/20 space-y-1.5 text-zinc-300">
+                <p className="font-mono-tech text-[11px] uppercase text-red-300 font-bold">
+                  What happens when you delete:
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-[11px] text-zinc-300">
+                  <li>Album data is immediately wiped and hidden from your dashboard and the public album.</li>
+                  <li>You can still sign in within <span className="text-white font-semibold">30 days</span> to recover your album.</li>
+                  <li>After 30 days, the album is permanently purged for your account.</li>
+                </ul>
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
@@ -6085,11 +7361,12 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 Cancel
               </button>
               <button
+                id="confirm-soft-delete-album-btn"
                 type="button"
-                onClick={handleConfirmRequestDeletion}
+                onClick={handleConfirmSoftDelete}
                 className="px-6 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-syne font-bold text-xs uppercase shadow-md cursor-pointer transition-colors"
               >
-                Submit Request
+                Delete Album
               </button>
             </div>
           </div>

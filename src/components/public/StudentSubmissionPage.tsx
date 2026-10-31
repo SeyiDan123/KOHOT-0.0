@@ -27,6 +27,7 @@ import { isValidEmail } from '../../utils/emailValidator';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
 import { generateGoogleCalendarUrl, downloadIcsCalendarFile } from '../../utils/calendarHelper';
 import { getAlbumUrl } from '../../utils/urlHelper';
+import { uploadMediaToR2, submitStudentProfileOnServer } from '../../utils/apiClient';
 
 interface StudentSubmissionPageProps {
   currentSet: ClassSet;
@@ -109,10 +110,23 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
 
       const result = await compressImageToWebP(file, 800, 0.88);
       setCompressionInfo(result);
-      setPhotoDataUrl(result.dataUrl);
+
+      // Upload to Cloudflare R2 object storage
+      const uploadRes = await uploadMediaToR2(result.dataUrl, {
+        setId: currentSet.id,
+        category: 'portrait',
+        fileName: `${fullName ? fullName.replace(/\s+/g, '-').toLowerCase() : 'student'}-portrait.webp`,
+      });
+
+      if (uploadRes.success && uploadRes.url) {
+        setPhotoDataUrl(uploadRes.url);
+      } else {
+        setPhotoDataUrl(result.dataUrl);
+      }
+
       if (newSettings) setCropSettings(newSettings);
     } catch (err) {
-      console.error('Compression error:', err);
+      console.error('Compression/upload error:', err);
       setPhotoDataUrl(croppedDataUrl);
       if (newSettings) setCropSettings(newSettings);
     } finally {
@@ -199,6 +213,11 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       submittedAt: new Date().toISOString().split('T')[0],
       leaderOrder: hasLeaderTitle ? calculateIntuitiveHierarchyRank(trimmedPos) : undefined,
     };
+
+    // Persist to Cloudflare D1 server
+    submitStudentProfileOnServer(currentSet.id, newStudent).catch((err) => {
+      console.warn('Background server submission sync:', err);
+    });
 
     onSubmitStudent(newStudent);
     setSubmittedStudent(newStudent);

@@ -10,6 +10,8 @@ import { INITIAL_UNIVERSITIES } from '../../data/initialData';
 import { CROWNFIELD_UNIVERSITY, CROWNFIELD_PUBLIC_LAW_SETS } from '../../data/crownfieldLawDemos';
 import { AlbumAdminHelpModal, AlbumDisputeModal } from '../admin/AlbumAdminHelpModal';
 import { HelpModal } from './HelpModal';
+import { AlbumAdminSwitcher } from '../common/AlbumAdminSwitcher';
+import { DashboardProfileMenu } from '../common/DashboardProfileMenu';
 import { 
   Building, 
   GraduationCap, 
@@ -62,6 +64,7 @@ interface AlbumsGridProps {
     targetYear: number;
     fromYear: number;
   }) => void;
+  onUpdateSet?: (updatedSet: ClassSet) => void;
 }
 
 /**
@@ -88,12 +91,25 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
   onMainDashboard,
   inviteContext: propInviteContext,
   onOpenOnboardingWithInvite,
+  onUpdateSet,
 }) => {
   const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   // Theme mode state (context aware, defaults to light)
   const [isLightMode, setIsLightMode] = useState<boolean>(() => getTheme() === 'light');
+
+  useEffect(() => {
+    const handleThemeChanged = (e: any) => {
+      if (e.detail?.theme) {
+        setIsLightMode(e.detail.theme === 'light');
+      } else {
+        setIsLightMode(getTheme() === 'light');
+      }
+    };
+    window.addEventListener('kohot_theme_changed', handleThemeChanged);
+    return () => window.removeEventListener('kohot_theme_changed', handleThemeChanged);
+  }, []);
 
   const toggleLightMode = () => {
     setIsLightMode((prev) => {
@@ -203,37 +219,65 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     setActiveDeptId(deptId);
   };
 
-  const isCrownfieldPublicLaw = !controlledDeptId || 
-    controlledDeptId === 'dept-crownfield-public-law' || 
+  const isCrownfieldPublicLaw =
+    !controlledDeptId ||
+    controlledDeptId === 'dept-crownfield-public-law' ||
     controlledDeptId.toLowerCase().includes('crownfield') ||
-    controlledDeptId.toLowerCase().includes('public-law') ||
-    targetSharedDept.id === 'dept-crownfield-public-law' ||
-    targetSharedDept.name?.toLowerCase().includes('public law');
+    controlledUniId === 'crownfield' ||
+    targetSharedUni.id === 'crownfield';
 
   useEffect(() => {
     updateManifestTag({ wall: controlledDeptId || 'legacy-wall' });
   }, [controlledDeptId]);
 
-  // Filtered sets: if accessed via direct class/dept share link or album navigation, show that department's sets.
-  // Otherwise, public legacy wall demo strictly displays ONLY the 4 Crownfield Demo albums!
+  const isMasterHost = currentUser?.role === 'master_host';
+
+  // Filtered sets: once an album is published (isPublished === true or activationStatus === 'active'),
+  // it immediately appears on the Legacy Wall of its particular department.
   const displayedSets = useMemo(() => {
     if (isDirectSharedDept && !isCrownfieldPublicLaw) {
       const deptSets = sets.filter((s) => {
-        if (s.deletedAt || s.isUnpublished || s.isPublished === false) return false;
-        if (s.departmentId === controlledDeptId) return true;
+        if (s.deletedAt || s.keptByHostOnly) {
+          if (!isMasterHost) return false;
+          if (s.deletedAt) {
+            const daysPassed = Math.floor((Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24));
+            const daysRemaining = Math.max(0, 30 - daysPassed);
+            if (daysRemaining <= 0 && !s.keptByHostOnly) return false;
+          }
+        } else {
+          const isSetPublished = (s.isPublished === true || s.activationStatus === 'active') && !s.isUnpublished;
+          const isOwnedByCurrentAdmin =
+            currentUser?.role === 'class_rep' &&
+            (currentUser.assignedSetId === s.id ||
+              (currentUser.email && s.classRepEmail && currentUser.email.toLowerCase().trim() === s.classRepEmail.toLowerCase().trim()));
+          if (!isSetPublished && !isMasterHost && !isOwnedByCurrentAdmin) {
+            return false;
+          }
+        }
+
+        if (s.departmentId === controlledDeptId || s.departmentId === targetSharedDept.id) return true;
         if (targetSharedDept.name && s.departmentName?.toLowerCase().trim() === targetSharedDept.name.toLowerCase().trim()) {
-          // If university matches or set institutionId matches
           if (!targetSharedUni.id || s.institutionId === targetSharedUni.id) return true;
         }
         return false;
       });
       return deptSets.sort((a, b) => b.graduationYear - a.graduationYear);
     }
+
     const demoIds = ['crownfield-law-2026', 'crownfield-law-2025', 'crownfield-law-2024', 'crownfield-law-2023'];
-    const merged = demoIds.map((id) => sets.find((s) => s.id === id) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === id)!);
-    const validMerged = merged.filter((s) => s && !s.deletedAt && !s.isUnpublished && s.isPublished !== false).sort((a, b) => b.graduationYear - a.graduationYear);
+    const mergedDemos = demoIds.map((id) => sets.find((s) => s.id === id) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === id)!);
+    const additionalCrownfieldSets = sets.filter(
+      (s) =>
+        !demoIds.includes(s.id) &&
+        (s.departmentId === 'dept-crownfield-public-law' || s.institutionId === 'crownfield') &&
+        ((s.isPublished === true || s.activationStatus === 'active') && !s.isUnpublished && !s.deletedAt)
+    );
+    const allCrownfield = [...mergedDemos, ...additionalCrownfieldSets];
+    const validMerged = allCrownfield
+      .filter((s) => s && !s.deletedAt && !s.isUnpublished && (s.isPublished !== false || s.activationStatus === 'active'))
+      .sort((a, b) => b.graduationYear - a.graduationYear);
     return validMerged.length > 0 ? validMerged : CROWNFIELD_PUBLIC_LAW_SETS.filter((s) => !s.deletedAt && !s.isUnpublished);
-  }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.name, targetSharedUni.id]);
+  }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.id, targetSharedDept.name, targetSharedUni.id, isMasterHost, currentUser]);
 
   // Total student portraits archived in this selection
   const totalPortraits = useMemo(() => {
@@ -354,6 +398,24 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
 
   return (
     <div id="department-directory-page" className={`min-h-screen ${isLightMode ? 'bg-slate-50 text-slate-900' : 'bg-[#121214] text-white'} selection:bg-[#d4af37]/30 flex flex-col relative animate-entrance`}>
+      {/* Bottom Toggle Switcher for Logged-in Album Admin (2 toggles: Manage | Preview) or Host (3 toggles: Main | Manage | Preview) */}
+      {isAlbumAdmin && (
+        <AlbumAdminSwitcher
+          activeMode="preview"
+          showMainButton={Boolean(currentUser?.role === 'master_host' && showMainButton)}
+          showManageButton={true}
+          onMainDashboard={onMainDashboard}
+          onManageAlbum={onOpenDashboard}
+          onPreviewAlbum={() => {
+            if (currentUser?.role === 'class_rep' && currentUser.assignedSetId) {
+              onSelectSet(currentUser.assignedSetId);
+            } else if (timelineSets[0]) {
+              onSelectSet(timelineSets[0].id);
+            }
+          }}
+        />
+      )}
+
       {/* Top Navigation Bar with KoHot Text Logo */}
       <header className={`sticky top-0 z-40 backdrop-blur-xl border-b px-4 sm:px-8 py-3.5 transition-colors ${
         isLightMode 
@@ -361,36 +423,58 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
           : 'bg-[#121214]/95 border-zinc-800 text-white'
       }`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 relative z-10">
-          {/* Constant KoHot logo text shortcut to website */}
-          <button
-            id="legacy-wall-top-kohot-btn"
-            type="button"
-            onClick={() => {
-              if (onBackToLanding) {
-                onBackToLanding();
-              } else {
-                window.location.hash = '#home';
-              }
-              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-            }}
-            className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
-              isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
-            }`}
-            title="Return to KoHot Website"
-          >
-            <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
-              isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
-            }`}>
-              <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
-                isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
-              }`} />
+          {/* KoHot logo text: non-clickable static badge for Album Admin & Host so they cannot hop out to the website */}
+          {isAlbumAdmin ? (
+            <div
+              id="legacy-wall-top-kohot-badge"
+              className={`flex items-center gap-2.5 select-none ${
+                isLightMode ? 'text-slate-900' : 'text-white'
+              }`}
+            >
+              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center shadow-xs ${
+                isLightMode ? 'bg-slate-100 border-slate-200' : 'bg-white/10 border-white/20'
+              }`}>
+                <div className={`w-2.5 h-2.5 rotate-45 ${
+                  isLightMode ? 'bg-slate-900' : 'bg-white'
+                }`} />
+              </div>
+              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase ${
+                isLightMode ? 'text-slate-900' : 'text-white'
+              }`}>
+                KoHot
+              </span>
             </div>
-            <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
-              isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
-            }`}>
-              KoHot
-            </span>
-          </button>
+          ) : (
+            <button
+              id="legacy-wall-top-kohot-btn"
+              type="button"
+              onClick={() => {
+                if (onBackToLanding) {
+                  onBackToLanding();
+                } else {
+                  window.location.hash = '#home';
+                }
+                window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+              }}
+              className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
+                isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
+              }`}
+              title="Return to KoHot Website"
+            >
+              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
+                isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
+              }`}>
+                <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
+                  isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
+                }`} />
+              </div>
+              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
+                isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
+              }`}>
+                KoHot
+              </span>
+            </button>
+          )}
 
           <div className="flex items-center gap-3">
             {/* Context-aware Light/Dark Mode Switcher */}
@@ -418,6 +502,24 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                 </>
               )}
             </button>
+
+            {/* Admin Sign In at Top Right Corner (Profile & Notification icons removed from Legacy Wall) */}
+            {!isAlbumAdmin && (
+              <button
+                id="legacy-wall-top-admin-signin-btn"
+                type="button"
+                onClick={onOpenLogin}
+                className={`px-3.5 py-1.5 rounded-full border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs hover:scale-105 active:scale-95 shrink-0 font-mono-tech text-xs uppercase font-semibold ${
+                  isLightMode
+                    ? 'bg-slate-900 hover:bg-black border-slate-900 text-white'
+                    : 'bg-white hover:bg-zinc-200 border-white text-black'
+                }`}
+                title="Admin Sign In"
+              >
+                <Lock className="w-3 h-3 text-[#d4af37]" />
+                <span>Admin Sign In</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -465,8 +567,8 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
               )}
             </div>
 
-            {/* Department and University Names: University name on top (less prominent), Department name below */}
-            <div className="space-y-1 pt-1 animate-slide-up-fade" style={{ animationDelay: '100ms' }}>
+            {/* Department and University Names: University name on top (less prominent), Department name below, plus inviting subtext */}
+            <div className="space-y-1.5 pt-1 animate-slide-up-fade" style={{ animationDelay: '100ms' }}>
               <p className="font-syne font-semibold text-xs sm:text-sm text-zinc-400 tracking-wider uppercase text-center">
                 {universityDisplayName.toUpperCase()}
               </p>
@@ -477,6 +579,9 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                     ? currentDepartment.name.toUpperCase()
                     : `DEPARTMENT OF ${currentDepartment.name.toUpperCase()}`}
               </h1>
+              <p className="font-body text-xs sm:text-sm text-[#d4af37] tracking-wide pt-1 text-center">
+                Tap any graduating class below to step inside their album and meet the set.
+              </p>
             </div>
           </div>
         </div>
@@ -564,85 +669,6 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
 
                 {/* Train Carriages Grid / List */}
                 <div className="space-y-6 sm:space-y-8">
-                  {/* Next Year Continuation Album Card on Timeline - Strictly reserved for invited new class set admin */}
-                  {inviteContext && (
-                    <div className="relative group animate-slide-up-fade">
-                      {/* Side Timeline Bar Year Station Node */}
-                      <div className="absolute -left-7 sm:-left-12 md:-left-14 top-6 -translate-x-1/2 z-20 flex items-center justify-center pointer-events-none">
-                        <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[10px] sm:text-[11px] font-mono-tech font-bold border-2 border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 shadow-md">
-                          <span>{nextContinuationYear}</span>
-                        </div>
-                      </div>
-
-                      {/* Connector Link between Timeline Bar and Card */}
-                      <div className="absolute -left-3.5 sm:-left-6 md:-left-7 top-9 w-3.5 sm:w-6 md:w-7 h-px bg-amber-400 pointer-events-none" />
-
-                      {/* Continuation Card Styled Like Album Card */}
-                      <div
-                        id="next-class-continuation-card"
-                        onClick={() => {
-                          if (inviteContext && onOpenOnboardingWithInvite) {
-                            onOpenOnboardingWithInvite({
-                              inviteCode: inviteContext.inviteCode || 'CONTINUATION',
-                              departmentId: currentDepartment.id,
-                              universityId: currentUniversity.id,
-                              targetYear: nextContinuationYear,
-                              fromYear: nextContinuationYear - 1,
-                            });
-                          } else {
-                            onOpenOnboarding();
-                          }
-                        }}
-                        className={`group/card relative rounded-2xl border-2 border-dashed border-amber-500/50 overflow-hidden transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl cursor-pointer select-none max-w-4xl ${
-                          isLightMode
-                            ? 'bg-amber-50/40 hover:bg-amber-50/70 text-zinc-900 shadow-sm'
-                            : 'bg-[#18181b]/80 hover:bg-[#18181b] text-white shadow-md'
-                        }`}
-                      >
-                        <div className="flex flex-col md:flex-row items-stretch">
-                          <div className="relative h-44 sm:h-48 md:h-auto md:w-72 lg:w-80 shrink-0 overflow-hidden bg-amber-500/10 flex flex-col items-center justify-center p-6 text-center">
-                            <span className="font-mono-tech text-[10px] uppercase tracking-widest text-[#d4af37] font-bold">
-                              Incoming Relay Station
-                            </span>
-                            <h4 className="font-syne font-extrabold text-2xl text-slate-900 dark:text-white mt-1">
-                              Class of {nextContinuationYear}
-                            </h4>
-                            <span className="text-[11px] font-mono-tech text-amber-600 dark:text-amber-400 mt-1 font-semibold">
-                              Upcoming Cohort Album
-                            </span>
-                          </div>
-
-                          <div className="p-5 sm:p-6 flex-1 flex flex-col justify-between">
-                            <div className="space-y-2">
-                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech font-bold uppercase tracking-wider bg-amber-500/15 text-amber-900 dark:text-amber-300 border border-amber-500/30 inline-block">
-                                {nextContinuationYear} Continuation
-                              </span>
-                              <h3 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white group-hover/card:text-[#d4af37] transition-colors">
-                                {currentDepartment.name} — Class of {nextContinuationYear}
-                              </h3>
-                              <p className={`font-body text-xs leading-relaxed max-w-2xl ${isLightMode ? 'text-slate-600' : 'text-zinc-300'}`}>
-                                The continuous legacy train moves forward! Start your cohort album to join the continuous legacy train and preserve your class milestone.
-                              </p>
-                            </div>
-
-                            <div className={`pt-4 mt-3 border-t flex items-center justify-between text-xs ${isLightMode ? 'border-amber-200/60' : 'border-amber-500/20'}`}>
-                              <span className="text-[11px] font-mono-tech text-[#d4af37] font-semibold">
-                                Open for Class Album Admin
-                              </span>
-                              <button
-                                type="button"
-                                className="px-4 py-2 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
-                              >
-                                <span>Create Class Album</span>
-                                <ArrowRight className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
                   {timelineSets.map((set, setIndex) => {
                     const studentCount = set.students?.length || 0;
                     const isLatest = setIndex === 0;
@@ -688,8 +714,53 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                               : 'bg-[#18181b] text-white border-zinc-800 hover:border-zinc-700 shadow-md'
                           } ${
                             isActive ? 'border-2 !border-[#d4af37] shadow-md ring-2 ring-[#d4af37]/20' : ''
+                          } ${
+                            set.deletedAt ? 'ring-2 ring-red-500/40' : ''
                           }`}
                         >
+                          {/* Host-Only Deleted Album Indicator & Keep Control */}
+                          {isMasterHost && set.deletedAt && (() => {
+                            const daysPassed = Math.floor((Date.now() - new Date(set.deletedAt).getTime()) / (1000 * 60 * 60 * 24));
+                            const daysRemaining = Math.max(0, 30 - daysPassed);
+                            return (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                className="px-4 py-2.5 bg-red-950/90 border-b border-red-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-white"
+                              >
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="px-2 py-0.5 rounded-full bg-red-500 text-white font-mono-tech text-[10px] uppercase font-bold">
+                                    Deleted by Admin
+                                  </span>
+                                  <span className="font-mono-tech text-[11px] text-red-200">
+                                    {set.keptByHostOnly
+                                      ? 'Kept by Host • Visible Only to Host'
+                                      : `Purges permanently in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} unless recovered or kept`}
+                                  </span>
+                                </div>
+                                {onUpdateSet && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const nextKept = !set.keptByHostOnly;
+                                      onUpdateSet({
+                                        ...set,
+                                        keptByHostOnly: nextKept,
+                                        keptByHostAt: nextKept ? new Date().toISOString() : undefined,
+                                      });
+                                    }}
+                                    className={`px-3 py-1 rounded-full font-mono-tech text-[10px] uppercase font-bold transition-colors cursor-pointer border ${
+                                      set.keptByHostOnly
+                                        ? 'bg-amber-500 text-black border-amber-400 hover:bg-amber-400'
+                                        : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                    }`}
+                                  >
+                                    {set.keptByHostOnly ? '✓ Kept (Host Only)' : 'Keep Album (Host Only)'}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <div className="flex flex-col md:flex-row items-stretch">
                             {/* Thumbnail Banner */}
                             <div className="relative h-44 sm:h-48 md:h-auto md:w-72 lg:w-80 shrink-0 overflow-hidden bg-slate-100">
@@ -816,8 +887,8 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
       <footer className="mt-auto py-10 border-t border-zinc-800 bg-black text-xs font-mono-tech text-zinc-400 relative z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-8 space-y-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-6 pb-6 border-b border-zinc-800">
-            {/* KoHot Logo */}
-            {isPlaqueOrSharedWall || currentUser?.role === 'class_rep' ? (
+            {/* KoHot Logo: Non-clickable static badge for Album Admin & Host */}
+            {isAlbumAdmin ? (
               <div
                 id="legacy-wall-footer-kohot-badge"
                 className="flex items-center gap-2 text-white select-none"
@@ -851,20 +922,6 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                 </span>
               </button>
             )}
-
-            {/* Sign In / Dashboard Button */}
-            <div className="flex items-center gap-2">
-              <button
-                id="legacy-wall-footer-signin-btn"
-                type="button"
-                onClick={currentUser ? onOpenDashboard : onOpenLogin}
-                className="px-3.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-[11px] font-mono-tech text-white border border-zinc-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm font-semibold"
-                title={currentUser ? `Signed in as ${currentUser.fullName || 'User'} - Click to manage` : 'Sign In to your account'}
-              >
-                <Lock className="w-3 h-3 text-[#d4af37]" />
-                <span className="font-semibold">{currentUser ? 'Dashboard' : 'Sign In'}</span>
-              </button>
-            </div>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-zinc-400">
@@ -918,75 +975,6 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
         onClose={() => setIsHelpOpen(false)}
         onOpenOnboarding={onOpenOnboarding}
       />
-
-      {/* PERSISTENT CONTEXTUAL CTA: INCOMING CLASS REPRESENTATIVE INVITATION */}
-      {inviteContext && onOpenOnboardingWithInvite && (
-        <div
-          id="legacy-wall-contextual-invite-bar"
-          className="fixed bottom-5 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 max-w-xl w-[92%] sm:w-auto bg-[#18181b]/95 border border-amber-400/40 rounded-full px-4 sm:px-5 py-2.5 sm:py-3 shadow-2xl backdrop-blur-xl flex items-center justify-between gap-3 sm:gap-4 text-white animate-fadeIn"
-        >
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <div className="w-8 h-8 rounded-full bg-amber-400/20 border border-amber-400/40 flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4 text-amber-300" />
-            </div>
-            <div className="min-w-0">
-              <span className="text-[10px] font-mono-tech uppercase tracking-wider text-amber-300 block leading-tight">
-                Incoming Class Representative
-              </span>
-              <span className="font-syne font-bold text-xs sm:text-sm text-white truncate block">
-                Your Class — {inviteContext.targetNextYear}
-              </span>
-            </div>
-          </div>
-          <button
-            id="legacy-wall-contextual-create-btn"
-            onClick={() =>
-              onOpenOnboardingWithInvite({
-                inviteCode: inviteContext.inviteCode || 'BATON',
-                departmentId: currentDepartment.id,
-                universityId: currentUniversity.id,
-                targetYear: inviteContext.targetNextYear,
-                fromYear: inviteContext.fromClassYear,
-              })
-            }
-            className="px-3.5 sm:px-4 py-1.5 rounded-full bg-gradient-to-r from-amber-400 to-amber-300 hover:from-amber-300 hover:to-amber-200 text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md hover:scale-105 active:scale-95 flex items-center gap-1.5 shrink-0"
-          >
-            <span>Create Your Class Album</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Floating Create Class Album CTA Button - Lower Left, aligned with Arrow Up button on the right - strictly reserved for invited next album admin */}
-      {inviteContext && (
-        <button
-          id="floating-create-album-btn"
-          type="button"
-          onClick={() => {
-            if (onOpenOnboardingWithInvite) {
-              onOpenOnboardingWithInvite({
-                inviteCode: inviteContext.inviteCode || 'BATON',
-                departmentId: currentDepartment.id,
-                universityId: currentUniversity.id,
-                targetYear: nextContinuationYear,
-                fromYear: nextContinuationYear - 1,
-              });
-            } else {
-              onOpenOnboarding();
-            }
-          }}
-          className="fixed bottom-6 right-20 z-50 px-4 sm:px-5 py-3 rounded-full bg-slate-900 hover:bg-black dark:bg-[#18181b] dark:hover:bg-zinc-800 text-white font-syne font-bold text-xs uppercase tracking-wider shadow-2xl backdrop-blur-xl border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer flex items-center gap-2 group"
-          style={{
-            position: 'fixed',
-            right: '5.25rem',
-            bottom: '1.5rem',
-          }}
-          title="Create Class Album"
-        >
-          <span className="w-2.5 h-2.5 rounded-full bg-[#d4af37] animate-pulse" />
-          <span>Create Class Album</span>
-        </button>
-      )}
     </div>
   );
 };

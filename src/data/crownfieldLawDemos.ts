@@ -556,9 +556,11 @@ Through rigorous moot court trials, marathon drafting sessions at the Faculty La
       },
     ],
     socials: {
+      youtube: 'https://youtube.com/@crownfieldlaw',
       instagram: '@crownfield_trailblazers23',
       linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
       twitter: '@crownfield_law',
+      website: 'https://law.crownfield.edu.ng',
     },
   },
 
@@ -608,9 +610,11 @@ From founding the Legal Aid Clinic to representing Crownfield at international t
       },
     ],
     socials: {
+      youtube: 'https://youtube.com/@crownfieldlaw',
       instagram: '@crownfield_phoenix24',
       linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
       twitter: '@crownfield_law',
+      website: 'https://law.crownfield.edu.ng',
     },
   },
 
@@ -660,9 +664,11 @@ As we stand on the threshold of our Call to Bar, we leave behind a department ri
       },
     ],
     socials: {
+      youtube: 'https://youtube.com/@crownfieldlaw',
       instagram: '@crownfield_frontiers25',
       linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
       twitter: '@crownfield_law',
+      website: 'https://law.crownfield.edu.ng',
     },
   },
 
@@ -712,9 +718,11 @@ To our professors, mentors, and the three illustrious classes who paved the way 
       },
     ],
     socials: {
+      youtube: 'https://youtube.com/@crownfieldlaw',
       instagram: '@crownfield_apex26',
       linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
       twitter: '@crownfield_law',
+      website: 'https://law.crownfield.edu.ng',
     },
   },
 ];

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   UniversityDirectoryItem, 
   ClassSet, 
@@ -13,26 +13,38 @@ import {
   X, 
   Building2, 
   CheckCircle2, 
-  ShieldCheck, 
   ArrowRight, 
   ArrowLeft, 
   AlertCircle, 
-  Mail, 
   Sparkles, 
-  ChevronRight, 
   Send, 
-  LogIn,
   Search,
   Check,
   CreditCard,
   Clock,
   Phone,
-  HelpCircle
+  HelpCircle,
+  Loader2,
+  Mail,
+  Lock,
+  ShieldCheck
 } from 'lucide-react';
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 import { AlbumAdminHelpModal } from '../admin/AlbumAdminHelpModal';
 import { PaystackModal } from '../common/PaystackModal';
-import { verifyPaystackPaymentOnServer, STANDARD_PRICE, HOST_EMAIL, requestGoogleSignupToken, fetchAuthConfig } from '../../utils/apiClient';
+import {
+  verifyPaystackPaymentOnServer,
+  STANDARD_PRICE,
+  authenticateWithOAuthPayload,
+  requestGoogleSignupToken,
+  createFreeAlbumOnD1,
+} from '../../utils/apiClient';
+import {
+  triggerGoogleOAuthPopup,
+  triggerAppleOAuthPopup,
+  OAuthVerifyPayload,
+} from '../../utils/firebaseAuth';
+import { VerifiedSignupSession } from '../auth/LoginModal';
 
 interface OnboardingModalProps {
   isOpen: boolean;
@@ -41,6 +53,7 @@ interface OnboardingModalProps {
   sets: ClassSet[];
   foundingRequests?: FoundingClassRequest[];
   currentUser?: UserAccount | null;
+  verifiedSignupSession?: VerifiedSignupSession | null;
   inviteContext?: NextClassInviteContext | null;
   onLoginSuccess?: (user: UserAccount) => void;
   onOpenLogin?: () => void;
@@ -50,16 +63,18 @@ interface OnboardingModalProps {
   onRegisterSuccess: (newSet: ClassSet, userAccount: UserAccount, tx: FinancialTransaction) => void;
   onSubmitFoundingRequest: (req: FoundingClassRequest) => void;
   onRequestAddition: (req: DepartmentAdditionRequest) => void;
+  logoUrl?: string;
+  brandName?: string;
 }
 
 type OnboardingStep = 1 | 2 | 3 | 4 | 5;
 
 const STEPS_CONFIG = [
-  { step: 1, title: 'Account', desc: 'Google Verification' },
+  { step: 1, title: 'Sign Up', desc: 'Verified Account' },
   { step: 2, title: 'Class', desc: 'Cohort Details' },
   { step: 3, title: 'Album Admin', desc: 'Applicant Authority' },
   { step: 4, title: 'Backup Contact', desc: 'Recovery Continuity' },
-  { step: 5, title: 'Pricing & Submit', desc: 'Final Verification' },
+  { step: 5, title: 'Review & Create', desc: 'Instant Draft Access' },
 ];
 
 export const OnboardingModal: React.FC<OnboardingModalProps> = ({
@@ -68,31 +83,33 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   universities = [],
   sets = [],
   foundingRequests = [],
-  currentUser = null,
+  verifiedSignupSession = null,
   inviteContext = null,
   onLoginSuccess,
-  onOpenLogin,
   initialUniversityId,
   initialDepartmentName,
   initialGraduationYear,
   onRegisterSuccess,
   onSubmitFoundingRequest,
   onRequestAddition,
+  logoUrl,
+  brandName = 'KOHOT',
 }) => {
   useStaticBackdropScrollLock(isOpen);
 
   // Step State
   const [currentStep, setCurrentStep] = useState<OnboardingStep>(1);
 
-  // Step 1: Admin Account Details (Verified with Google)
+  // Step 1: Admin Account Details (Verified via Google or Apple)
   const [adminFullName, setAdminFullName] = useState<string>('');
   const [adminEmail, setAdminEmail] = useState<string>('');
   const [adminPhone, setAdminPhone] = useState<string>('');
   const [isGoogleVerified, setIsGoogleVerified] = useState<boolean>(false);
+  const [verifiedProvider, setVerifiedProvider] = useState<'google' | 'apple'>('google');
   const [signupToken, setSignupToken] = useState<string>('');
-  const [isVerifyingGoogle, setIsVerifyingGoogle] = useState<boolean>(false);
+  const [activeOAuthProvider, setActiveOAuthProvider] = useState<'google' | 'apple' | null>(null);
   const [activeUser, setActiveUser] = useState<UserAccount | null>(null);
-  const googleSignupBtnContainerRef = useRef<HTMLDivElement>(null);
+  const [existingAdminAccount, setExistingAdminAccount] = useState<UserAccount | null>(null);
 
   // Determine if this is a Subsequent Class Relay Handover path
   const isRelayMode = Boolean(inviteContext && inviteContext.inviteCode);
@@ -268,7 +285,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   // Strict matching by institution ID + department ID + graduation year
   // =========================================================================
 
-  // Rule C.2.a: Same year blocked for everyone
+  // Rule C.2.a: Same year blocked for everyone (ignore soft-deleted albums past 30 days if not kept)
   const duplicateOfficialAlbum = useMemo(() => {
     if (!currentUni?.id || !selectedDepartmentId || !graduationYear) return null;
     return (
@@ -276,25 +293,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         (s) =>
           (s.institutionId === currentUni.id || s.universityId === currentUni.id) &&
           s.departmentId === selectedDepartmentId &&
-          s.graduationYear === Number(graduationYear)
+          s.graduationYear === Number(graduationYear) &&
+          !s.deletedAt
       ) || null
     );
   }, [sets, currentUni, selectedDepartmentId, graduationYear]);
 
-  const duplicatePendingFounding = useMemo(() => {
-    if (!currentUni?.id || !selectedDepartmentId || !graduationYear) return null;
-    return (
-      foundingRequests.find(
-        (r) =>
-          r.universityId === currentUni.id &&
-          r.departmentId === selectedDepartmentId &&
-          r.classYear === Number(graduationYear) &&
-          r.status === 'Pending'
-      ) || null
-    );
-  }, [foundingRequests, currentUni, selectedDepartmentId, graduationYear]);
-
-  const isSameYearBlocked = Boolean(duplicateOfficialAlbum || duplicatePendingFounding);
+  const isSameYearBlocked = Boolean(duplicateOfficialAlbum);
 
   // Department cohort counts across all years
   const departmentAlbumsCount = useMemo(() => {
@@ -302,37 +307,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     return sets.filter(
       (s) =>
         (s.institutionId === currentUni.id || s.universityId === currentUni.id) &&
-        s.departmentId === selectedDepartmentId
+        s.departmentId === selectedDepartmentId &&
+        !s.deletedAt
     ).length;
   }, [sets, currentUni, selectedDepartmentId]);
 
-  const departmentPendingFoundingCount = useMemo(() => {
-    if (!currentUni?.id || !selectedDepartmentId) return 0;
-    return foundingRequests.filter(
-      (r) =>
-        r.universityId === currentUni.id &&
-        r.departmentId === selectedDepartmentId &&
-        r.status === 'Pending'
-    ).length;
-  }, [foundingRequests, currentUni, selectedDepartmentId]);
-
-  // Rule C.2.b: Founding Class (No album of any year & no pending founding request)
-  const isFoundingClass = departmentAlbumsCount === 0 && departmentPendingFoundingCount === 0;
+  // Rule C.2.b: Founding Class (No active album of any year in this department)
+  const isFoundingClass = departmentAlbumsCount === 0;
 
   // Rule C.2.c: Standard Class (Department already has at least one album and not blocked)
   const isStandardClass = departmentAlbumsCount > 0 && !isSameYearBlocked;
 
-  // Rule C.2.d: Department has a pending founding request awaiting approval and a different year tries to register
-  const isDeptFoundingPendingDifferentYear = useMemo(() => {
-    if (!currentUni?.id || !selectedDepartmentId) return false;
-    return foundingRequests.some(
-      (r) =>
-        r.universityId === currentUni.id &&
-        r.departmentId === selectedDepartmentId &&
-        r.status === 'Pending' &&
-        r.classYear !== Number(graduationYear)
-    );
-  }, [foundingRequests, currentUni, selectedDepartmentId, graduationYear]);
+  const isDeptFoundingPendingDifferentYear = false;
 
   // Pricing calculation
   const perGraduateEstimate = useMemo(() => {
@@ -340,7 +326,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     return Math.round((STANDARD_PRICE / estimatedGraduates) / 10) * 10;
   }, [estimatedGraduates]);
 
-  // Reset form on open
+  // Reset form on open (never pre-fill seyidan03@gmail.com; only use verifiedSignupSession if handed off)
   useEffect(() => {
     if (isOpen) {
       setCurrentStep(1);
@@ -349,15 +335,26 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       setIsFoundingSubmitted(false);
       setIsAlbumAdminHelpOpen(false);
       setIsPaystackOpen(false);
+      setActiveOAuthProvider(null);
+      setExistingAdminAccount(null);
 
-      if (currentUser && currentUser.email) {
-        setAdminEmail(currentUser.email);
-        setAdminFullName(currentUser.fullName);
-        setAdminPhone(currentUser.phone || '');
+      if (verifiedSignupSession && verifiedSignupSession.email) {
+        setAdminEmail(verifiedSignupSession.email);
+        setAdminFullName('');
+        setAdminPhone('');
+        setSignupToken(verifiedSignupSession.signupToken || '');
+        setVerifiedProvider(verifiedSignupSession.provider || 'google');
         setIsGoogleVerified(true);
+      } else {
+        setAdminEmail('');
+        setAdminFullName('');
+        setAdminPhone('');
+        setSignupToken('');
+        setIsGoogleVerified(false);
+        setActiveUser(null);
       }
     }
-  }, [isOpen, currentUser]);
+  }, [isOpen, verifiedSignupSession]);
 
   // Handle department addition submission
   const handleSubmitAddition = (e: React.FormEvent) => {
@@ -381,75 +378,87 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     setTimeout(() => setAdditionSentToast(false), 4000);
   };
 
-  // Real Google Identity Services (GSI) Button Integration at Step 1
-  useEffect(() => {
-    if (!isOpen || currentStep !== 1 || isGoogleVerified) return;
+  // Real OAuth Popup Handlers (Sign up with Google & Apple)
+  // If the email already owns an album, open its dashboard immediately instead of onboarding
+  const handleOAuthVerify = async (provider: 'google' | 'apple') => {
+    setValidationError(null);
+    setExistingAdminAccount(null);
+    setActiveOAuthProvider(provider);
 
-    let isCancelled = false;
-    let timer: any;
+    try {
+      const oauthResult =
+        provider === 'google'
+          ? await triggerGoogleOAuthPopup()
+          : await triggerAppleOAuthPopup();
 
-    const initGsi = async () => {
-      const { googleClientId } = await fetchAuthConfig();
-      if (isCancelled) return;
+      const signupRes = await requestGoogleSignupToken({
+        provider: oauthResult.provider,
+        idToken: oauthResult.idToken,
+        accessToken: oauthResult.accessToken,
+        nameHint: oauthResult.name,
+      });
 
-      if (!googleClientId) {
-        setValidationError("Sign-in isn't set up yet.");
+      setActiveOAuthProvider(null);
+
+      if (signupRes.success && signupRes.signupToken && signupRes.email) {
+        const normalizedEmail = signupRes.email.toLowerCase().trim();
+
+        // Check if this Google email already owns an album; if so, open its dashboard immediately
+        const existingAlbum = sets.find(
+          (s) => s.classRepEmail && s.classRepEmail.toLowerCase().trim() === normalizedEmail
+        );
+        if (existingAlbum) {
+          // Also establish authenticated session via OAuth if possible
+          const loginRes = await authenticateWithOAuthPayload({
+            provider: oauthResult.provider,
+            idToken: oauthResult.idToken,
+            accessToken: oauthResult.accessToken,
+            nameHint: oauthResult.name,
+          });
+          const userAccount: UserAccount = loginRes.user || {
+            id: existingAlbum.currentAdminUserId || `usr-rep-${existingAlbum.id}`,
+            fullName: existingAlbum.classRepName || oauthResult.name || 'Class Representative',
+            email: normalizedEmail,
+            phone: existingAlbum.classRepPhone || '',
+            role: 'class_rep',
+            assignedSetId: existingAlbum.id,
+          };
+          if (onLoginSuccess) {
+            onLoginSuccess(userAccount);
+          }
+          onClose();
+          return;
+        }
+
+        setSignupToken(signupRes.signupToken);
+        setAdminEmail(signupRes.email);
+        if (oauthResult.name && !adminFullName.trim()) {
+          setAdminFullName(oauthResult.name);
+        }
+        setVerifiedProvider(provider);
+        setIsGoogleVerified(true);
+      } else {
+        setValidationError(
+          signupRes.message || 'Authentication failed. Please try again.'
+        );
+      }
+    } catch (err: any) {
+      setActiveOAuthProvider(null);
+      const code = String(err?.message || err?.code || '');
+      if (
+        code.includes('popup_closed') ||
+        code.includes('popup-closed-by-user') ||
+        code.includes('cancelled') ||
+        code.includes('user_cancelled')
+      ) {
         return;
       }
-
-      const setupGoogleBtn = () => {
-        if (isCancelled) return;
-        if (typeof window !== 'undefined' && (window as any).google?.accounts?.id && googleSignupBtnContainerRef.current) {
-          try {
-            (window as any).google.accounts.id.initialize({
-              client_id: googleClientId,
-              callback: async (response: any) => {
-                if (response?.credential) {
-                  setIsVerifyingGoogle(true);
-                  setValidationError(null);
-                  const res = await requestGoogleSignupToken(response.credential);
-                  setIsVerifyingGoogle(false);
-                  if (res.success && res.signupToken && res.email) {
-                    setSignupToken(res.signupToken);
-                    setAdminEmail(res.email);
-                    if (res.name) {
-                      setAdminFullName(res.name);
-                    }
-                    setIsGoogleVerified(true);
-                  } else {
-                    console.error('[GoogleSignup error]', res.error, res.message);
-                    setValidationError(res.message || 'Google verification failed. Please try again.');
-                  }
-                }
-              },
-            });
-            googleSignupBtnContainerRef.current.innerHTML = '';
-            (window as any).google.accounts.id.renderButton(googleSignupBtnContainerRef.current, {
-              theme: 'outline',
-              size: 'large',
-              type: 'standard',
-              shape: 'pill',
-              text: 'signup_with',
-              width: 280,
-            });
-          } catch (e) {
-            console.error('[GoogleSignup button render error]', e);
-          }
-        } else {
-          timer = setTimeout(setupGoogleBtn, 300);
-        }
-      };
-
-      setupGoogleBtn();
-    };
-
-    initGsi();
-
-    return () => {
-      isCancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [isOpen, currentStep, isGoogleVerified]);
+      setValidationError(
+        err?.message ||
+          `Unable to complete ${provider === 'google' ? 'Google' : 'Apple'} authentication. Please try again.`
+      );
+    }
+  };
 
   // Step Navigations
   const goToNextStep = () => {
@@ -458,7 +467,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     // Step 1 Validation
     if (currentStep === 1) {
       if (!isGoogleVerified || !adminEmail.trim()) {
-        setValidationError('Please sign in with your verified Google Account before proceeding.');
+        setValidationError('Please continue with Google or Apple to verify your administrator account before proceeding.');
         return;
       }
       if (!adminFullName.trim()) {
@@ -541,97 +550,171 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     }
   };
 
-  // Final Action Handler at Step 5
+  // Final Action Handler at Step 5 — Free Registration (Draft Status, Instant Dashboard Access)
   const handleInitiateFinalAction = () => {
     setValidationError(null);
 
-    // Re-check duplicate rules immediately before payment or submission
     if (isSameYearBlocked) {
       setValidationError('An official class album already exists for this graduating year.');
       setCurrentStep(2);
       return;
     }
-    if (isDeptFoundingPendingDifferentYear) {
-      setValidationError('A founding request for this department is awaiting approval. Please try again after it\'s approved.');
-      setCurrentStep(2);
-      return;
-    }
 
-    if (isFoundingClass) {
-      // Founding Path: Free, requires Host approval
-      handleFoundingSubmit();
-    } else {
-      // Standard Path: Paid ₦50,000 via Paystack
-      setIsPaystackOpen(true);
-    }
+    handleFreeAlbumCreate();
   };
 
-  // Founding Class Submit Flow (Free, Needs Approval)
-  const handleFoundingSubmit = () => {
+  // Free Registration Submit Flow (Creates Draft Album in D1 + Credits KoHot Slot Allocation if matched)
+  const handleFreeAlbumCreate = async () => {
     setIsSubmitting(true);
+    setValidationError(null);
     const nowIso = new Date().toISOString();
-    const effectiveAdmin = activeUser || {
-      id: `usr-rep-${Date.now()}`,
-      fullName: adminFullName.trim() || 'Class Representative',
-      email: adminEmail.trim().toLowerCase(),
-      phone: (repPhone || adminPhone).trim(),
-      role: 'class_rep',
-    };
-
-    const effectiveRole = applicantRole === 'Other' && customRole.trim() ? customRole.trim() : applicantRole;
+    const newAlbumId = `${currentUni.id}-${selectedDepartmentId.replace(/^dept-/, '')}-${graduationYear}`;
     const effectiveSetName = classSetName.trim()
       ? formatClassSetName(classSetName, graduationYear)
       : `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`;
 
-    const foundingReq: FoundingClassRequest = {
-      id: `founding-req-${Date.now()}`,
-      universityId: currentUni.id,
-      universityName: currentUni.name,
-      facultyName: currentDeptItem?.faculty || 'General Faculty',
+    const effectiveAdmin: UserAccount = {
+      id: activeUser?.id || `usr-rep-${Date.now()}`,
+      fullName: adminFullName.trim() || 'Class Representative',
+      email: adminEmail.trim().toLowerCase(),
+      phone: (repPhone || adminPhone).trim(),
+      role: 'class_rep',
+      assignedSetId: newAlbumId,
+    };
+
+    const reference = `KOHOT-REG-${Math.floor(10000 + Math.random() * 90000)}`;
+
+    const newAlbumSet: ClassSet = {
+      id: newAlbumId,
+      institutionId: currentUni.id,
+      institutionName: currentUni.name,
+      institutionLogoUrl: currentUni.logoUrl,
       departmentId: selectedDepartmentId,
       departmentName: selectedDepartmentName,
-      classYear: Number(graduationYear),
+      faculty: currentDeptItem?.faculty || 'General Faculty',
+      graduationYear: Number(graduationYear),
       classSetName: effectiveSetName,
       classSlogan: classMotto.trim() || undefined,
-      yearsTogether: Number(academicYears) || 4,
-      applicantRole: effectiveRole,
-      applicantName: effectiveAdmin.fullName,
-      applicantEmail: effectiveAdmin.email,
-      applicantPhone: (repPhone || adminPhone).trim(),
+      academicYears: Number(academicYears) || 4,
+      estimatedGraduatesCount: Number(estimatedGraduates) || 100,
+      classRepName: effectiveAdmin.fullName,
+      classRepEmail: effectiveAdmin.email,
+      classRepPhone: (repPhone || adminPhone).trim(),
+      currentAdminUserId: effectiveAdmin.id,
       backupContact: {
         fullName: backupName.trim(),
         phoneOrWhatsapp: backupPhone.trim(),
         email: backupEmail.trim() || undefined,
         relationshipOrRole: backupRole.trim() || undefined,
       },
-      estimatedGraduatesCount: Number(estimatedGraduates) || 100,
-      status: 'Pending',
-      submissionDate: nowIso.split('T')[0],
+      adminHistory: [
+        {
+          adminUserId: effectiveAdmin.id,
+          adminName: effectiveAdmin.fullName,
+          adminEmail: effectiveAdmin.email,
+          adminPhone: (repPhone || adminPhone).trim(),
+          appointedAt: nowIso,
+          reasonForTransition: 'initial_founder',
+          notes: `Official Class Album registered for ${selectedDepartmentName} (Class of ${graduationYear}).`,
+        },
+      ],
+      activationStatus: 'inactive',
+      isPublished: false,
+      published: false,
+      isUnpublished: false,
+      unpublished: false,
+      version: 1,
+      profileSlotBalance: 0,
+      totalSlotsCredited: 0,
+      totalSlotsUsed: 0,
+      activationDate: nowIso.split('T')[0],
+      activationRef: reference,
+      showWelcomeMessage: true,
+      bannerImageUrl: currentDeptItem?.heroImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
+      legacyGroupImageUrl: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
+      ourStory: `Preserving the heritage of ${selectedDepartmentName}, our graduating class established this official digital archive.`,
+      students: [],
+      memories: [],
+      awards: [],
+      voices: [],
     };
 
-    // Forward to server endpoint with verified signupToken
-    fetch('/api/registrations/founding', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        universityId: currentUni.id,
-        universityName: currentUni.name,
-        departmentId: selectedDepartmentId,
-        departmentName: selectedDepartmentName,
-        classYear: Number(graduationYear),
-        classSetName: effectiveSetName,
-        applicantName: effectiveAdmin.fullName,
-        applicantPhone: (repPhone || adminPhone).trim(),
+    try {
+      const serverRes = await createFreeAlbumOnD1({
         signupToken,
-      }),
-    }).catch(() => {});
+        album: newAlbumSet,
+        institutionId: currentUni.id,
+        departmentId: selectedDepartmentId,
+        graduationYear: Number(graduationYear),
+        adminName: effectiveAdmin.fullName,
+      });
 
-    setTimeout(() => {
-      onSubmitFoundingRequest(foundingReq);
+      if (serverRes.alreadyExists && serverRes.album) {
+        const existingUser: UserAccount = serverRes.user || {
+          ...effectiveAdmin,
+          id: serverRes.album.currentAdminUserId || effectiveAdmin.id,
+          assignedSetId: serverRes.album.id,
+        };
+        setIsSubmitting(false);
+        if (onLoginSuccess) {
+          onLoginSuccess(existingUser);
+        } else {
+          onRegisterSuccess(serverRes.album, existingUser, {
+            id: `tx-free-${Date.now()}`,
+            reference,
+            date: nowIso.replace('T', ' ').slice(0, 16),
+            setId: serverRes.album.id,
+            setName: serverRes.album.classSetName,
+            institution: currentUni.name,
+            amount: 0,
+            currency: 'NGN',
+            status: 'Paid',
+            payerName: existingUser.fullName,
+            payerEmail: existingUser.email,
+          });
+        }
+        onClose();
+        return;
+      }
+
+      if (!serverRes.success) {
+        if (serverRes.error === 'duplicate_class_album') {
+          setValidationError(
+            serverRes.message || 'An official class album already exists for this institution, department, and graduating year.'
+          );
+          setCurrentStep(2);
+          setIsSubmitting(false);
+          return;
+        }
+        setValidationError(serverRes.message || 'Unable to create class album. Please try again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const persistedAlbum = serverRes.album || newAlbumSet;
+      const persistedUser = serverRes.user || effectiveAdmin;
+
+      const freeTx: FinancialTransaction = {
+        id: `tx-reg-${Date.now()}`,
+        reference,
+        date: nowIso.replace('T', ' ').slice(0, 16),
+        setId: persistedAlbum.id,
+        setName: persistedAlbum.classSetName,
+        institution: currentUni.name,
+        amount: 0,
+        currency: 'NGN',
+        status: 'Paid',
+        payerName: `${persistedUser.fullName} (Free Registration)`,
+        payerEmail: persistedUser.email,
+      };
+
       setIsSubmitting(false);
-      setIsFoundingSubmitted(true);
-      setSubmissionSuccess(true);
-    }, 600);
+      onRegisterSuccess(persistedAlbum, persistedUser, freeTx);
+      onClose();
+    } catch (err: any) {
+      setValidationError(err?.message || 'Network error while creating class album.');
+      setIsSubmitting(false);
+    }
   };
 
   // Paystack Success Handler for Standard Path
@@ -745,6 +828,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         activationStatus: 'active',
         activationDate: nowIso.split('T')[0],
         activationRef: reference,
+        showWelcomeMessage: true,
         bannerImageUrl: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
         legacyGroupImageUrl: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
         ourStory: `Preserving the heritage of ${selectedDepartmentName}, our graduating class registered this official digital archive.`,
@@ -768,10 +852,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         payerEmail: effectiveAdmin.email,
       };
 
-      onRegisterSuccess(newAlbumSet, effectiveAdmin, paidTx);
       setIsSubmitting(false);
-      setIsFoundingSubmitted(false);
-      setSubmissionSuccess(true);
+      onRegisterSuccess(newAlbumSet, effectiveAdmin, paidTx);
+      onClose();
     } catch (err: any) {
       setValidationError(err.message || 'Error completing registration after payment.');
       setIsSubmitting(false);
@@ -782,7 +865,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md animate-fadeIn"
+      id="onboarding-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create Class Album"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-fadeIn touch-none overscroll-none"
       onClick={onClose}
     >
       <div 
@@ -791,15 +878,15 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       >
         {/* Header Bar */}
         <div className="p-5 sm:p-6 border-b border-slate-200 dark:border-white/10 flex items-center justify-between shrink-0 bg-slate-50/80 dark:bg-white/[0.02]">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center shrink-0">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-full bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center shrink-0">
               <Building2 className="w-5 h-5" />
             </div>
             <div>
               <h2 className="font-syne font-bold text-base sm:text-lg text-slate-900 dark:text-white leading-tight">
                 Create Class Album
               </h2>
-              <p className="font-mono-tech text-[11px] text-slate-500 dark:text-zinc-400">
+              <p className="font-mono-tech text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
                 Official Department Archival Registration • KoHot
               </p>
             </div>
@@ -808,7 +895,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-200/60 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 text-slate-600 dark:text-zinc-300 flex items-center justify-center transition-colors cursor-pointer"
+            className="w-9 h-9 rounded-full bg-slate-200/60 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 text-slate-600 dark:text-zinc-300 flex items-center justify-center transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -868,7 +955,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         )}
 
         {/* Modal Scrollable Body */}
-        <div className="p-5 sm:p-8 flex-1 overflow-y-auto">
+        <div data-modal-scrollable="true" className="p-5 sm:p-8 flex-1 overflow-y-auto overscroll-contain">
           {submissionSuccess ? (
             /* Submission Success State */
             <div className="py-8 text-center space-y-4 animate-fadeIn">
@@ -912,111 +999,279 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           ) : (
             <>
               {/* =========================================================================
-                  STEP 1: GOOGLE ACCOUNT VERIFICATION
+                  STEP 1: BRANDED KOHOT OAUTH VERIFICATION (GOOGLE & APPLE ONLY)
                   ========================================================================= */}
               {currentStep === 1 && (
                 <div className="space-y-6 animate-fadeIn">
-                  {/* Top Switch to Sign In for Existing Admins */}
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <div className="font-syne font-bold text-xs text-slate-900 dark:text-white">
-                        Already registered as an Album Admin?
-                      </div>
-                      <div className="font-body text-[11px] text-slate-500 dark:text-zinc-400">
-                        Sign in to access your existing departmental dashboard.
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        if (onOpenLogin) onOpenLogin();
+                  {!isGoogleVerified || !adminEmail ? (
+                    /* UNVERIFIED STATE: Reference "Verify Your Identity" Card with Website KoHot Logo */
+                    <div
+                      className="kohot-dark-branded-backdrop relative rounded-[28px] border border-white/10 kohot-keep-border p-6 sm:p-9 shadow-[0_24px_60px_rgba(0,0,0,0.65)] overflow-hidden text-center"
+                      style={{
+                        backgroundColor: '#16171b',
+                        color: '#ffffff',
                       }}
-                      className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-black dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shrink-0"
                     >
-                      Sign In Instead
-                    </button>
-                  </div>
-
-                  <div className="space-y-1">
-                    <h3 className="font-syne font-bold text-base sm:text-lg text-slate-900 dark:text-white">
-                      1. Administrator Account
-                    </h3>
-                    <p className="font-body text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
-                      Sign in with Google. Your verified Google email becomes your permanent administrator email.
-                    </p>
-                  </div>
-
-                  <div className="p-5 sm:p-6 rounded-2xl bg-slate-50/50 dark:bg-white/[0.02] border border-slate-200 dark:border-white/10 space-y-4">
-                    {/* Google Verification Status */}
-                    {isGoogleVerified && adminEmail ? (
-                      <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700/60 text-emerald-900 dark:text-emerald-200 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 font-syne font-bold text-xs text-emerald-800 dark:text-emerald-300">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                            <span>Verified Google Account</span>
-                          </div>
-                          <span className="text-[10px] font-mono-tech uppercase bg-emerald-500/20 px-2 py-0.5 rounded-full text-emerald-700 dark:text-emerald-300 font-semibold">
-                            Authenticated
-                          </span>
+                      {/* Centered Website KoHot Logo Badge */}
+                      <div className="flex flex-col items-center justify-center mb-5">
+                        <div className="w-16 h-16 rounded-2xl bg-[#111216] border border-white/15 kohot-keep-border shadow-[0_12px_28px_rgba(0,0,0,0.85),inset_0_1px_1px_rgba(255,255,255,0.08)] flex flex-col items-center justify-center gap-1.5">
+                          {logoUrl ? (
+                            <img
+                              src={logoUrl}
+                              alt={brandName}
+                              className="w-9 h-9 object-contain"
+                            />
+                          ) : (
+                            <>
+                              <div className="w-5 h-5 bg-[#d4af37] rotate-45 transform shadow-[0_0_12px_rgba(212,175,55,0.45)]" />
+                              <span
+                                className="kohot-keep-color font-syne font-black text-[9px] tracking-[0.18em] uppercase leading-none mt-0.5"
+                                style={{ color: '#ffffff' }}
+                              >
+                                {brandName}
+                              </span>
+                            </>
+                          )}
                         </div>
-                        <div className="font-mono-tech text-xs font-bold text-slate-900 dark:text-white">
-                          {adminEmail}
-                        </div>
-                        <p className="text-[10px] font-mono-tech text-emerald-700 dark:text-emerald-400">
-                          This verified Google email will be used to log into your Album Admin dashboard.
-                        </p>
                       </div>
-                    ) : (
-                      <div className="space-y-3 py-2 flex flex-col items-center">
-                        {isVerifyingGoogle && (
-                          <div className="flex items-center gap-2 text-xs font-mono-tech text-amber-500 animate-pulse">
-                            <Clock className="w-3.5 h-3.5 animate-spin" />
-                            <span>Verifying Google Account...</span>
-                          </div>
-                        )}
-                        <div ref={googleSignupBtnContainerRef} id="official-google-signup-btn-container" className="flex justify-center" />
+
+                      {/* Heading & Description */}
+                      <h3
+                        className="kohot-keep-color font-syne font-extrabold text-xl sm:text-2xl tracking-tight"
+                        style={{ color: '#ffffff' }}
+                      >
+                        Sign Up to Create{' '}
+                        <span
+                          className="kohot-keep-color font-extrabold"
+                          style={{ color: '#e5b842' }}
+                        >
+                          Class Album
+                        </span>
+                      </h3>
+                      <p
+                        className="kohot-keep-color font-body text-xs sm:text-[13px] max-w-md mx-auto mt-2.5 mb-7 leading-relaxed"
+                        style={{ color: '#9ca3af' }}
+                      >
+                        Sign up with Google to verify your email address. If your email already has an album, we will open its dashboard immediately.
+                      </p>
+
+                      {/* Centered "Sign up with Google" & "Sign up with Apple" Buttons */}
+                      <div className="space-y-3.5 max-w-md mx-auto">
+                        <button
+                          type="button"
+                          disabled={activeOAuthProvider !== null}
+                          onClick={() => handleOAuthVerify('google')}
+                          className="w-full py-4 px-5 rounded-2xl bg-[#1f2026] hover:bg-[#272830] active:scale-[0.99] border border-white/10 hover:border-white/20 kohot-keep-border text-white kohot-keep-color font-syne font-bold text-sm tracking-tight flex items-center justify-center gap-3.5 transition-all shadow-md cursor-pointer disabled:opacity-60"
+                        >
+                          {activeOAuthProvider === 'google' ? (
+                            <>
+                              <Loader2 className="w-5 h-5 text-[#e5b842] animate-spin shrink-0" />
+                              <span className="text-white kohot-keep-color">Connecting to Google...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                                <path
+                                  fill="#EA4335"
+                                  d="M12 10.2v3.9h5.5c-.24 1.26-.96 2.33-2.04 3.05l3.3 2.56c1.92-1.77 3.04-4.38 3.04-7.46 0-.72-.06-1.41-.19-2.05H12z"
+                                />
+                                <path
+                                  fill="#34A853"
+                                  d="M12 22c2.75 0 5.06-.91 6.75-2.47l-3.3-2.56c-.91.61-2.08.98-3.45.98-2.65 0-4.9-1.79-5.7-4.2H2.89v2.64C4.57 19.72 8.01 22 12 22z"
+                                />
+                                <path
+                                  fill="#4A90E2"
+                                  d="M6.3 13.75A5.98 5.98 0 0 1 5.98 12c0-.61.11-1.2.32-1.75V7.61H2.89A9.98 9.98 0 0 0 2 12c0 1.61.39 3.14 1.09 4.39l3.21-2.64z"
+                                />
+                                <path
+                                  fill="#FBBC05"
+                                  d="M12 5.95c1.5 0 2.84.52 3.9 1.53l2.92-2.92C17.05 2.91 14.75 2 12 2 8.01 2 4.57 4.28 2.89 7.61l3.41 2.64c.8-2.41 3.05-4.3 5.7-4.3z"
+                                />
+                              </svg>
+                              <span className="text-white kohot-keep-color">Sign up with Google</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={activeOAuthProvider !== null}
+                          onClick={() => handleOAuthVerify('apple')}
+                          className="w-full py-4 px-5 rounded-2xl bg-[#1f2026] hover:bg-[#272830] active:scale-[0.99] border border-white/10 hover:border-white/20 kohot-keep-border text-white kohot-keep-color font-syne font-bold text-sm tracking-tight flex items-center justify-center gap-3.5 transition-all shadow-md cursor-pointer disabled:opacity-60"
+                        >
+                          {activeOAuthProvider === 'apple' ? (
+                            <>
+                              <Loader2 className="w-5 h-5 text-white animate-spin shrink-0" />
+                              <span className="text-white kohot-keep-color">Connecting to Apple...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-5 h-5 fill-white shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z" />
+                              </svg>
+                              <span className="text-white kohot-keep-color">Continue with Apple</span>
+                            </>
+                          )}
+                        </button>
                       </div>
-                    )}
 
-                    {/* Applicant Legal Name */}
-                    <div className="space-y-1.5">
-                      <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
-                        Applicant Legal Name *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={adminFullName}
-                        onChange={(e) => setAdminFullName(e.target.value)}
-                        placeholder="e.g. Oluwaseun Adeleke"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-white/5 border border-slate-300 dark:border-white/10 text-slate-900 dark:text-white font-body text-xs focus:outline-none focus:border-[#d4af37]"
-                      />
-                    </div>
-
-                    {/* WhatsApp Contact Phone */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
-                          WhatsApp / Contact Phone *
-                        </label>
-                        <span className="text-[10px] font-mono-tech text-slate-400 dark:text-zinc-500">
-                          Contact detail only
+                      {/* Bottom Security Badge Line */}
+                      <div className="mt-6 flex items-center justify-center gap-2 text-center">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span
+                          className="kohot-keep-color font-body text-xs"
+                          style={{ color: '#9ca3af' }}
+                        >
+                          Instant verified capture • Passwordless &amp; Secure
                         </span>
                       </div>
-                      <div className="relative">
-                        <Phone className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <input
-                          type="tel"
-                          required
-                          value={adminPhone}
-                          onChange={(e) => setAdminPhone(e.target.value)}
-                          placeholder="0903 000 0000"
-                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-white dark:bg-white/5 border border-slate-300 dark:border-white/10 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none focus:border-[#d4af37]"
-                        />
+                    </div>
+                  ) : (
+                    /* VERIFIED STATE: Matches Screenshot 3 */
+                    <div className="space-y-6 animate-fadeIn">
+                      {/* Top Verified via Google / Apple Emerald Banner */}
+                      <div className="kohot-dark-branded-backdrop p-4 sm:p-5 rounded-2xl bg-[#072419] border border-emerald-500/30 kohot-keep-border flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-11 h-11 rounded-full bg-emerald-950 border border-emerald-500/30 kohot-keep-border flex items-center justify-center shrink-0">
+                            {verifiedProvider === 'apple' ? (
+                              <svg className="w-5 h-5 fill-white" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z" />
+                              </svg>
+                            ) : (
+                              <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
+                                <path
+                                  fill="#EA4335"
+                                  d="M12 10.2v3.9h5.5c-.24 1.26-.96 2.33-2.04 3.05l3.3 2.56c1.92-1.77 3.04-4.38 3.04-7.46 0-.72-.06-1.41-.19-2.05H12z"
+                                />
+                                <path
+                                  fill="#34A853"
+                                  d="M12 22c2.75 0 5.06-.91 6.75-2.47l-3.3-2.56c-.91.61-2.08.98-3.45.98-2.65 0-4.9-1.79-5.7-4.2H2.89v2.64C4.57 19.72 8.01 22 12 22z"
+                                />
+                                <path
+                                  fill="#4A90E2"
+                                  d="M6.3 13.75A5.98 5.98 0 0 1 5.98 12c0-.61.11-1.2.32-1.75V7.61H2.89A9.98 9.98 0 0 0 2 12c0 1.61.39 3.14 1.09 4.39l3.21-2.64z"
+                                />
+                                <path
+                                  fill="#FBBC05"
+                                  d="M12 5.95c1.5 0 2.84.52 3.9 1.53l2.92-2.92C17.05 2.91 14.75 2 12 2 8.01 2 4.57 4.28 2.89 7.61l3.41 2.64c.8-2.41 3.05-4.3 5.7-4.3z"
+                                />
+                              </svg>
+                            )}
+                          </div>
+
+                          <div className="min-w-0">
+                            <div className="flex items-center flex-wrap gap-2">
+                              <span
+                                className="kohot-keep-color font-syne font-bold text-sm"
+                                style={{ color: '#ffffff' }}
+                              >
+                                Verified via {verifiedProvider === 'apple' ? 'Apple' : 'Google'}
+                              </span>
+                              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 kohot-keep-color font-mono-tech text-[10px] font-bold uppercase tracking-wider">
+                                AUTHENTICATED
+                              </span>
+                            </div>
+                            <p
+                              className="kohot-keep-color font-body text-xs mt-1 leading-snug"
+                              style={{ color: '#d4d4d8' }}
+                            >
+                              Email captured and verified without manual typing
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsGoogleVerified(false);
+                            setAdminEmail('');
+                            setSignupToken('');
+                          }}
+                          className="kohot-keep-color font-body text-xs underline underline-offset-4 hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-right leading-tight"
+                          style={{ color: '#d4d4d8' }}
+                        >
+                          Change
+                          <br />
+                          Account
+                        </button>
+                      </div>
+
+                      {/* Section Title & Description */}
+                      <div className="space-y-1.5">
+                        <h3 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
+                          1. Administrator Account Details
+                        </h3>
+                        <p className="font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400 leading-relaxed">
+                          Your email was auto-captured from your {verifiedProvider === 'apple' ? 'Apple' : 'Google'} account. Confirm your name and provide your WhatsApp contact number for cohort updates.
+                        </p>
+                      </div>
+
+                      {/* Form Fields Card */}
+                      <div className="p-5 sm:p-6 rounded-3xl bg-slate-50/70 dark:bg-[#16171d] border border-slate-200 dark:border-white/10 space-y-5">
+                        {/* 1. Verified Administrator Email (Locked & Auto-Captured) */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
+                              Verified Administrator Email *
+                            </label>
+                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Auto-Captured</span>
+                            </span>
+                          </div>
+                          <div className="w-full px-4 py-3.5 rounded-2xl bg-emerald-50/80 dark:bg-[#072419]/60 border border-emerald-400/50 dark:border-emerald-500/40 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <Mail className="w-4 h-4 text-slate-500 dark:text-zinc-400 shrink-0" />
+                              <span className="font-body font-bold text-xs sm:text-sm text-slate-900 dark:text-white truncate">
+                                {adminEmail}
+                              </span>
+                            </div>
+                            <Lock className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          </div>
+                        </div>
+
+                        {/* 2. Applicant Legal Name */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
+                              Applicant Legal Name *
+                            </label>
+                          </div>
+                          <input
+                            type="text"
+                            required
+                            value={adminFullName}
+                            onChange={(e) => setAdminFullName(e.target.value)}
+                            placeholder="Enter your full legal name"
+                            className="w-full px-4 py-3.5 rounded-2xl bg-white dark:bg-[#1e1f26] border border-slate-300 dark:border-white/10 text-slate-900 dark:text-white font-body text-xs sm:text-sm focus:outline-none focus:border-[#d4af37]"
+                          />
+                        </div>
+
+                        {/* 3. WhatsApp / Contact Phone */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
+                              WhatsApp / Contact Phone *
+                            </label>
+                            <span className="text-[11px] font-body text-slate-400 dark:text-zinc-500">
+                              For class notifications only
+                            </span>
+                          </div>
+                          <div className="relative">
+                            <Phone className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="tel"
+                              required
+                              value={adminPhone}
+                              onChange={(e) => setAdminPhone(e.target.value)}
+                              placeholder="0903 000 0000"
+                              className="w-full pl-11 pr-4 py-3.5 rounded-2xl bg-white dark:bg-[#1e1f26] border border-slate-300 dark:border-white/10 text-slate-900 dark:text-white font-mono-tech text-xs sm:text-sm focus:outline-none focus:border-[#d4af37]"
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
 
@@ -1251,7 +1506,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
                   </div>
 
-                  {/* DUPLICATE WARNING OR ELIGIBILITY NOTICES */}
+                  {/* DUPLICATE WARNING NOTICE */}
                   {isSameYearBlocked && (
                     <div className="p-4 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 text-red-900 dark:text-red-200 text-xs font-mono-tech space-y-2">
                       <div className="flex items-center justify-between">
@@ -1264,45 +1519,19 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </span>
                       </div>
                       <p className="leading-relaxed text-[11px]">
-                        An official class album or pending registration already exists for{' '}
+                        An official class album already exists for{' '}
                         <strong>{selectedDepartmentName} (Class of {graduationYear})</strong>. Each department cohort can have only one official album.
                       </p>
                       {duplicateOfficialAlbum && (
                         <button
                           type="button"
                           onClick={() => setIsAlbumAdminHelpOpen(true)}
-                          className="text-[11px] text-amber-700 dark:text-amber-400 hover:underline flex items-center gap-1 font-semibold pt-1"
+                          className="text-[11px] text-amber-700 dark:text-amber-400 hover:underline flex items-center gap-1 font-semibold pt-1 cursor-pointer"
                         >
                           <HelpCircle className="w-3.5 h-3.5" />
-                          <span>Claim or Dispute Administration Rights</span>
+                          <span>Report a dispute</span>
                         </button>
                       )}
-                    </div>
-                  )}
-
-                  {/* Rule C.2.d: Pending Founding Request in Department */}
-                  {isDeptFoundingPendingDifferentYear && (
-                    <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 text-xs font-mono-tech space-y-2">
-                      <div className="flex items-center gap-2 font-bold text-amber-800 dark:text-amber-300">
-                        <Clock className="w-4 h-4 text-amber-500" />
-                        <span>Founding Request Awaiting Approval</span>
-                      </div>
-                      <p className="leading-relaxed text-[11px]">
-                        A founding request for this department is awaiting approval. Please try again after it's approved.
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Founding Class Eligibility Tag */}
-                  {isFoundingClass && !isSameYearBlocked && (
-                    <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-300 text-xs font-mono-tech flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="w-4 h-4 text-[#d4af37]" />
-                        <span>Department Founding Class Eligible (Free ₦0 • Host Approval Required)</span>
-                      </div>
-                      <span className="px-2 py-0.5 rounded-full bg-[#d4af37] text-black font-bold text-[10px]">
-                        Founding
-                      </span>
                     </div>
                   )}
                 </div>
@@ -1433,16 +1662,16 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               )}
 
               {/* =========================================================================
-                  STEP 5: PRICING CARD & FINAL SUBMIT
+                  STEP 5: REVIEW & FREE ALBUM CREATION (NO PAYMENT REQUIRED)
                   ========================================================================= */}
               {currentStep === 5 && (
                 <div className="space-y-5 animate-fadeIn">
                   <div className="space-y-1">
                     <h3 className="font-syne font-bold text-base sm:text-lg text-slate-900 dark:text-white">
-                      5. Review &amp; Registration Pricing
+                      5. Review &amp; Create Class Album
                     </h3>
                     <p className="font-body text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
-                      Confirm cohort summary and complete registration.
+                      Confirm your class details below. Registration is free and opens your dashboard immediately as a private draft.
                     </p>
                   </div>
 
@@ -1472,61 +1701,22 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
                   </div>
 
-                  {/* PRICING CARD (Prompt C.3 & C.4) */}
-                  <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-br from-slate-900 to-[#18181b] text-white border border-white/20 shadow-xl space-y-4">
-                    {isFoundingClass ? (
-                      /* Founding Path: Struck-through ₦50,000, ₦0, and Founding Class badge */
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-mono-tech uppercase tracking-wider text-amber-400 font-bold">
-                            Official Department Launch
-                          </span>
-                          <span className="px-3 py-1 rounded-full bg-[#d4af37] text-black font-syne font-extrabold text-xs uppercase shadow-sm">
-                            Founding Class
-                          </span>
-                        </div>
-
-                        <div className="flex items-baseline gap-3">
-                          <span className="text-2xl text-zinc-500 line-through font-mono-tech font-bold">
-                            ₦50,000
-                          </span>
-                          <span className="text-4xl sm:text-5xl font-syne font-black text-[#d4af37]">
-                            ₦0
-                          </span>
-                        </div>
-
-                        <p className="text-xs text-zinc-300 font-body leading-relaxed">
-                          Your department has no prior albums preserved on KoHot. As the inaugural cohort, your class album registration is 100% free, pending review and verification by the Master Host.
-                        </p>
-                      </div>
-                    ) : (
-                      /* Standard Path: Flat ₦50,000 with per graduate note */
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-mono-tech uppercase tracking-wider text-zinc-400 font-bold">
-                            Official Class Album Registration
-                          </span>
-                          <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-zinc-300 font-mono-tech text-[10px]">
-                            Standard Registration
-                          </span>
-                        </div>
-
-                        <div className="flex items-baseline gap-3 flex-wrap">
-                          <span className="text-4xl sm:text-5xl font-syne font-black text-white">
-                            ₦50,000
-                          </span>
-                          {perGraduateEstimate > 0 && (
-                            <span className="text-xs font-mono-tech text-amber-400">
-                              (about ₦{perGraduateEstimate.toLocaleString()} per graduate)
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-xs text-zinc-300 font-body leading-relaxed">
-                          Includes lifetime archival preservation, official Department Legacy Wall placement, batch memories, peer voting, and graduation video showcase.
-                        </p>
-                      </div>
-                    )}
+                  {/* Instant Draft Access Summary Card (No Pricing / No Approval Gate) */}
+                  <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-br from-slate-900 to-[#18181b] text-white border border-white/20 shadow-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono-tech uppercase tracking-wider text-emerald-400 font-bold">
+                        Instant Dashboard Access
+                      </span>
+                      <span className="px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono-tech font-bold text-[10px] uppercase">
+                        Starts as Draft
+                      </span>
+                    </div>
+                    <h4 className="font-syne font-bold text-lg text-white">
+                      Ready to set up your Class Album
+                    </h4>
+                    <p className="text-xs text-zinc-300 font-body leading-relaxed">
+                      You can configure your album design, upload class moments, and invite classmates to submit their profiles right away. Profile slots or student profile payments are only needed when approving profiles and publishing live.
+                    </p>
                   </div>
                 </div>
               )}
@@ -1559,32 +1749,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             {currentStep < 5 ? (
               <button
                 type="button"
-                disabled={Boolean(currentStep === 2 && (isSameYearBlocked || isDeptFoundingPendingDifferentYear))}
+                disabled={Boolean(currentStep === 2 && isSameYearBlocked)}
                 onClick={goToNextStep}
                 className="px-6 py-2.5 rounded-full bg-slate-900 hover:bg-black dark:bg-white dark:hover:bg-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed text-white dark:text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-md active:scale-95"
               >
                 <span>Continue</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
-            ) : isFoundingClass ? (
-              /* Founding Button: "Submit" (Prompt A.6) */
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={handleInitiateFinalAction}
-                className="px-7 py-2.5 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-amber-500/20 active:scale-95"
-              >
-                {isSubmitting ? (
-                  <span>Submitting...</span>
-                ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5 text-black" />
-                    <span>Submit</span>
-                  </>
-                )}
-              </button>
             ) : (
-              /* Standard Button: "Pay ₦50,000 and Create Album" (Prompt C.4) */
               <button
                 type="button"
                 disabled={isSubmitting}
@@ -1592,11 +1764,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 className="px-7 py-2.5 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-amber-500/20 active:scale-95"
               >
                 {isSubmitting ? (
-                  <span>Processing...</span>
+                  <span>Creating Album...</span>
                 ) : (
                   <>
-                    <CreditCard className="w-3.5 h-3.5 text-black" />
-                    <span>Pay ₦50,000 and Create Class Album</span>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-black" />
+                    <span>Create Class Album</span>
                   </>
                 )}
               </button>

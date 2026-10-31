@@ -15,6 +15,12 @@ binding = "DB"
 database_name = "kohot-production-d1"
 database_id = "39d379c8-e5f3-4503-9473-f884da21d396"
 
+# Cloudflare R2 Object Storage Binding
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "kohot-media"
+
+
 # Environment Variables
 [vars]
 HOST_EMAIL = "seyidan03@gmail.com"

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Upload, X, Image as ImageIcon, Loader2, Sparkles, Sliders, CheckCircle2 } from 'lucide-react';
 import { compressImageToWebP, CompressionResult, fileToUniversalDataUrl } from '../../utils/imageCompressor';
 import { ImageCropModal, CropAspectRatio } from './ImageCropModal';
+import { uploadMediaToR2 } from '../../utils/apiClient';
 
 interface ImageDropzoneProps {
   value: string;
@@ -13,6 +14,8 @@ interface ImageDropzoneProps {
   required?: boolean;
   className?: string;
   placeholderText?: string;
+  setId?: string;
+  category?: 'portrait' | 'candid' | 'award' | 'plaque' | 'banner' | 'voice' | 'general';
 }
 
 export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
@@ -25,6 +28,8 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   required = false,
   className = '',
   placeholderText = 'Drag & drop image here, or click to browse',
+  setId,
+  category,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -73,16 +78,22 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   const handleApplyCrop = async (croppedDataUrl: string) => {
     try {
       setIsProcessing(true);
-      onChange(croppedDataUrl);
-      // Optional background calculation for dataset tracking without blocking
-      compressImageToWebP(croppedDataUrl, maxDimension, 0.88)
-        .then((res) => {
-          setStats(res);
-          onChange(res.dataUrl);
-        })
-        .catch(() => {
-          // Keep croppedDataUrl
-        });
+      // Immediately compress to optimal resolution
+      const compRes = await compressImageToWebP(croppedDataUrl, maxDimension, 0.88);
+      setStats(compRes);
+
+      // Upload to Cloudflare R2 object storage
+      const uploadRes = await uploadMediaToR2(compRes.dataUrl, {
+        setId: setId || 'general',
+        category: category || (aspectRatio === 'portrait' ? 'portrait' : 'candid'),
+      });
+
+      if (uploadRes.success && uploadRes.url) {
+        onChange(uploadRes.url);
+      } else {
+        // Fallback to compressed WebP data URL if upload unreached
+        onChange(compRes.dataUrl);
+      }
     } catch (err) {
       console.error('Cropped image processing fallback', err);
       onChange(croppedDataUrl);

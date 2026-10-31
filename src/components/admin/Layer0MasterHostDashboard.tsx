@@ -15,7 +15,7 @@ import {
 } from '../../data/initialData';
 import { CROWNFIELD_PUBLIC_LAW_SETS } from '../../data/crownfieldLawDemos';
 import { Layer1ClassRepDashboard } from './Layer1ClassRepDashboard';
-import { getTheme, applyTheme } from '../../utils/theme';
+import { getTheme, applyTheme, toggleTheme, ThemeMode } from '../../utils/theme';
 import { ImageDropzone } from '../common/ImageDropzone';
 import { 
   ArrowLeft,
@@ -53,6 +53,7 @@ import {
   Music,
   Volume2,
   Mail,
+  MessageCircle,
   Film,
   TrendingUp,
   ShoppingBag,
@@ -139,8 +140,9 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   const [albumToDelete, setAlbumToDelete] = useState<{ set: ClassSet; isPermanent: boolean } | null>(null);
   const [typedConfirmName, setTypedConfirmName] = useState('');
   const [activeTab, setActiveTab] = useState<
-    'album_demos' | 'seeder' | 'founding_requests' | 'support' | 'reminders' | 'handoffs' | 'editor' | 'analytics' | 'requests' | 'testimonials' | 'disputes'
+    'album_demos' | 'seeder' | 'reminders' | 'editor' | 'testimonials' | 'disputes'
   >('album_demos');
+  const [adminHelpSupportSubTab, setAdminHelpSupportSubTab] = useState<'admin_help' | 'support' | 'requests'>('admin_help');
   const [newSupportCount, setNewSupportCount] = useState<number>(0);
   const [editingDemoSetId, setEditingDemoSetId] = useState<string | null>(null);
   const [seedingSuccessMsg, setSeedingSuccessMsg] = useState('');
@@ -362,8 +364,27 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       : DEFAULT_LEGACY_BANNER_IMAGES
   );
 
-  // Dashboards permanently remain dark with grey shades
-  const isLightMode = false;
+  const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() => getTheme());
+  const isLightMode = currentTheme === 'light';
+
+  useEffect(() => {
+    const syncTheme = (e: Event) => {
+      const customEvent = e as CustomEvent<ThemeMode>;
+      if (customEvent.detail === 'light' || customEvent.detail === 'dark') {
+        setCurrentTheme(customEvent.detail);
+      } else {
+        setCurrentTheme(getTheme());
+      }
+    };
+    window.addEventListener('kohot_theme_changed', syncTheme);
+    return () => window.removeEventListener('kohot_theme_changed', syncTheme);
+  }, []);
+
+  const handleToggleDashboardTheme = () => {
+    const next = toggleTheme(currentTheme);
+    setCurrentTheme(next);
+  };
+
   const [displayedOwnerName, setDisplayedOwnerName] = useState(currentUser.fullName || 'Seyi Dan');
 
   useEffect(() => {
@@ -381,7 +402,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   }, []);
 
   const [editorSavedMsg, setEditorSavedMsg] = useState(false);
-  const [mediaSubTab, setMediaSubTab] = useState<'website' | 'albums'>('website');
+  const [mediaSubTab, setMediaSubTab] = useState<'website' | 'albums' | 'stats'>('website');
   const [editBrandName, setEditBrandName] = useState(contentOverride.brandName || 'KOHOT');
   const [editWebsiteLogoUrl, setEditWebsiteLogoUrl] = useState(contentOverride.websiteLogoUrl || '');
   const [inspectingAlbumMediaId, setInspectingAlbumMediaId] = useState<string | null>(null);
@@ -497,7 +518,30 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     return sets.filter((s) => s.deletionRequest && s.deletionRequest.status === 'pending');
   }, [sets]);
 
-  const pendingRequestsCount = additionRequests.filter((r) => r.status === 'Pending').length + pendingDeletionRequests.length;
+  const pendingRequestsCount = additionRequests.filter((r) => r.status === 'Pending').length;
+
+  const handleHostToggleKeepDeletedAlbum = (setId: string) => {
+    const target = sets.find((s) => s.id === setId);
+    if (!target) return;
+    const nextKept = !target.keptByHostOnly;
+    const updated: ClassSet = {
+      ...target,
+      keptByHostOnly: nextKept,
+      keptByHostAt: nextKept ? new Date().toISOString() : undefined,
+    };
+    onUpdateSingleSet?.(updated);
+    if (nextKept) {
+      showSuccess(
+        'Album Kept (Host Only)',
+        `"${target.classSetName || target.departmentName}" will be preserved exclusively for the Host even if the admin does not recover it within 30 days.`
+      );
+    } else {
+      showInfo(
+        '30-Day Purge Resumed',
+        `"${target.classSetName || target.departmentName}" has been returned to the standard 30-day automatic purge schedule.`
+      );
+    }
+  };
 
   const handleHostToggleUnpublish = (setId: string) => {
     const target = sets.find((s) => s.id === setId);
@@ -850,7 +894,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             </div>
             <button
               type="button"
-              onClick={() => onViewDepartmentAlbum(targetSet.id)}
+              onClick={() => {
+                setEditingDemoSetId(null);
+                onViewDepartmentAlbum(targetSet.id);
+              }}
               className="px-3.5 py-1.5 rounded-full bg-[#d4af37] text-black font-syne font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow hover:bg-amber-400"
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -870,7 +917,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             onUpdateSet={(updated) => {
               if (onUpdateSingleSet) onUpdateSingleSet(updated);
             }}
-            onViewAlbum={() => onViewDepartmentAlbum(targetSet.id)}
+            onViewAlbum={() => {
+              setEditingDemoSetId(null);
+              onViewDepartmentAlbum(targetSet.id);
+            }}
             onSwitchRole={() => setEditingDemoSetId(null)}
             onBackToLanding={() => setEditingDemoSetId(null)}
             onMainDashboard={() => setEditingDemoSetId(null)}
@@ -903,146 +953,39 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             <div className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-bold">
               Host
             </div>
-            <div className="font-syne font-bold text-xs sm:text-sm truncate text-white">
+            <div className={`font-syne font-bold text-xs sm:text-sm truncate ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>
               {displayedOwnerName}
             </div>
           </div>
         </div>
 
-        {/* Right: Master Host Profile Menu (Theme switch removed) */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Right: Synced Dark/Light Mode Toggle & Master Host Profile Menu (Notification icon removed) */}
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          <button
+            id="host-dashboard-theme-toggle-btn"
+            type="button"
+            onClick={handleToggleDashboardTheme}
+            title={isLightMode ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
+            aria-label={isLightMode ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
+            className={`w-9 h-9 rounded-full flex items-center justify-center border transition-all cursor-pointer ${
+              isLightMode
+                ? 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-800 shadow-xs'
+                : 'bg-white/5 hover:bg-white/10 border-white/15 text-amber-400'
+            }`}
+          >
+            {isLightMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+          </button>
           <DashboardProfileMenu
             currentUser={currentUser}
             roleTitle="Master Host"
             onLogout={() => onSwitchRole('visitor')}
-            notifications={[
-              {
-                id: 'notif-owner-1',
-                title: 'Command Center Active',
-                description: `${universities.length} Universities in Institutional Directory. ${liveSets.length} Live Class Albums.`,
-                time: 'Realtime',
-                unread: true,
-              },
-              {
-                id: 'notif-owner-2',
-                title: 'Founding Inquiries',
-                description: `${foundingRequests.filter(r => r.status === 'Pending').length} pending founding class sponsorship requests.`,
-                time: '1h ago',
-                unread: foundingRequests.filter(r => r.status === 'Pending').length > 0,
-              },
-              {
-                id: 'notif-owner-3',
-                title: 'Department Inquiries',
-                description: `${additionRequests.filter(r => r.status === 'Pending').length} unlisted department inquiries pending review.`,
-                time: '3h ago',
-                unread: additionRequests.filter(r => r.status === 'Pending').length > 0,
-              },
-            ]}
+            showNotifications={false}
           />
         </div>
       </header>
 
       {/* Main Container */}
       <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-8 sm:pt-10 space-y-8">
-        
-        {/* Host Only: System Check Card */}
-        <div 
-          id="host-system-check-card"
-          className={`p-5 sm:p-6 rounded-3xl border shadow-sm transition-colors ${
-            isLightMode ? 'bg-white border-zinc-200' : 'bg-[#18181b] border-white/10'
-          }`}
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-200 dark:border-white/10">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center shrink-0">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-syne font-bold text-base text-zinc-900 dark:text-white flex items-center gap-2">
-                  <span>System Check</span>
-                  <span className="text-[10px] font-mono-tech uppercase px-2 py-0.5 rounded-full bg-amber-500/10 text-[#d4af37] border border-[#d4af37]/30">
-                    Host Only
-                  </span>
-                </h3>
-                <p className="font-mono-tech text-xs text-zinc-500 dark:text-zinc-400">
-                  Real-time configuration &amp; D1 database status (Never displays secret values)
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={runSystemCheck}
-              disabled={isSystemChecking}
-              className="px-4 py-2 rounded-full bg-zinc-100 hover:bg-zinc-200 dark:bg-white/10 dark:hover:bg-white/20 text-zinc-800 dark:text-white font-mono-tech text-xs flex items-center gap-2 transition-all cursor-pointer self-start sm:self-auto disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSystemChecking ? 'animate-spin' : ''}`} />
-              <span>Refresh Check</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-4">
-            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
-              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
-                GOOGLE_CLIENT_ID
-              </div>
-              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
-                <span className={`w-2 h-2 rounded-full ${systemCheck?.googleClientIdSet ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                <span className={systemCheck?.googleClientIdSet ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
-                  {systemCheck?.googleClientIdSet ? 'Yes' : 'No'}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
-              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
-                SESSION_SECRET
-              </div>
-              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
-                <span className={`w-2 h-2 rounded-full ${systemCheck?.sessionSecretSet ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                <span className={systemCheck?.sessionSecretSet ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
-                  {systemCheck?.sessionSecretSet ? 'Yes' : 'No'}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
-              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
-                HOST_EMAIL
-              </div>
-              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
-                <span className={`w-2 h-2 rounded-full ${systemCheck?.hostEmailSet ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                <span className={systemCheck?.hostEmailSet ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
-                  {systemCheck?.hostEmailSet ? 'Yes' : 'No'}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1">
-              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
-                Database reachable
-              </div>
-              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
-                <span className={`w-2 h-2 rounded-full ${systemCheck?.databaseReachable ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                <span className={systemCheck?.databaseReachable ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
-                  {systemCheck?.databaseReachable ? 'Yes' : 'No'}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-white/[0.03] border border-zinc-200 dark:border-white/5 space-y-1 col-span-2 sm:col-span-1">
-              <div className="font-mono-tech text-[11px] text-zinc-500 dark:text-zinc-400">
-                Tables present
-              </div>
-              <div className="flex items-center gap-1.5 font-syne font-bold text-sm">
-                <span className={`w-2 h-2 rounded-full ${systemCheck?.tablesPresent ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                <span className={systemCheck?.tablesPresent ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}>
-                  {systemCheck?.tablesPresent ? 'Yes' : 'No'}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Command Navigation Tabs */}
         <div className={`flex items-center gap-2 overflow-x-auto no-scrollbar border-b pb-4 ${
           isLightMode ? 'border-zinc-200' : 'border-white/[0.08]'
@@ -1079,42 +1022,6 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           </button>
 
           <button
-            id="tab-founding-requests-btn"
-            onClick={() => setActiveTab('founding_requests')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
-              activeTab === 'founding_requests'
-                ? 'bg-[#d4af37] text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Founding Requests</span>
-            {foundingRequests.filter((r) => r.status === 'Pending').length > 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-900 border border-amber-500/40 text-[10px] font-mono-tech font-bold">
-                {foundingRequests.filter((r) => r.status === 'Pending').length}
-              </span>
-            )}
-          </button>
-
-          <button
-            id="tab-support-inbox-btn"
-            onClick={() => setActiveTab('support')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
-              activeTab === 'support'
-                ? 'bg-[#d4af37] text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-            }`}
-          >
-            <Inbox className="w-3.5 h-3.5 text-blue-400" />
-            <span>Support</span>
-            {newSupportCount > 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold animate-pulse">
-                {newSupportCount}
-              </span>
-            )}
-          </button>
-
-          <button
             id="tab-reminders-btn"
             onClick={() => setActiveTab('reminders')}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
@@ -1123,21 +1030,8 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
             }`}
           >
-            <Mail className="w-3.5 h-3.5 text-[#d4af37]" />
+            <MessageCircle className="w-3.5 h-3.5 text-[#d4af37]" />
             <span>KoHot Communications</span>
-          </button>
-
-          <button
-            id="tab-handoffs-btn"
-            onClick={() => setActiveTab('handoffs')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
-              activeTab === 'handoffs'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-            }`}
-          >
-            <Share2 className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Next-Class Handoffs</span>
           </button>
 
           <button
@@ -1151,42 +1045,6 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           >
             <Film className="w-3.5 h-3.5 text-blue-600" />
             <span>KoHot Media</span>
-          </button>
-
-          <button
-            id="tab-analytics-btn"
-            onClick={() => setActiveTab('analytics')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
-              activeTab === 'analytics'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-            }`}
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            <span>Moments Image Cap</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono-tech font-bold ${
-              isLightMode ? 'bg-zinc-100 text-black' : 'bg-white/10'
-            }`}>
-              {totalActiveImages}/{globalCap}
-            </span>
-          </button>
-
-          <button
-            id="tab-requests-btn"
-            onClick={() => setActiveTab('requests')}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
-              activeTab === 'requests'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-            }`}
-          >
-            <Inbox className="w-3.5 h-3.5" />
-            <span>Requests</span>
-            {pendingRequestsCount > 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-red-500 text-white font-bold text-[10px] animate-pulse">
-                {pendingRequestsCount}
-              </span>
-            )}
           </button>
 
           <button
@@ -1212,7 +1070,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             }`}
           >
             <Shield className="w-3.5 h-3.5 text-amber-500" />
-            <span>Album Admin Help</span>
+            <span>Admin Help &amp; Support</span>
+            {(newSupportCount + pendingRequestsCount) > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold animate-pulse">
+                {newSupportCount + pendingRequestsCount}
+              </span>
+            )}
           </button>
         </div>
 
@@ -1358,10 +1221,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                           type="button"
                           id={`edit-demo-${liveSet.id}-btn`}
                           onClick={() => {
+                            setEditingDemoSetId(null);
                             if (onEditDemoAlbum) {
                               onEditDemoAlbum(liveSet.id);
+                            } else {
+                              setEditingDemoSetId(liveSet.id);
                             }
-                            setEditingDemoSetId(liveSet.id);
                           }}
                           className="w-full py-3 px-4 rounded-xl bg-[#d4af37] hover:bg-amber-400 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:scale-[1.02] active:scale-[0.98]"
                         >
@@ -1373,6 +1238,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                           <button
                             type="button"
                             onClick={() => {
+                              setEditingDemoSetId(null);
                               try {
                                 sessionStorage.setItem("kohot_host_return_spot", JSON.stringify({
                                   tab: "album_demos",
@@ -2147,6 +2013,111 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                       </div>
                                     </div>
 
+                                    {/* Department Class Albums List (Includes Active + Soft-Deleted within 30 Days or Kept by Host) */}
+                                    {(() => {
+                                      const deptAlbums = sets
+                                        .filter((s) => {
+                                          if (s.id.startsWith('crownfield-')) return false;
+                                          const matchesDept =
+                                            s.departmentId === dept.id ||
+                                            (s.departmentName?.toLowerCase().trim() === dept.name.toLowerCase().trim() &&
+                                              (!s.institutionId || s.institutionId === uni.id));
+                                          if (!matchesDept) return false;
+                                          if (s.deletedAt) {
+                                            const daysPassed = Math.floor(
+                                              (Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24)
+                                            );
+                                            const daysRemaining = Math.max(0, 30 - daysPassed);
+                                            if (daysRemaining <= 0 && !s.keptByHostOnly) return false;
+                                          }
+                                          return true;
+                                        })
+                                        .sort((a, b) => b.graduationYear - a.graduationYear);
+
+                                      if (deptAlbums.length === 0) return null;
+
+                                      return (
+                                        <div className="space-y-2 pt-2 border-t border-white/10">
+                                          <div className="flex items-center justify-between text-[10px] font-mono-tech uppercase tracking-wider text-zinc-400">
+                                            <span>Class Albums ({deptAlbums.length})</span>
+                                            <span>Directory Archive</span>
+                                          </div>
+                                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                            {deptAlbums.map((album) => {
+                                              const isDeleted = Boolean(album.deletedAt);
+                                              const daysPassed = album.deletedAt
+                                                ? Math.floor((Date.now() - new Date(album.deletedAt).getTime()) / (1000 * 60 * 60 * 24))
+                                                : 0;
+                                              const daysRemaining = Math.max(0, 30 - daysPassed);
+
+                                              return (
+                                                <div
+                                                  key={album.id}
+                                                  className={`p-2.5 rounded-xl border flex flex-col gap-2 transition-colors ${
+                                                    isDeleted
+                                                      ? 'bg-red-950/20 border-red-500/30'
+                                                      : 'bg-black/40 border-white/10'
+                                                  }`}
+                                                >
+                                                  <div className="flex items-start justify-between gap-2">
+                                                    <div className="min-w-0">
+                                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="font-syne font-bold text-xs text-white truncate">
+                                                          Class of {album.graduationYear} • {album.classSetName}
+                                                        </span>
+                                                        {isDeleted ? (
+                                                          album.keptByHostOnly ? (
+                                                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono-tech text-[9px] uppercase font-bold">
+                                                              Deleted • Kept by Host (Host Only)
+                                                            </span>
+                                                          ) : (
+                                                            <span className="px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-300 font-mono-tech text-[9px] uppercase font-bold">
+                                                              Deleted • Purges in {daysRemaining}d
+                                                            </span>
+                                                          )
+                                                        ) : (
+                                                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[9px] uppercase font-bold">
+                                                            {album.isPublished ? 'Published' : 'Active'}
+                                                          </span>
+                                                        )}
+                                                      </div>
+                                                      <p className="text-[10px] font-mono-tech text-zinc-400 truncate mt-0.5">
+                                                        Admin: {album.classRepName} ({album.classRepEmail})
+                                                      </p>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-1.5 shrink-0">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => onViewDepartmentAlbum(album.id)}
+                                                        className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[10px] uppercase font-bold transition-colors cursor-pointer"
+                                                      >
+                                                        View
+                                                      </button>
+                                                      {isDeleted && (
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => handleHostToggleKeepDeletedAlbum(album.id)}
+                                                          className={`px-2.5 py-1 rounded-lg font-mono-tech text-[10px] uppercase font-bold transition-colors cursor-pointer border ${
+                                                            album.keptByHostOnly
+                                                              ? 'bg-amber-500/25 border-amber-400/50 text-amber-200 hover:bg-amber-500/35'
+                                                              : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
+                                                          }`}
+                                                          title="Keep this deleted album on the Host dashboard even if the admin does not recover it within 30 days (visible only to Host)"
+                                                        >
+                                                          {album.keptByHostOnly ? 'Kept (Host Only)' : 'Keep Album'}
+                                                        </button>
+                                                      )}
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      );
+                                    })()}
+
                                     {/* Department Actions: Edit Details, Legacy Plaque & View Legacy Wall */}
                                     <div className="pt-2 border-t border-white/5 flex items-center justify-between gap-2 flex-wrap">
                                       <div className="flex items-center gap-2 flex-wrap">
@@ -2302,7 +2273,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               )}
             </div>
 
-            {/* Sub-tab Switch: Website Media vs Album Media vs Album Visuals */}
+            {/* Sub-tab Switch: Website Media vs Album Media vs Website Statistics & Growth */}
             <div className="flex items-center gap-2.5 p-1.5 rounded-2xl bg-black/50 border border-white/10 w-fit flex-wrap">
               <button
                 type="button"
@@ -2331,9 +2302,29 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   {liveSets.length} Live Sets
                 </span>
               </button>
+              <button
+                id="subclip-website-stats-btn"
+                type="button"
+                onClick={() => setMediaSubTab('stats')}
+                className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                  mediaSubTab === 'stats'
+                    ? 'bg-white text-black font-semibold shadow'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Website Statistics &amp; Growth</span>
+              </button>
             </div>
 
-            {mediaSubTab === 'albums' ? (
+            {mediaSubTab === 'stats' ? (
+              <MasterWebsiteStatsSection
+                sets={liveSets}
+                universities={universities}
+                contentOverride={contentOverride}
+                onUpdateContentOverride={onUpdateContentOverride}
+              />
+            ) : mediaSubTab === 'albums' ? (
               <MasterAlbumMediaSection
                 sets={liveSets}
                 onViewDepartmentAlbum={onViewDepartmentAlbum}
@@ -2352,7 +2343,8 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 }}
               />
             ) : (
-              <form onSubmit={handleSaveContentOverride} className="space-y-8 text-xs font-body">
+              <div className="space-y-8">
+                <form onSubmit={handleSaveContentOverride} className="space-y-8 text-xs font-body">
                 {/* 00. BRAND IDENTITY & LOGO (NO BACKGROUND, NO BORDER, ONLY THE LOGO) */}
                 <div className="p-6 rounded-2xl bg-[#08090e] border border-white/10 space-y-4 shadow-xl">
                   <div className="flex items-center justify-between pb-3 border-b border-white/10">
@@ -2598,22 +2590,19 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                           />
                         </label>
 
-                        <button
-                          type="button"
-                          onClick={() => setEditHeroVideoUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4')}
-                          className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 font-mono-tech text-xs transition-colors"
-                        >
-                          Load Demo Sample
-                        </button>
-
-                        {editHeroVideoUrl && (
+                        {editHeroVideoUrl ? (
                           <button
                             type="button"
                             onClick={() => setEditHeroVideoUrl('')}
-                            className="text-rose-400 hover:text-rose-300 text-xs font-mono-tech ml-auto"
+                            className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 text-[11px] font-mono-tech cursor-pointer ml-auto transition-colors"
                           >
-                            Reset
+                            Set to Default (Transition Images)
                           </button>
+                        ) : (
+                          <span className="text-[10px] font-mono-tech text-zinc-400 ml-auto flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                            <span>Default Active: Crossfade Transition Images</span>
+                          </span>
                         )}
                       </div>
 
@@ -3348,383 +3337,21 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   Publish Website Media &amp; Content Sections
                 </button>
 
-                {editorSavedMsg && (
-                  <span className="font-mono-tech text-xs text-emerald-400 flex items-center gap-1.5 animate-fadeIn">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Published to live website successfully!</span>
-                  </span>
-                )}
+                  {editorSavedMsg && (
+                    <span className="font-mono-tech text-xs text-emerald-400 flex items-center gap-1.5 animate-fadeIn">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Published to live website successfully!</span>
+                    </span>
+                  )}
+                </div>
+              </form>
               </div>
-            </form>
             )}
           </div>
         )}
 
         {/* =========================================================================
-            3. ANALYTICS COUNTER: WEBSITE STATISTICS & QUOTA MONITORING
-            ========================================================================= */}
-        {activeTab === 'analytics' && (
-          <div id="analytics-module" className="space-y-8">
-            {/* Live Website Statistics & Growth Module */}
-            <MasterWebsiteStatsSection
-              sets={liveSets}
-              universities={universities}
-              contentOverride={contentOverride}
-              onUpdateContentOverride={onUpdateContentOverride}
-            />
-
-            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <BarChart3 className="w-5 h-5 text-white" />
-                    <h2 className="font-syne font-bold text-2xl text-white">
-                      Active Image Metrics vs Moments Image Cap
-                    </h2>
-                  </div>
-                  <p className="font-body text-xs text-zinc-400">
-                    Real-time quota monitoring to enforce storage optimization across all registered sets.
-                  </p>
-                </div>
-
-                <div className="text-right">
-                  <span className="text-3xl font-mono-tech font-bold text-white">
-                    {totalActiveImages}
-                    <span className="text-base text-zinc-500 font-normal"> / {globalCap}</span>
-                  </span>
-                  <p className="text-xs font-mono-tech text-white/80 mt-0.5">
-                    {usagePercentage}% Capacity Utilized
-                  </p>
-                </div>
-              </div>
-
-              {/* Visual Progress Bar against 300 Cap */}
-              <div className="space-y-2">
-                <div className="w-full h-3 bg-black rounded-full overflow-hidden p-0.5 border border-white/10">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      usagePercentage > 90
-                        ? 'bg-rose-500 shadow-lg shadow-rose-500/50'
-                        : usagePercentage > 70
-                        ? 'bg-amber-400 shadow-lg shadow-amber-400/50'
-                        : 'bg-white shadow-lg shadow-white/30'
-                    }`}
-                    style={{ width: `${Math.max(4, usagePercentage)}%` }}
-                  />
-                </div>
-                <div className="flex justify-between text-[11px] font-mono-tech text-zinc-500">
-                  <span>0 Images</span>
-                  <span>{globalCap - totalActiveImages} Images Remaining</span>
-                  <span>Hard Cap: {globalCap}</span>
-                </div>
-              </div>
-
-              {/* Image Allocation Breakdown per Set */}
-              <div className="pt-4 border-t border-white/10 space-y-3">
-                <h3 className="font-syne font-bold text-sm text-white">
-                  Set-by-Set Image Allocation
-                </h3>
-
-                <div className="space-y-2.5">
-                  {liveSets.length === 0 ? (
-                    <div className="p-6 rounded-2xl bg-white/[0.03] border border-white/10 text-center font-mono-tech text-xs text-zinc-400">
-                      No live department class albums registered yet. Demo albums are strictly managed in the dedicated Album Demos section.
-                    </div>
-                  ) : (
-                    liveSets.map((s) => {
-                    const studentCount = s.students.length;
-                    const memCount = s.memories.reduce((acc, m) => acc + m.images.length, 0);
-                    const awdCount = s.awards.length;
-                    const vocCount = s.voices.length;
-                    const setTotal = studentCount + memCount + awdCount + vocCount + 2;
-
-                    return (
-                      <div
-                        key={s.id}
-                        className="p-4 rounded-2xl bg-[#18181b] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                      >
-                        <div>
-                          <h4 className="font-syne font-bold text-sm text-white">
-                            {s.departmentName} ({s.institutionName})
-                          </h4>
-                          <p className="text-xs text-zinc-400 font-mono-tech mt-0.5">
-                            {s.classSetName} • Rep: {s.classRepName}
-                          </p>
-                        </div>
-
-                        <div className="flex items-center gap-4 text-xs font-mono-tech">
-                          <span className="text-zinc-400">
-                            {studentCount} Students • {memCount} Memories • {awdCount} Awards
-                          </span>
-                          <span className="px-3 py-1 rounded-full bg-white/10 text-white font-bold">
-                            {setTotal} Images
-                          </span>
-                          <button
-                            onClick={() => onViewDepartmentAlbum(s.id)}
-                            className="text-white hover:underline flex items-center gap-1 text-xs cursor-pointer"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>View</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  }))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* =========================================================================
-            5. REQUESTS TAB: ALBUM DELETIONS, RECENTLY DELETED & DEPARTMENT INQUIRIES
-            ========================================================================= */}
-        {activeTab === 'requests' && (
-          <div id="requests-module" className="space-y-8 animate-fadeIn">
-            {/* Section 1: Pending Album Deletion Requests */}
-            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border-2 border-red-500/30 space-y-6 shadow-xl">
-              <div className="pb-3 border-b border-red-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
-                    <AlertTriangle className="w-5 h-5 text-red-400" />
-                    <span>Album Deletion Requests</span>
-                    {pendingDeletionRequests.length > 0 && (
-                      <span className="px-2 py-0.5 rounded-full bg-red-500 text-white font-mono-tech text-xs font-bold">
-                        {pendingDeletionRequests.length}
-                      </span>
-                    )}
-                  </h2>
-                  <p className="font-body text-xs text-zinc-400 mt-1">
-                    Submitted by album administrators. Deletion requires Host review and reason verification.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-3 font-body">
-                {pendingDeletionRequests.length === 0 ? (
-                  <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
-                    No pending album deletion requests in queue.
-                  </p>
-                ) : (
-                  pendingDeletionRequests.map((set) => (
-                    <div
-                      key={set.id}
-                      className="p-5 rounded-2xl bg-[#08090e] border border-red-500/20 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
-                    >
-                      <div className="space-y-1.5 max-w-2xl">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-syne font-bold text-white text-base">
-                            {set.classSetName || set.departmentName}
-                          </span>
-                          <span className="text-zinc-500">•</span>
-                          <span className="text-amber-400 text-xs font-mono-tech">
-                            Class of {set.graduationYear}
-                          </span>
-                          <span className="text-zinc-500">•</span>
-                          <span className="text-zinc-400 text-xs font-mono-tech">
-                            {set.institutionName}
-                          </span>
-                        </div>
-                        <div className="text-xs font-mono-tech text-zinc-400">
-                          Requested by: <span className="text-zinc-200">{set.deletionRequest?.requestedBy || set.classRepEmail || 'Admin'}</span>
-                          {set.deletionRequest?.requestedAt && ` on ${set.deletionRequest.requestedAt}`}
-                        </div>
-                        <div className="text-xs text-zinc-300 bg-red-950/20 border border-red-500/20 p-2.5 rounded-xl font-mono-tech">
-                          <span className="font-bold text-red-400">Reason:</span> "{set.deletionRequest?.reason}"
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleStartDeleteAlbum(set, false)}
-                          className="bg-red-600 hover:bg-red-500 text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer shadow-md"
-                        >
-                          Approve (Soft-Delete)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeclineDeletionRequest(set.id)}
-                          className="bg-white/10 hover:bg-white/20 text-zinc-300 hover:text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
-                        >
-                          Decline Request
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            {/* Section 2: Recently Deleted Albums (30-Day Retention) */}
-            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6 shadow-xl">
-              <div className="pb-3 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
-                    <Trash2 className="w-5 h-5 text-amber-400" />
-                    <span>Recently Deleted Albums</span>
-                    <span className="px-2 py-0.5 rounded-full bg-white/10 text-zinc-300 font-mono-tech text-xs">
-                      {recentlyDeletedSets.length}
-                    </span>
-                  </h2>
-                  <p className="font-body text-xs text-zinc-400 mt-1">
-                    Soft-deleted albums are hidden from all visitors and legacy walls, but preserved for 30 days before permanent erasure.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-3 font-body">
-                {recentlyDeletedSets.length === 0 ? (
-                  <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
-                    No recently deleted albums.
-                  </p>
-                ) : (
-                  recentlyDeletedSets.map((s) => {
-                    const daysPassed = s.deletedAt
-                      ? Math.floor((Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24))
-                      : 0;
-                    const daysRemaining = Math.max(0, 30 - daysPassed);
-                    const canDeletePermanently = daysRemaining === 0;
-
-                    return (
-                      <div
-                        key={s.id}
-                        className="p-5 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                      >
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-syne font-bold text-white text-base">
-                              {s.classSetName || s.departmentName}
-                            </span>
-                            <span className="text-zinc-500">•</span>
-                            <span className="text-zinc-300 text-xs">Class of {s.graduationYear}</span>
-                            <span className="text-zinc-500">•</span>
-                            <span className="text-zinc-400 text-xs">{s.institutionName}</span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech font-bold uppercase tracking-wider ${
-                              canDeletePermanently
-                                ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                : 'bg-amber-400/10 text-amber-300 border border-amber-400/20'
-                            }`}>
-                              {canDeletePermanently ? '30-Day Retention Expired' : `${daysRemaining} day${daysRemaining === 1 ? '' : 's'} remaining`}
-                            </span>
-                            <span className="text-xs text-zinc-500 font-mono-tech">
-                              Deleted: {s.deletedAt ? new Date(s.deletedAt).toLocaleDateString() : 'Recently'} by {s.deletedBy || 'Host'}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleRestoreAlbum(s.id)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
-                          >
-                            Restore Album
-                          </button>
-                          {canDeletePermanently && (
-                            <button
-                              type="button"
-                              onClick={() => handleStartDeleteAlbum(s, true)}
-                              className="bg-red-600 hover:bg-red-500 text-white font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer shadow-md"
-                            >
-                              Delete Permanently
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* Section 3: Unlisted Department Addition Inquiries */}
-            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6 shadow-xl">
-              <div className="pb-3 border-b border-white/10">
-                <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
-                  <Inbox className="w-5 h-5 text-white" />
-                  <span>Unlisted Department Addition Inquiries</span>
-                </h2>
-                <p className="font-body text-xs text-zinc-400 mt-1">
-                  Incoming Class Rep inquiries requesting new universities or unlisted departments to be preloaded.
-                </p>
-              </div>
-
-              <div className="space-y-3 font-body">
-                {additionRequests.length === 0 ? (
-                  <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
-                    No pending department requests in queue.
-                  </p>
-                ) : (
-                  additionRequests.map((req) => (
-                    <div
-                      key={req.id}
-                      className="p-5 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-syne font-bold text-white text-sm">
-                            {req.requestedDepartment}
-                          </span>
-                          <span className="text-zinc-500">•</span>
-                          <span className="text-zinc-300 text-xs">{req.institutionName}</span>
-                        </div>
-                        <p className="text-xs text-zinc-400 font-mono-tech mt-1">
-                          Faculty: {req.facultyName} • Rep: {req.requesterName} ({req.requesterEmail}, {req.requesterPhone})
-                        </p>
-                        {req.notes && (
-                          <p className="text-xs text-zinc-400 mt-1.5 italic">"{req.notes}"</p>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        {req.status === 'Pending' ? (
-                          <button
-                            onClick={() => handleApproveRequest(req)}
-                            className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
-                          >
-                            Approve &amp; Seed
-                          </button>
-                        ) : (
-                          <span className="text-xs font-mono-tech text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
-                            Approved
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* =========================================================================
-            FOUNDING CLASS ACCREDITATION & REVIEW SECTION
-            ========================================================================= */}
-        {activeTab === 'founding_requests' && (
-          <MasterFoundingRequestsSection
-            foundingRequests={foundingRequests}
-            onApprove={onApproveFoundingRequest}
-            onReject={onRejectFoundingRequest}
-            onViewDepartmentLegacyWall={onViewDepartmentLegacyWall}
-          />
-        )}
-
-        {/* =========================================================================
-            7. ANNUAL RELIVE REMINDERS & ALUMNI EMAIL REGISTRY
-            ========================================================================= */}
-        {/* =========================================================================
-            SUPPORT INBOX MODULE (Prompt B)
-            ========================================================================= */}
-        {activeTab === 'support' && (
-          <MasterSupportInboxSection isLightMode={isLightMode} />
-        )}
-
-        {/* =========================================================================
-            COMMUNICATIONS / ANNUAL REMINDERS (Prompt B)
+            KOHOT COMMUNICATIONS (Department Executives Blast, Registered Album Admins, Next-Class Handoffs)
             ========================================================================= */}
         {activeTab === 'reminders' && (
           <MasterAnnualRemindersSection
@@ -3732,16 +3359,6 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             sets={liveSets}
             contentOverride={contentOverride}
             onUpdateContentOverride={onUpdateContentOverride}
-          />
-        )}
-
-        {/* =========================================================================
-            NEXT-CLASS HANDOFFS & RELAY TRACKER
-            ========================================================================= */}
-        {activeTab === 'handoffs' && (
-          <MasterNextClassHandoffsSection
-            sets={liveSets}
-            universities={universities}
             onViewDepartmentLegacyWall={(deptId, uniId) => onViewDepartmentLegacyWall?.(deptId, uniId)}
           />
         )}
@@ -3757,10 +3374,146 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         )}
 
         {/* =========================================================================
-            9. DISPUTES & CO-ADMIN CLAIMS MODULE
+            9. ADMIN HELP & SUPPORT MODULE (Unified with Sub-Clips: Admin Help, Support, Requests)
             ========================================================================= */}
         {activeTab === 'disputes' && (
-          <MasterDisputesSection />
+          <div id="admin-help-and-support-module" className="space-y-6 animate-fadeIn">
+            {/* Unified Section Header & Sub-Clips */}
+            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
+              <div>
+                <div className="flex items-center gap-2 text-amber-400 text-xs font-mono-tech uppercase tracking-wider mb-1">
+                  <Shield className="w-4 h-4" />
+                  <span>Master Host Center</span>
+                </div>
+                <h2 className="font-syne font-bold text-xl sm:text-2xl text-white">
+                  Admin Help &amp; Support
+                </h2>
+                <p className="font-body text-xs text-zinc-400 mt-1">
+                  Manage Class Album Admin ownership disputes, co-admin claims, support inquiries, and department requests in one unified workspace.
+                </p>
+              </div>
+
+              {/* Sub-Clips Switcher */}
+              <div className="inline-flex flex-wrap items-center p-1.5 rounded-full bg-black/60 border border-white/15 self-start sm:self-center shrink-0 gap-1">
+                <button
+                  id="subclip-admin-help-btn"
+                  type="button"
+                  onClick={() => setAdminHelpSupportSubTab('admin_help')}
+                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                    adminHelpSupportSubTab === 'admin_help'
+                      ? 'bg-amber-400 text-black font-bold shadow'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Admin Help</span>
+                </button>
+                <button
+                  id="subclip-support-btn"
+                  type="button"
+                  onClick={() => setAdminHelpSupportSubTab('support')}
+                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                    adminHelpSupportSubTab === 'support'
+                      ? 'bg-[#d4af37] text-black font-bold shadow'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <Inbox className="w-3.5 h-3.5" />
+                  <span>Support</span>
+                  {newSupportCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold">
+                      {newSupportCount}
+                    </span>
+                  )}
+                </button>
+                <button
+                  id="subclip-requests-btn"
+                  type="button"
+                  onClick={() => setAdminHelpSupportSubTab('requests')}
+                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                    adminHelpSupportSubTab === 'requests'
+                      ? 'bg-white text-black font-bold shadow'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>Requests</span>
+                  {pendingRequestsCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-mono-tech font-bold">
+                      {pendingRequestsCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {adminHelpSupportSubTab === 'admin_help' ? (
+              <MasterDisputesSection />
+            ) : adminHelpSupportSubTab === 'support' ? (
+              <MasterSupportInboxSection isLightMode={isLightMode} />
+            ) : (
+              <div id="requests-module" className="space-y-8 animate-fadeIn">
+                {/* Unlisted Department Addition Inquiries */}
+                <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6 shadow-xl">
+                  <div className="pb-3 border-b border-white/10">
+                    <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
+                      <Inbox className="w-5 h-5 text-white" />
+                      <span>Unlisted Department Addition Inquiries</span>
+                    </h2>
+                    <p className="font-body text-xs text-zinc-400 mt-1">
+                      Incoming Class Rep inquiries requesting new universities or unlisted departments to be preloaded.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 font-body">
+                    {additionRequests.length === 0 ? (
+                      <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
+                        No pending department requests in queue.
+                      </p>
+                    ) : (
+                      additionRequests.map((req) => (
+                        <div
+                          key={req.id}
+                          className="p-5 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-syne font-bold text-white text-sm">
+                                {req.requestedDepartment}
+                              </span>
+                              <span className="text-zinc-500">•</span>
+                              <span className="text-zinc-300 text-xs">{req.institutionName}</span>
+                            </div>
+                            <p className="text-xs text-zinc-400 font-mono-tech mt-1">
+                              Faculty: {req.facultyName} • Rep: {req.requesterName} ({req.requesterEmail}, {req.requesterPhone})
+                            </p>
+                            {req.notes && (
+                              <p className="text-xs text-zinc-400 mt-1.5 italic">"{req.notes}"</p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            {req.status === 'Pending' ? (
+                              <button
+                                onClick={() => handleApproveRequest(req)}
+                                className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
+                              >
+                                Approve &amp; Seed
+                              </button>
+                            ) : (
+                              <span className="text-xs font-mono-tech text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
+                                Approved
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
