@@ -1781,7 +1781,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             <p className={`font-body text-xs sm:text-sm mt-1 ${
               isLightMode ? 'text-zinc-600' : 'text-zinc-400'
             }`}>
-              Parting wisdom, farewell remarks, and words of encouragement from lecturers and student leaders.
+              Parting wisdom, farewell remarks, and words of encouragement from class leaders.
             </p>
           </div>
 
@@ -1795,7 +1795,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                   <Quote className="w-8 h-8 text-zinc-500 mx-auto" />
                   <p className={`font-syne text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Final Thoughts Published Yet</p>
                   <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                    Parting reflections and words of guidance from faculty advisers, lecturers, and class leaders will appear here.
+                    Parting reflections and words of guidance from class leaders will appear here.
                   </p>
                 </div>
               );
@@ -1942,7 +1942,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                                   ? 'text-zinc-700 bg-zinc-100 border-zinc-300 font-semibold' 
                                   : 'text-zinc-400 bg-white/5 border-white/10'
                               }`}>
-                                Faculty Reflection
+                                Leader Reflection
                               </span>
                             </div>
                           </div>

@@ -50,3 +50,32 @@ export function validateEmailField(email: string | null | undefined, isRequired:
 
   return { isValid: true };
 }
+
+export function checkEmailTypoSuggestion(email: string | null | undefined): string | null {
+  if (!email || typeof email !== 'string') return null;
+  const trimmed = email.trim().toLowerCase();
+  const parts = trimmed.split('@');
+  if (parts.length !== 2) return null;
+  const [localPart, domain] = parts;
+  const commonTypos: Record<string, string> = {
+    'gmial.com': 'gmail.com',
+    'gmai.com': 'gmail.com',
+    'gamil.com': 'gmail.com',
+    'gnail.com': 'gmail.com',
+    'gmail.co': 'gmail.com',
+    'gmail.con': 'gmail.com',
+    'yaho.com': 'yahoo.com',
+    'yahooo.com': 'yahoo.com',
+    'yahoo.co': 'yahoo.com',
+    'hotmial.com': 'hotmail.com',
+    'hotmai.com': 'hotmail.com',
+    'outlok.com': 'outlook.com',
+    'outllok.com': 'outlook.com',
+    'icoud.com': 'icloud.com',
+  };
+  if (commonTypos[domain]) {
+    return `${localPart}@${commonTypos[domain]}`;
+  }
+  return null;
+}
+

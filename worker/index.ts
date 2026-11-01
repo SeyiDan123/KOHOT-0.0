@@ -6,11 +6,11 @@
 
 export interface Env {
   DB?: any; // Cloudflare D1 Database binding
-  BUCKET?: any; // Cloudflare R2 Bucket binding
-  MEDIA?: any; // Local dev media binding
+  BUCKET?: any; // Cloudflare R2 Bucket binding (kohot-media)
   ASSETS?: any; // Cloudflare Pages / Static Assets binding
   HOST_EMAIL?: string;
   PAYSTACK_SECRET_KEY?: string;
+  PAYSTACK_PUBLIC_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
   SESSION_SECRET?: string;
   RESEND_API_KEY?: string;
@@ -29,12 +29,118 @@ async function sha256Hex(input: string): Promise<string> {
     .join('');
 }
 
+async function hmacSha512Hex(rawBody: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-512' },
+    false,
+    ['sign']
+  );
+  const sigBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody));
+  return Array.from(new Uint8Array(sigBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 function generateRandomHexToken(bytes = 24): string {
   const arr = new Uint8Array(bytes);
   crypto.getRandomValues(arr);
   return Array.from(arr)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+// Short-lived signed token (2 hours) for unauthenticated student invite-form photo uploads
+async function createInviteUploadToken(albumId: string, secret: string): Promise<string> {
+  const payload = JSON.stringify({
+    albumId,
+    type: 'invite_upload',
+    exp: Date.now() + 2 * 60 * 60 * 1000,
+  });
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  const dataB64 = btoa(payload)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  return `${dataB64}.${sigB64}`;
+}
+
+async function verifyInviteUploadToken(token: string, expectedAlbumId: string, secret: string): Promise<boolean> {
+  if (!token || !secret) return false;
+  try {
+    const [dataB64, sigB64] = token.split('.');
+    if (!dataB64 || !sigB64) return false;
+    let b64 = dataB64.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const data = atob(b64);
+    const parsed = JSON.parse(data);
+    if (!parsed || parsed.type !== 'invite_upload') return false;
+    if (parsed.albumId !== expectedAlbumId) return false;
+    if (!parsed.exp || parsed.exp < Date.now()) return false;
+
+    let sigStr = sigB64.replace(/-/g, '+').replace(/_/g, '/');
+    while (sigStr.length % 4) sigStr += '=';
+
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+    const expectedSig = Uint8Array.from(atob(sigStr), (c) => c.charCodeAt(0));
+    return await crypto.subtle.verify('HMAC', key, expectedSig, encoder.encode(data));
+  } catch {
+    return false;
+  }
+}
+
+function extractMediaKeyFromUrl(val: unknown): string | null {
+  if (typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  if (trimmed.startsWith('/media/')) {
+    return decodeURIComponent(trimmed.slice('/media/'.length));
+  }
+  if (trimmed.startsWith('albums/')) {
+    return trimmed;
+  }
+  return null;
+}
+
+function collectAlbumMediaKeys(albumObj: any): Set<string> {
+  const keys = new Set<string>();
+  const visit = (node: any) => {
+    if (!node) return;
+    if (typeof node === 'string') {
+      const k = extractMediaKeyFromUrl(node);
+      if (k) keys.add(k);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node === 'object') {
+      for (const val of Object.values(node)) visit(val);
+    }
+  };
+  visit(albumObj);
+  return keys;
 }
 
 function sanitizePublicAlbum(rawAlbum: any): any {
@@ -82,7 +188,6 @@ async function getPlatformSettingsMap(env: Env): Promise<Record<string, string>>
 }
 
 const DEFAULT_HOST_EMAIL = 'seyidan03@gmail.com';
-const STANDARD_PRICE_KOBO = 5000000; // 50,000 NGN in kobo
 const DEFAULT_EMAIL_FROM = 'notifications@kohot.app';
 const DEFAULT_DAILY_SEND_CAP = 90;
 const MAX_EMAILS_PER_CRON_RUN = 40; // Free plan limit safeguard (<= 50 subrequests)
@@ -459,11 +564,12 @@ async function checkD1Status(db: any): Promise<{ reachable: boolean; tablesPrese
 
 // Signed token for unsubscribe links
 async function signUnsubscribeToken(email: string, setId: string, secret: string): Promise<string> {
+  if (!secret) throw new Error('Server not configured');
   const payload = JSON.stringify({ email, setId, ts: Date.now() });
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     'raw',
-    encoder.encode(secret || 'kohot-default-session-secret-2025'),
+    encoder.encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign']
@@ -481,6 +587,7 @@ async function signUnsubscribeToken(email: string, setId: string, secret: string
 }
 
 async function verifyUnsubscribeToken(token: string, secret: string): Promise<{ email: string; setId: string } | null> {
+  if (!secret) return null;
   try {
     const [dataB64, sigB64] = token.split('.');
     if (!dataB64 || !sigB64) return null;
@@ -495,7 +602,7 @@ async function verifyUnsubscribeToken(token: string, secret: string): Promise<{ 
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       'raw',
-      encoder.encode(secret || 'kohot-default-session-secret-2025'),
+      encoder.encode(secret),
       { name: 'HMAC', hash: 'SHA-256' },
       false,
       ['verify']
@@ -698,7 +805,7 @@ export async function processAnnualReminders(
   const currentYear = refDate.getFullYear();
   const currentMonth = refDate.getMonth() + 1; // 1-12
   const currentDay = refDate.getDate(); // 1-31
-  const sessionSecret = env.SESSION_SECRET || 'kohot-production-session-secret-2025';
+  const sessionSecret = (env.SESSION_SECRET || '').trim();
   const appOrigin = options?.appOrigin || 'https://kohot.app';
 
   const candidates: ReminderCandidate[] = [];
@@ -706,7 +813,7 @@ export async function processAnnualReminders(
   let sentCount = 0;
   let failedCount = 0;
 
-  if (!env.DB) {
+  if (!env.DB || !sessionSecret) {
     return {
       asOfDate: refDate.toISOString().split('T')[0],
       currentYear,
@@ -717,7 +824,7 @@ export async function processAnnualReminders(
       sentCount: 0,
       failedCount: 0,
       candidates: [],
-      errors: [{ studentEmail: 'none', setId: 'none', error: 'D1 Database binding DB not available' }],
+      errors: [{ studentEmail: 'none', setId: 'none', error: !sessionSecret ? 'Server not configured' : 'D1 Database binding DB not available' }],
     };
   }
 
@@ -918,22 +1025,46 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const hostEmail = (env.HOST_EMAIL || DEFAULT_HOST_EMAIL).trim().toLowerCase();
-    const sessionSecret = env.SESSION_SECRET || 'kohot-production-session-secret-2025';
+    const sessionSecret = (env.SESSION_SECRET || '').trim();
 
-    // CORS Headers for API
+    // CORS Headers for API: allow only the site's own origin; never reflect arbitrary origins
     const corsHeaders: Record<string, string> = {
-      'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
+      'Access-Control-Allow-Origin': url.origin,
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Access-Control-Allow-Credentials': 'true',
+      'Vary': 'Origin',
     };
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
 
+    const serverNotConfiguredResponse = () =>
+      new Response(
+        JSON.stringify({ error: 'server_not_configured', message: 'Server not configured' }),
+        { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+
+    // Helper: delete R2 object from BUCKET and media_assets record
+    const deleteR2ObjectAndRecord = async (keyOrUrl: unknown) => {
+      const key = extractMediaKeyFromUrl(keyOrUrl);
+      if (!key) return;
+      if (env.BUCKET) {
+        try {
+          await env.BUCKET.delete(key);
+        } catch {}
+      }
+      if (env.DB) {
+        try {
+          await env.DB.prepare(`DELETE FROM media_assets WHERE object_key = ?`).bind(key).run();
+        } catch {}
+      }
+    };
+
     // Helper: get current authenticated user from session (supports Bearer header for iframes + Cookie)
     const getSessionUser = async () => {
+      if (!sessionSecret) return null;
       const authHeader = request.headers.get('Authorization');
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const bearerToken = authHeader.slice(7).trim();
@@ -1215,7 +1346,7 @@ export default {
       });
     }
 
-    // 0f. Permanent Delete Album (Host only)
+    // 0f. Permanent Delete Album (Host only) — also deletes all R2 objects for this album
     const permDeleteMatch = path.match(/^\/api\/albums\/([^/]+)\/delete-permanent$/);
     if (permDeleteMatch && request.method === 'POST') {
       const albumId = decodeURIComponent(permDeleteMatch[1]);
@@ -1228,17 +1359,43 @@ export default {
       }
       const actorEmail = sessionUser.email;
 
-      await logAudit(
-        'album_permanently_deleted',
-        `Album ${albumId} permanently deleted by ${actorEmail}. All data erased.`,
-        actorEmail
-      );
-
       if (env.DB) {
         try {
+          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
+          if (albumRow?.data_json) {
+            try {
+              const parsed = JSON.parse(albumRow.data_json);
+              for (const k of collectAlbumMediaKeys(parsed)) {
+                await deleteR2ObjectAndRecord(k);
+              }
+            } catch {}
+          }
+          const subRows = await env.DB.prepare(`SELECT photo_key, payload_json FROM profile_submissions WHERE album_id = ?`).bind(albumId).all();
+          for (const sr of subRows?.results || []) {
+            if (sr.photo_key) await deleteR2ObjectAndRecord(sr.photo_key);
+            if (sr.payload_json) {
+              try {
+                const sp = JSON.parse(sr.payload_json);
+                for (const k of collectAlbumMediaKeys(sp)) {
+                  await deleteR2ObjectAndRecord(k);
+                }
+              } catch {}
+            }
+          }
+          const assetRows = await env.DB.prepare(`SELECT object_key FROM media_assets WHERE set_id = ?`).bind(albumId).all();
+          for (const ar of assetRows?.results || []) {
+            if (ar.object_key) await deleteR2ObjectAndRecord(ar.object_key);
+          }
+          await env.DB.prepare(`DELETE FROM profile_submissions WHERE album_id = ?`).bind(albumId).run();
           await env.DB.prepare(`DELETE FROM class_sets WHERE id = ?`).bind(albumId).run();
         } catch {}
       }
+
+      await logAudit(
+        'album_permanently_deleted',
+        `Album ${albumId} permanently deleted by ${actorEmail}. All data and R2 media objects erased.`,
+        actorEmail
+      );
 
       return new Response(JSON.stringify({ success: true, permanentlyDeleted: true }), {
         status: 200,
@@ -1246,13 +1403,38 @@ export default {
       });
     }
 
-    // 0g. Delete Individual Profile
+    // 0g. Delete Individual Profile (also deletes its R2 photo object)
     const deleteProfileMatch = path.match(/^\/api\/albums\/([^/]+)\/profiles\/([^/]+)$/);
     if (deleteProfileMatch && request.method === 'DELETE') {
       const albumId = decodeURIComponent(deleteProfileMatch[1]);
       const profileId = decodeURIComponent(deleteProfileMatch[2]);
       const sessionUser = await getSessionUser();
       const actorEmail = sessionUser?.email || 'admin';
+
+      if (env.DB) {
+        try {
+          const subRow = await env.DB.prepare(`SELECT photo_key, payload_json FROM profile_submissions WHERE id = ? AND album_id = ?`).bind(profileId, albumId).first();
+          if (subRow) {
+            if (subRow.photo_key) await deleteR2ObjectAndRecord(subRow.photo_key);
+            if (subRow.payload_json) {
+              try {
+                const p = JSON.parse(subRow.payload_json);
+                for (const k of collectAlbumMediaKeys(p)) await deleteR2ObjectAndRecord(k);
+              } catch {}
+            }
+          }
+          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
+          if (albumRow?.data_json) {
+            try {
+              const parsed = JSON.parse(albumRow.data_json);
+              const st = (parsed.students || []).find((s: any) => s.id === profileId);
+              if (st) {
+                for (const k of collectAlbumMediaKeys(st)) await deleteR2ObjectAndRecord(k);
+              }
+            } catch {}
+          }
+        } catch {}
+      }
 
       await logAudit(
         'profile_deleted',
@@ -1266,13 +1448,26 @@ export default {
       });
     }
 
-    // 0h. Delete Individual Memory
+    // 0h. Delete Individual Memory (also deletes its R2 photo objects)
     const deleteMemoryMatch = path.match(/^\/api\/albums\/([^/]+)\/memories\/([^/]+)$/);
     if (deleteMemoryMatch && request.method === 'DELETE') {
       const albumId = decodeURIComponent(deleteMemoryMatch[1]);
       const memoryId = decodeURIComponent(deleteMemoryMatch[2]);
       const sessionUser = await getSessionUser();
       const actorEmail = sessionUser?.email || 'admin';
+
+      if (env.DB) {
+        try {
+          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
+          if (albumRow?.data_json) {
+            const parsed = JSON.parse(albumRow.data_json);
+            const mem = (parsed.memories || []).find((m: any) => m.id === memoryId);
+            if (mem) {
+              for (const k of collectAlbumMediaKeys(mem)) await deleteR2ObjectAndRecord(k);
+            }
+          }
+        } catch {}
+      }
 
       await logAudit(
         'memory_deleted',
@@ -1286,13 +1481,26 @@ export default {
       });
     }
 
-    // 0i. Delete Individual Award
+    // 0i. Delete Individual Award (also deletes its R2 photo object if any)
     const deleteAwardMatch = path.match(/^\/api\/albums\/([^/]+)\/awards\/([^/]+)$/);
     if (deleteAwardMatch && request.method === 'DELETE') {
       const albumId = decodeURIComponent(deleteAwardMatch[1]);
       const awardId = decodeURIComponent(deleteAwardMatch[2]);
       const sessionUser = await getSessionUser();
       const actorEmail = sessionUser?.email || 'admin';
+
+      if (env.DB) {
+        try {
+          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
+          if (albumRow?.data_json) {
+            const parsed = JSON.parse(albumRow.data_json);
+            const aw = (parsed.awards || []).find((a: any) => a.id === awardId);
+            if (aw) {
+              for (const k of collectAlbumMediaKeys(aw)) await deleteR2ObjectAndRecord(k);
+            }
+          }
+        } catch {}
+      }
 
       await logAudit(
         'award_deleted',
@@ -1306,21 +1514,30 @@ export default {
       });
     }
 
-    // 0j. Public Auth Status Endpoint (Returns only booleans, no values)
-    const effectiveGoogleClientId = (
-      env.GOOGLE_CLIENT_ID ||
-      '688826683374-i08rgemf0ghvdabmelefmplju2q0rauh.apps.googleusercontent.com'
-    ).trim();
+    // 0j. Public Auth Status Endpoint (System Check: reports env vars as set ONLY if the env var truly exists, never because of a default)
+    const effectiveGoogleClientId = (env.GOOGLE_CLIENT_ID || '').trim();
+    const sessionSecretSet = Boolean(env.SESSION_SECRET && String(env.SESSION_SECRET).trim().length > 0);
+    const paystackSecretKeySet = Boolean(env.PAYSTACK_SECRET_KEY && String(env.PAYSTACK_SECRET_KEY).trim().length > 0);
+    const paystackPublicKeySet = Boolean(env.PAYSTACK_PUBLIC_KEY && String(env.PAYSTACK_PUBLIC_KEY).trim().length > 0);
+    const googleClientIdSet = Boolean(env.GOOGLE_CLIENT_ID && String(env.GOOGLE_CLIENT_ID).trim().length > 0);
+    const hostEmailEnvSet = Boolean(env.HOST_EMAIL && String(env.HOST_EMAIL).trim().length > 0);
 
     if (path === '/api/auth/status' && request.method === 'GET') {
       const d1Status = await checkD1Status(env.DB);
       return new Response(
         JSON.stringify({
-          googleClientIdSet: Boolean(effectiveGoogleClientId.length > 0),
-          sessionSecretSet: Boolean(sessionSecret.length > 0),
-          hostEmailSet: Boolean(hostEmail.length > 0),
+          googleClientIdSet,
+          sessionSecretSet,
+          paystackSecretKeySet,
+          paystackPublicKeySet,
+          hostEmailSet: hostEmailEnvSet,
+          SESSION_SECRET: sessionSecretSet,
+          PAYSTACK_SECRET_KEY: paystackSecretKeySet,
+          PAYSTACK_PUBLIC_KEY: paystackPublicKeySet,
+          GOOGLE_CLIENT_ID: googleClientIdSet,
           databaseReachable: d1Status.reachable,
           tablesPresent: d1Status.tablesPresent,
+          r2BucketBound: Boolean(env.BUCKET),
         }),
         {
           status: 200,
@@ -1329,7 +1546,7 @@ export default {
       );
     }
 
-    // 0k. Public Auth Config Endpoint (returns public googleClientId from Worker env)
+    // 0k. Public Auth Config Endpoint & Public Platform Config Endpoint (GET /api/config)
     if (path === '/api/auth/config' && request.method === 'GET') {
       return new Response(
         JSON.stringify({
@@ -1342,8 +1559,33 @@ export default {
       );
     }
 
+    if (path === '/api/config' && request.method === 'GET') {
+      const settings = await getPlatformSettingsMap(env);
+      const paystackPublicKey = (env.PAYSTACK_PUBLIC_KEY || '').trim();
+      const mode = paystackPublicKey.startsWith('pk_live_')
+        ? 'live'
+        : paystackPublicKey.startsWith('pk_test_')
+        ? 'test'
+        : 'unconfigured';
+      return new Response(
+        JSON.stringify({
+          paystackPublicKey,
+          mode,
+          settings,
+          studentFeeKobo: Number(settings.student_fee_kobo) || 50000,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
     // 1. Unified OAuth Verification Endpoint (Google & Apple — Sign In & Auto Account Creation)
     if ((path === '/api/auth/google' || path === '/api/auth/oauth') && request.method === 'POST') {
+      if (!sessionSecret) {
+        return serverNotConfiguredResponse();
+      }
       try {
         const body = (await request.json()) as {
           credential?: string;
@@ -1470,6 +1712,28 @@ export default {
         let hasPendingRegistration = false;
 
         if (d1Status.reachable && d1Status.tablesPresent) {
+          // Check class_sets owned by userEmail first
+          try {
+            const setsQuery = await env.DB.prepare(
+              `SELECT * FROM class_sets WHERE LOWER(admin_user_id) = ? AND status != 'deleted' ORDER BY created_at DESC`
+            )
+              .bind(userEmail)
+              .all();
+            for (const sRow of setsQuery?.results || []) {
+              let parsedSet: any = {};
+              try { parsedSet = JSON.parse(sRow.data_json || '{}'); } catch {}
+              activeAlbums.push({
+                id: sRow.id,
+                institutionId: sRow.institution_id,
+                departmentId: sRow.department_id,
+                graduationYear: Number(sRow.graduation_year),
+                classSetName: sRow.title || sRow.class_set_name || parsedSet.CohortLabel || `Class of ${sRow.graduation_year}`,
+                applicantName: parsedSet.classRepName || userName,
+                applicantPhone: parsedSet.classRepPhone || '',
+              });
+            }
+          } catch {}
+
           const regQuery = await env.DB.prepare(
             `SELECT * FROM registrations WHERE LOWER(applicant_email) = ? ORDER BY created_at DESC`
           )
@@ -1480,16 +1744,19 @@ export default {
           const activeRegs = regs.filter((r: any) => r.status === 'active');
           const pendingRegs = regs.filter((r: any) => r.status === 'pending');
 
-          if (activeRegs.length > 0) {
-            activeAlbums = activeRegs.map((r: any) => ({
-              id: `${r.institution_id}-${r.department_id.replace(/^dept-/, '')}-${r.graduation_year}`,
-              institutionId: r.institution_id,
-              departmentId: r.department_id,
-              graduationYear: r.graduation_year,
-              classSetName: r.class_set_name,
-              applicantName: r.applicant_name || userName,
-              applicantPhone: r.applicant_phone || '',
-            }));
+          for (const r of activeRegs) {
+            const regAlbumId = `${r.institution_id}-${r.department_id.replace(/^dept-/, '')}-${r.graduation_year}`;
+            if (!activeAlbums.some((a) => a.id === regAlbumId)) {
+              activeAlbums.push({
+                id: regAlbumId,
+                institutionId: r.institution_id,
+                departmentId: r.department_id,
+                graduationYear: r.graduation_year,
+                classSetName: r.class_set_name,
+                applicantName: r.applicant_name || userName,
+                applicantPhone: r.applicant_phone || '',
+              });
+            }
           }
           if (pendingRegs.length > 0) {
             hasPendingRegistration = true;
@@ -1613,6 +1880,9 @@ export default {
 
     // 1b. OAuth Signup Token Generator (Short-lived signed token containing verified email from Google or Apple)
     if (path === '/api/auth/google-signup-token' && request.method === 'POST') {
+      if (!sessionSecret) {
+        return serverNotConfiguredResponse();
+      }
       try {
         const body = (await request.json()) as {
           credential?: string;
@@ -1687,6 +1957,9 @@ export default {
 
     // 2. Auth Session Check (Reads from signed session cookie)
     if (path === '/api/auth/me' && request.method === 'GET') {
+      if (!sessionSecret) {
+        return serverNotConfiguredResponse();
+      }
       const user = await getSessionUser();
       if (!user) {
         return new Response(
@@ -1717,155 +1990,1095 @@ export default {
       });
     }
 
-    // 4. Paystack Payment Verification Endpoint
-    if (path === '/api/verify-payment' && request.method === 'POST') {
-      try {
-        const body = (await request.json()) as {
-          reference: string;
-          institutionId: string;
-          departmentId: string;
-          graduationYear: number;
-          applicantEmail?: string;
-          applicantName: string;
-          applicantPhone: string;
-          classSetName: string;
-          estimatedGraduates?: number;
-          signupToken?: string;
-        };
+    // ============================================================================
+    // 4. REAL R2 MEDIA STORAGE (binding BUCKET / kohot-media)
+    // ============================================================================
 
-        const { reference, institutionId, departmentId, graduationYear, applicantName, applicantPhone, classSetName, signupToken } = body;
-
-        if (!reference || !institutionId || !departmentId || !graduationYear) {
-          return new Response(JSON.stringify({ error: 'Missing required parameters' }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-
-        // Verify Google signupToken - only verified Google email is stored
-        if (!signupToken) {
-          return new Response(
-            JSON.stringify({ error: 'signup_token_required', message: 'Verified Google signup token required' }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-        const verifiedSignup = await verifySignupToken(signupToken, sessionSecret);
-        if (!verifiedSignup || !verifiedSignup.email) {
-          return new Response(
-            JSON.stringify({ error: 'signup_token_invalid', message: 'Google signup token expired or invalid. Please sign up with Google again.' }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-        const verifiedApplicantEmail = verifiedSignup.email;
-
-        // Verify with Paystack API if secret key is configured
-        let paystackVerified = false;
-        if (env.PAYSTACK_SECRET_KEY) {
-          const pskRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-            headers: {
-              Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`,
-            },
-          });
-          const pskData = (await pskRes.json()) as any;
-          if (pskData.status && pskData.data && pskData.data.status === 'success' && pskData.data.amount === STANDARD_PRICE_KOBO) {
-            paystackVerified = true;
-          } else {
-            return new Response(
-              JSON.stringify({
-                error: 'payment_failed',
-                message: 'Paystack transaction could not be verified or amount did not match ₦50,000.',
-              }),
-              {
-                status: 400,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-              }
-            );
+    // 4a. GET /api/albums/:albumId/invite-token — Issues short-lived signed token for invite-form uploads
+    const inviteUploadSecret = sessionSecret || (env.PAYSTACK_SECRET_KEY || '').trim() || 'kohot-invite-upload-ephemeral-key-v1';
+    const inviteTokenMatch = path.match(/^\/api\/albums\/([^/]+)\/invite-token$/);
+    if (inviteTokenMatch && request.method === 'GET') {
+      const albumId = decodeURIComponent(inviteTokenMatch[1]);
+      if (env.DB) {
+        const albumRow = await env.DB.prepare(`SELECT status, data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (albumRow) {
+          let parsed: any = {};
+          try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+          if (albumRow.status === 'deleted' || parsed.deletedAt) {
+            return new Response(JSON.stringify({ error: 'Album not available' }), {
+              status: 404,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
           }
+        }
+      }
+      const inviteToken = await createInviteUploadToken(albumId, inviteUploadSecret);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          inviteToken,
+          albumId,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 4b. POST /api/media/upload — Real R2 upload (jpeg/png/webp max 2MB for albums; mp4/webm max 15MB for Host hero video)
+    if (path === '/api/media/upload' && request.method === 'POST') {
+      if (!env.BUCKET || !env.DB) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'R2 storage (BUCKET) or D1 database is not bound.' }),
+          { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        dataUrl?: string;
+        setId?: string;
+        category?: string;
+        fileName?: string;
+        inviteToken?: string;
+      };
+
+      const dataUrl = String(body.dataUrl || '').trim();
+      const rawSetId = String(body.setId || '').trim();
+      const category = String(body.category || 'candid').trim();
+      const fileName = String(body.fileName || 'upload').trim();
+      const inviteToken = String(body.inviteToken || '').trim();
+
+      if (!dataUrl || !rawSetId) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'Missing image data or album ID.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const sessionUser = await getSessionUser();
+      const isHost = Boolean(sessionUser && sessionUser.role === 'master_host');
+      const isHeroVideoUpload = category === 'hero-video' || category === 'hero-poster' || rawSetId === 'site-hero';
+
+      // Parse data URL: data:<mime>;base64,<payload>
+      const dataUrlMatch = dataUrl.match(/^data:([a-zA-Z0-9/+.-]+);base64,(.+)$/);
+      if (!dataUrlMatch) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'Invalid file format. Expected a base64 data URL.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const mimeType = dataUrlMatch[1].toLowerCase();
+      const base64Payload = dataUrlMatch[2];
+
+      const allowedImageMimes: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+      };
+      const allowedVideoMimes: Record<string, string> = {
+        'video/mp4': 'mp4',
+        'video/webm': 'webm',
+      };
+
+      let ext = '';
+      let maxBytes = 2 * 1024 * 1024; // 2 MB default for images
+
+      if (category === 'hero-video') {
+        if (!isHost) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Only the Master Host can upload the hero video.' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        ext = allowedVideoMimes[mimeType] || '';
+        if (!ext) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Hero video must be MP4 or WebM.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        maxBytes = 15 * 1024 * 1024; // 15 MB for hero video
+      } else {
+        ext = allowedImageMimes[mimeType] || '';
+        if (!ext) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Only JPEG, PNG, and WebP images are allowed.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        maxBytes = 2 * 1024 * 1024; // 2 MB max for images
+      }
+
+      // Authorization check:
+      // 1. Host can upload anything (including hero video/poster)
+      // 2. Authenticated Admin must own setId (or be creating a new draft album)
+      // 3. Unauthenticated invite-form upload requires a valid short-lived signed inviteToken for that album, rate-limited per IP and album, images only
+      let uploaderIdentifier = sessionUser?.email || '';
+      if (!isHost) {
+        if (isHeroVideoUpload) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Host authorization required.' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        if (sessionUser) {
+          const albumRow = await env.DB.prepare(`SELECT admin_user_id, data_json FROM class_sets WHERE id = ?`).bind(rawSetId).first();
+          if (albumRow) {
+            let albumData: any = {};
+            try { albumData = JSON.parse(albumRow.data_json || '{}'); } catch {}
+            const ownerEmail = String(albumRow.admin_user_id || albumData.classRepEmail || '').toLowerCase();
+            if (ownerEmail && ownerEmail !== sessionUser.email.toLowerCase()) {
+              return new Response(
+                JSON.stringify({ success: false, error: 'Forbidden: You do not own this album.' }),
+                { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+          }
+          uploaderIdentifier = sessionUser.email.toLowerCase();
         } else {
-          // If in test mode without Paystack secret key set in Cloudflare secrets:
-          paystackVerified = reference.startsWith('PSK-') || reference.startsWith('demo_');
+          // Unauthenticated invite-form upload: verify short-lived signed inviteToken for this album
+          const tokenValid = await verifyInviteUploadToken(inviteToken, rawSetId, inviteUploadSecret);
+          if (!tokenValid) {
+            return new Response(
+              JSON.stringify({ success: false, error: 'Valid invite upload token or admin session required.' }),
+              { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || '127.0.0.1';
+          uploaderIdentifier = `invite:${ip}`;
+
+          // Rate limit per IP and album: max 10 image uploads per 15 minutes
+          const recentUploads = await env.DB.prepare(
+            `SELECT COUNT(*) as cnt FROM media_assets WHERE set_id = ? AND uploader_email = ? AND datetime(created_at) >= datetime('now', '-15 minutes')`
+          )
+            .bind(rawSetId, uploaderIdentifier)
+            .first();
+          if (Number(recentUploads?.cnt || 0) >= 10) {
+            return new Response(
+              JSON.stringify({ success: false, error: 'Too many uploads. Please wait a few minutes and try again.' }),
+              { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+      }
+
+      // Decode base64 to binary bytes
+      let binaryBytes: Uint8Array;
+      try {
+        const binStr = atob(base64Payload);
+        if (binStr.length > maxBytes) {
+          const limitMb = Math.round(maxBytes / (1024 * 1024));
+          return new Response(
+            JSON.stringify({ success: false, error: `File size exceeds maximum limit of ${limitMb} MB.` }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        binaryBytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) {
+          binaryBytes[i] = binStr.charCodeAt(i);
+        }
+      } catch {
+        return new Response(
+          JSON.stringify({ success: false, error: 'Failed to decode base64 file content.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const safeAlbumId = isHeroVideoUpload
+        ? 'site-hero'
+        : rawSetId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const uuid = crypto.randomUUID();
+      const objectKey = `albums/${safeAlbumId}/${uuid}.${ext}`;
+      const publicUrl = `/media/${objectKey}`;
+      const mediaId = `med-${uuid}`;
+      const normalizedMime = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+
+      try {
+        await env.BUCKET.put(objectKey, binaryBytes, {
+          httpMetadata: { contentType: normalizedMime },
+        });
+
+        // Confirm R2 write exists
+        const r2Confirm = typeof env.BUCKET.head === 'function'
+          ? await env.BUCKET.head(objectKey)
+          : await env.BUCKET.get(objectKey);
+        if (!r2Confirm) {
+          throw new Error('R2 did not confirm object write.');
         }
 
-        // Safeguard: Check if this reference was already used
-        if (env.DB) {
-          const existingRef = await env.DB.prepare(`SELECT id FROM transactions WHERE reference = ?`).bind(reference).first();
-          if (existingRef) {
-            return new Response(
-              JSON.stringify({ error: 'already_processed', message: 'This transaction reference has already been used.' }),
-              { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-            );
-          }
-
-          // Duplicate check safeguard: check if album already registered for same year
-          const existingClass = await env.DB.prepare(
-            `SELECT id FROM registrations WHERE institution_id = ? AND department_id = ? AND graduation_year = ? AND status = 'active'`
+        // Record in media_assets and confirm record exists
+        await env.DB.prepare(
+          `INSERT INTO media_assets (id, object_key, content_type, size_bytes, file_name, uploader_email, set_id, category, public_url, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+        )
+          .bind(
+            mediaId,
+            objectKey,
+            normalizedMime,
+            binaryBytes.byteLength,
+            fileName,
+            uploaderIdentifier,
+            rawSetId,
+            category,
+            publicUrl
           )
-            .bind(institutionId, departmentId, graduationYear)
-            .first();
+          .run();
 
-          if (existingClass) {
-            // Store paid transaction with refund flag for Host
+        const dbConfirm = await env.DB.prepare(
+          `SELECT id FROM media_assets WHERE object_key = ?`
+        )
+          .bind(objectKey)
+          .first();
+
+        if (!dbConfirm || !dbConfirm.id) {
+          throw new Error('Database did not confirm media_assets record.');
+        }
+
+        // If this is a Host hero video or poster upload, also save its key in website_content_overrides
+        if (isHost && (category === 'hero-video' || category === 'hero-poster')) {
+          try {
+            const existingRow = await env.DB.prepare(`SELECT * FROM website_content_overrides WHERE id = 'default'`).first();
+            let siteContent: any = {};
+            if (existingRow) {
+              try { siteContent = JSON.parse(existingRow.data_json || existingRow.content_json || '{}'); } catch {}
+            }
+            const oldKey = category === 'hero-video'
+              ? (siteContent.heroVideoKey || extractMediaKeyFromUrl(siteContent.heroVideoUrl))
+              : (siteContent.heroPosterKey || extractMediaKeyFromUrl(siteContent.heroPosterUrl));
+            if (oldKey && oldKey !== objectKey) {
+              await deleteR2ObjectAndRecord(oldKey);
+            }
+            if (category === 'hero-video') {
+              siteContent.heroVideoUrl = publicUrl;
+              siteContent.heroVideoKey = objectKey;
+            } else {
+              siteContent.heroPosterUrl = publicUrl;
+              siteContent.heroPosterKey = objectKey;
+            }
             await env.DB.prepare(
-              `INSERT INTO transactions (id, reference, amount, amount_kobo, status, payer_name, payer_email) VALUES (?, ?, ?, ?, ?, ?, ?)`
+              `INSERT OR REPLACE INTO website_content_overrides (id, data_json, updated_at) VALUES ('default', ?, datetime('now'))`
             )
-              .bind(
-                `tx-${Date.now()}`,
-                reference,
-                50000,
-                STANDARD_PRICE_KOBO,
-                'paid, duplicate class, needs refund',
-                applicantName,
-                verifiedApplicantEmail
-              )
+              .bind(JSON.stringify(siteContent))
               .run();
-
-            return new Response(
-              JSON.stringify({
-                error: 'duplicate_class',
-                message: 'Payment received, but this class year already exists. Recorded for Host refund.',
-              }),
-              { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-            );
-          }
-
-          // Record registration and active class album
-          const regId = `reg-${Date.now()}`;
-          const albumId = `${institutionId}-${departmentId.replace(/^dept-/, '')}-${graduationYear}`;
-
-          await env.DB.prepare(
-            `INSERT INTO registrations (id, applicant_email, applicant_name, applicant_phone, institution_id, department_id, graduation_year, class_set_name, registration_type, status, payment_ref, payment_amount, approved_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'standard', 'active', ?, ?, datetime('now'))`
-          )
-            .bind(regId, verifiedApplicantEmail, applicantName, applicantPhone, institutionId, departmentId, graduationYear, classSetName, reference, STANDARD_PRICE_KOBO)
-            .run();
-
-          await env.DB.prepare(
-            `INSERT INTO transactions (id, reference, set_id, set_name, amount, amount_kobo, status, payer_name, payer_email)
-             VALUES (?, ?, ?, ?, ?, ?, 'Paid', ?, ?)`
-          )
-            .bind(`tx-${Date.now()}`, reference, albumId, classSetName, 50000, STANDARD_PRICE_KOBO, applicantName, verifiedApplicantEmail)
-            .run();
+          } catch {}
         }
 
         return new Response(
           JSON.stringify({
             success: true,
-            status: 'success',
-            amount: STANDARD_PRICE_KOBO,
-            reference,
-            verified: paystackVerified,
+            url: publicUrl,
+            key: objectKey,
           }),
-          {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          }
+          { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
-      } catch (err: any) {
-        return new Response(JSON.stringify({ error: err.message || 'Payment verification failed' }), {
-          status: 500,
+      } catch (uploadErr: any) {
+        // Rollback partial R2 file and DB row on failure
+        try { await env.BUCKET.delete(objectKey); } catch {}
+        try { await env.DB.prepare(`DELETE FROM media_assets WHERE object_key = ?`).bind(objectKey).run(); } catch {}
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: uploadErr.message || 'Failed to store media in R2.',
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // 4c. GET /media/{key} — Serve from R2 BUCKET with ETag, cache headers, 206 range requests, and deleted-asset protection
+    if (path.startsWith('/media/') && request.method === 'GET') {
+      if (!env.BUCKET) {
+        return new Response('Media storage not configured', { status: 503 });
+      }
+      const objectKey = decodeURIComponent(path.slice('/media/'.length));
+      if (!objectKey || objectKey.includes('..')) {
+        return new Response('Not found', { status: 404 });
+      }
+
+      // Access control: check album & submission state
+      let isPublishedPublicMedia = true;
+      const keyParts = objectKey.split('/');
+      const albumIdFromKey = keyParts[0] === 'albums' && keyParts.length >= 3 ? keyParts[1] : null;
+
+      if (env.DB && albumIdFromKey && albumIdFromKey !== 'site-hero') {
+        const albumRow = await env.DB.prepare(`SELECT status, admin_user_id, data_json FROM class_sets WHERE id = ?`).bind(albumIdFromKey).first();
+        if (albumRow) {
+          let parsedAlbum: any = {};
+          try { parsedAlbum = JSON.parse(albumRow.data_json || '{}'); } catch {}
+          const rowStatus = String(albumRow.status || parsedAlbum.lifecycleStatus || 'draft');
+          const isDeleted = rowStatus === 'deleted' || Boolean(parsedAlbum.deletedAt);
+          if (isDeleted) {
+            return new Response('Not found', { status: 404, headers: corsHeaders });
+          }
+
+          const isAlbumPublished =
+            (rowStatus === 'published' || (rowStatus === 'active' && parsedAlbum.published === true)) &&
+            !parsedAlbum.unpublished &&
+            !parsedAlbum.deletedAt;
+
+          // Check if this objectKey belongs to a profile_submission that is deleted/removed or still pending/draft
+          const subRow = await env.DB.prepare(
+            `SELECT status FROM profile_submissions WHERE album_id = ? AND (photo_key = ? OR payload_json LIKE ?)`
+          )
+            .bind(albumIdFromKey, objectKey, `%${objectKey}%`)
+            .first();
+
+          if (subRow && (subRow.status === 'removed' || subRow.status === 'deleted')) {
+            return new Response('Not found', { status: 404, headers: corsHeaders });
+          }
+
+          const isUnapprovedSubmissionPhoto = Boolean(subRow && subRow.status !== 'approved');
+          if (!isAlbumPublished || isUnapprovedSubmissionPhoto) {
+            isPublishedPublicMedia = false;
+          }
+        }
+      }
+
+      const r2Obj = await env.BUCKET.get(objectKey);
+      if (!r2Obj) {
+        return new Response('Not found', { status: 404, headers: corsHeaders });
+      }
+
+      const contentType = r2Obj.httpMetadata?.contentType || 'application/octet-stream';
+      const etag = r2Obj.httpEtag || `"${objectKey}-${r2Obj.size || 0}"`;
+      const ifNoneMatch = request.headers.get('If-None-Match');
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            ...corsHeaders,
+            ETag: etag,
+          },
+        });
+      }
+
+      const cacheControl = isPublishedPublicMedia
+        ? 'public, max-age=31536000, immutable'
+        : 'private, no-cache, must-revalidate';
+
+      const fullBuffer = await r2Obj.arrayBuffer();
+      const totalSize = fullBuffer.byteLength;
+      const rangeHeader = request.headers.get('Range');
+
+      if (rangeHeader && rangeHeader.startsWith('bytes=')) {
+        const rangeMatch = rangeHeader.replace('bytes=', '').split('-');
+        const start = parseInt(rangeMatch[0], 10);
+        const end = rangeMatch[1] ? Math.min(parseInt(rangeMatch[1], 10), totalSize - 1) : totalSize - 1;
+        if (!isNaN(start) && start >= 0 && start <= end && end < totalSize) {
+          const sliced = fullBuffer.slice(start, end + 1);
+          return new Response(sliced, {
+            status: 206,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': contentType,
+              'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+              'Content-Length': String(sliced.byteLength),
+              'Accept-Ranges': 'bytes',
+              ETag: etag,
+              'Cache-Control': cacheControl,
+            },
+          });
+        }
+      }
+
+      return new Response(fullBuffer, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': contentType,
+          'Content-Length': String(totalSize),
+          'Accept-Ranges': 'bytes',
+          ETag: etag,
+          'Cache-Control': cacheControl,
+        },
+      });
+    }
+
+    // 4d. POST /api/media/migrate-base64 — One-time migration of base64 images in album JSON to R2
+    if (path === '/api/media/migrate-base64' && request.method === 'POST') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
+      if (!env.DB || !env.BUCKET) {
+        return new Response(JSON.stringify({ error: 'Database or R2 BUCKET unavailable' }), {
+          status: 503,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as { albumId?: string; all?: boolean };
+      const isHost = sessionUser.role === 'master_host';
+      let targetRows: any[] = [];
+
+      if (body.albumId) {
+        const row = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(body.albumId).first();
+        if (row) {
+          let parsed: any = {};
+          try { parsed = JSON.parse(row.data_json || '{}'); } catch {}
+          const ownerEmail = String(row.admin_user_id || parsed.classRepEmail || '').toLowerCase();
+          if (!isHost && ownerEmail !== sessionUser.email.toLowerCase()) {
+            return new Response(JSON.stringify({ error: 'Forbidden' }), {
+              status: 403,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+          targetRows = [row];
+        }
+      } else if (isHost) {
+        const allRes = await env.DB.prepare(`SELECT * FROM class_sets WHERE status != 'deleted'`).all();
+        targetRows = allRes?.results || [];
+      } else {
+        const ownedRes = await env.DB.prepare(`SELECT * FROM class_sets WHERE LOWER(admin_user_id) = ?`).bind(sessionUser.email.toLowerCase()).all();
+        targetRows = ownedRes?.results || [];
+      }
+
+      let migratedCount = 0;
+      let failedCount = 0;
+      let albumsUpdated = 0;
+      let singleUpdatedAlbum: any = null;
+
+      const migrateDataUrl = async (dataUrl: string, setId: string, category: string): Promise<string> => {
+        const m = dataUrl.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/i);
+        if (!m) return dataUrl;
+        const mime = m[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : m[1].toLowerCase();
+        const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+        try {
+          const binStr = atob(m[2]);
+          const bytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+          const safeAlbumId = setId.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const uuid = crypto.randomUUID();
+          const key = `albums/${safeAlbumId}/${uuid}.${ext}`;
+          const urlPath = `/media/${key}`;
+          await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: mime } });
+          await env.DB.prepare(
+            `INSERT INTO media_assets (id, object_key, content_type, size_bytes, file_name, uploader_email, set_id, category, public_url, created_at)
+             VALUES (?, ?, ?, ?, 'migrated', ?, ?, ?, ?, datetime('now'))`
+          )
+            .bind(`med-${uuid}`, key, mime, bytes.byteLength, sessionUser.email, setId, category, urlPath)
+            .run();
+          migratedCount++;
+          return urlPath;
+        } catch {
+          failedCount++;
+          return dataUrl;
+        }
+      };
+
+      const walkAndMigrate = async (node: any, setId: string, categoryHint = 'candid'): Promise<{ node: any; changed: boolean }> => {
+        if (!node) return { node, changed: false };
+        if (typeof node === 'string') {
+          if (node.startsWith('data:image/')) {
+            const replaced = await migrateDataUrl(node, setId, categoryHint);
+            return { node: replaced, changed: replaced !== node };
+          }
+          return { node, changed: false };
+        }
+        if (Array.isArray(node)) {
+          let anyChanged = false;
+          const nextArr = [];
+          for (const item of node) {
+            const res = await walkAndMigrate(item, setId, categoryHint);
+            if (res.changed) anyChanged = true;
+            nextArr.push(res.node);
+          }
+          return { node: nextArr, changed: anyChanged };
+        }
+        if (typeof node === 'object') {
+          let anyChanged = false;
+          const nextObj: any = { ...node };
+          for (const [k, v] of Object.entries(nextObj)) {
+            const hint = k === 'students' ? 'portrait' : k === 'memories' ? 'candid' : k === 'awards' ? 'award' : categoryHint;
+            const res = await walkAndMigrate(v, setId, hint);
+            if (res.changed) {
+              anyChanged = true;
+              nextObj[k] = res.node;
+            }
+          }
+          return { node: nextObj, changed: anyChanged };
+        }
+        return { node, changed: false };
+      };
+
+      for (const row of targetRows) {
+        try {
+          const parsed = JSON.parse(row.data_json || '{}');
+          const { node: migratedAlbum, changed } = await walkAndMigrate(parsed, row.id);
+          if (changed) {
+            migratedAlbum.version = (Number(migratedAlbum.version) || 1) + 1;
+            await env.DB.prepare(
+              `UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`
+            )
+              .bind(JSON.stringify(migratedAlbum), row.id)
+              .run();
+            albumsUpdated++;
+          }
+          if (body.albumId && row.id === body.albumId) {
+            singleUpdatedAlbum = migratedAlbum;
+          }
+        } catch {}
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          migratedCount,
+          failedCount,
+          albumsUpdated,
+          album: singleUpdatedAlbum,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ============================================================================
+    // 4e. REAL PAYSTACK PAYMENTS BACKEND (init, verify, webhook)
+    // ============================================================================
+    const applyVerifiedPaystackPayment = async (reference: string, pskData: any) => {
+      if (!env.DB) {
+        return { applied: false, status: 'db_unavailable', error: 'Database unavailable' };
+      }
+      const pskStatus = String(pskData?.status || '').toLowerCase();
+      const pskCurrency = String(pskData?.currency || 'NGN').toUpperCase();
+      const pskAmountKobo = Number(pskData?.amount) || 0;
+      const pskRef = String(pskData?.reference || reference).trim();
+
+      if (pskStatus !== 'success' || pskCurrency !== 'NGN' || pskRef !== reference) {
+        return { applied: false, status: 'verification_mismatch', error: 'Payment status, currency, or reference did not match.' };
+      }
+
+      // Strip card/authorization details so card details are NEVER stored
+      const safePskMeta = pskData?.metadata && typeof pskData.metadata === 'object' ? pskData.metadata : {};
+      const txRow = await env.DB.prepare(`SELECT * FROM transactions WHERE reference = ?`).bind(reference).first();
+      let storedMeta: any = {};
+      if (txRow?.paystack_data_json) {
+        try { storedMeta = JSON.parse(txRow.paystack_data_json); } catch {}
+      } else if (txRow?.raw_payload_json) {
+        try { storedMeta = JSON.parse(txRow.raw_payload_json); } catch {}
+      }
+
+      // If pending transaction exists, require exact amount match
+      if (txRow && Number(txRow.amount_kobo) > 0 && Number(txRow.amount_kobo) !== pskAmountKobo) {
+        return { applied: false, status: 'amount_mismatch', error: 'Verified amount does not match initialized payment amount.' };
+      }
+
+      const meta = { ...safePskMeta, ...storedMeta };
+      const paymentType: 'student' | 'slots' | 'unknown' =
+        meta.type === 'student' || meta.submission_id
+          ? 'student'
+          : meta.type === 'slots' || meta.quantity
+          ? 'slots'
+          : 'unknown';
+      const albumId = String(meta.album_id || meta.albumId || txRow?.set_id || '').trim();
+      const submissionId = String(meta.submission_id || meta.submissionId || '').trim();
+      const quantity = Math.max(1, Math.floor(Number(meta.quantity || meta.slotsPurchased || 1)));
+      const sponsorName = String(meta.sponsor_name || meta.sponsorName || 'Class Sponsor')
+        .replace(/<[^>]*>/g, '')
+        .trim()
+        .slice(0, 60);
+      const payerEmail = String(pskData?.customer?.email || txRow?.payer_email || meta.payerEmail || '').trim().toLowerCase();
+
+      // Apply student submission payment
+      if (paymentType === 'student' && albumId && submissionId) {
+        const subRow = await env.DB.prepare(
+          `SELECT * FROM profile_submissions WHERE id = ? AND album_id = ?`
+        )
+          .bind(submissionId, albumId)
+          .first();
+
+        if (!subRow) {
+          // Paid but nothing created -> store as "paid, needs review"
+          const reviewMeta = JSON.stringify({ ...meta, paymentCategory: 'student_submission', albumId, payerEmail });
+          await env.DB.prepare(
+            `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'paid, needs review', ?, ?, ?, datetime('now'))`
+          )
+            .bind(
+              txRow?.id || `tx-${reference}`,
+              reference,
+              albumId,
+              String(meta.department || ''),
+              String(meta.institution || ''),
+              Math.round(pskAmountKobo / 100),
+              pskAmountKobo,
+              payerEmail,
+              payerEmail,
+              reviewMeta
+            )
+            .run();
+          return { applied: false, status: 'paid, needs review', paymentType: 'student', albumId, submissionId };
+        }
+
+        let subPayload: any = {};
+        try { subPayload = JSON.parse(subRow.payload_json || '{}'); } catch {}
+        subPayload.paymentStatus = 'paid';
+        subPayload.paidReference = reference;
+
+        await env.DB.prepare(
+          `UPDATE profile_submissions SET payment_status = 'paid', paid_reference = ?, payload_json = ?, updated_at = datetime('now') WHERE id = ? AND album_id = ?`
+        )
+          .bind(reference, JSON.stringify(subPayload), submissionId, albumId)
+          .run();
+
+        // Also update albumData.students[] if already mirrored
+        const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (albumRow?.data_json) {
+          try {
+            const albumData = JSON.parse(albumRow.data_json);
+            if (Array.isArray(albumData.students)) {
+              let changed = false;
+              albumData.students = albumData.students.map((st: any) => {
+                if (st.id === submissionId) {
+                  changed = true;
+                  return { ...st, paymentStatus: 'paid', paidReference: reference };
+                }
+                return st;
+              });
+              if (changed) {
+                await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+                  .bind(JSON.stringify(albumData), albumId)
+                  .run();
+              }
+            }
+          } catch {}
+        }
+
+        const completedMeta = JSON.stringify({
+          ...meta,
+          paymentCategory: 'student_submission',
+          albumId,
+          submissionId,
+          payerEmail,
+          universityName: meta.institution || '',
+          departmentName: meta.department || '',
+          graduationYear: meta.set_year || '',
+        });
+
+        await env.DB.prepare(
+          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, datetime('now'))`
+        )
+          .bind(
+            txRow?.id || `tx-${reference}`,
+            reference,
+            albumId,
+            String(meta.department || ''),
+            String(meta.institution || ''),
+            Math.round(pskAmountKobo / 100),
+            pskAmountKobo,
+            subPayload.fullName || payerEmail,
+            payerEmail,
+            completedMeta
+          )
+          .run();
+
+        return { applied: true, status: 'Paid', paymentType: 'student', albumId, submissionId };
+      }
+
+      // Apply slot purchase payment
+      if (paymentType === 'slots' && albumId && quantity >= 1) {
+        const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (!albumRow) {
+          const reviewMeta = JSON.stringify({ ...meta, paymentCategory: 'slot_purchase', albumId, slotsPurchased: quantity, sponsorName, payerEmail });
+          await env.DB.prepare(
+            `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'paid, needs review', ?, ?, ?, datetime('now'))`
+          )
+            .bind(
+              txRow?.id || `tx-${reference}`,
+              reference,
+              albumId,
+              String(meta.department || ''),
+              String(meta.institution || ''),
+              Math.round(pskAmountKobo / 100),
+              pskAmountKobo,
+              sponsorName || payerEmail,
+              payerEmail,
+              reviewMeta
+            )
+            .run();
+          return { applied: false, status: 'paid, needs review', paymentType: 'slots', albumId };
+        }
+
+        const purchaseId = String(meta.purchase_id || `spurch-${reference}`);
+        const unitFeeKobo = Math.round(pskAmountKobo / quantity);
+
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO slot_purchases (id, album_id, quantity, amount_kobo, reference, sponsor_name, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'completed', datetime('now'))`
+        )
+          .bind(purchaseId, albumId, quantity, pskAmountKobo, reference, sponsorName)
+          .run();
+
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, purchase_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+           VALUES (?, ?, ?, 'purchase', ?, ?, ?, ?, ?, datetime('now'))`
+        )
+          .bind(
+            `sled-${reference}`,
+            albumId,
+            quantity,
+            purchaseId,
+            sponsorName,
+            unitFeeKobo,
+            `purchase:${reference}`,
+            payerEmail || sponsorName
+          )
+          .run();
+
+        // Sync sponsor entry into class_sets.data_json
+        try {
+          const albumData = JSON.parse(albumRow.data_json || '{}');
+          const sponsors = Array.isArray(albumData.sponsors) ? [...albumData.sponsors] : [];
+          if (!sponsors.some((s: any) => s.reference === reference)) {
+            sponsors.push({
+              id: purchaseId,
+              sponsorName,
+              DisplayLabel: sponsorName,
+              quantity,
+              amountPaid: Math.round(pskAmountKobo / 100),
+              reference,
+              date: new Date().toISOString().split('T')[0],
+              showSponsorNameOnAlbum: Boolean(sponsorName && sponsorName !== 'Class Sponsor'),
+              isKoHotCredit: false,
+            });
+            albumData.sponsors = sponsors;
+            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+              .bind(JSON.stringify(albumData), albumId)
+              .run();
+          }
+        } catch {}
+
+        const completedMeta = JSON.stringify({
+          ...meta,
+          paymentCategory: 'slot_purchase',
+          albumId,
+          slotsPurchased: quantity,
+          sponsorName,
+          payerEmail,
+          universityName: meta.institution || '',
+          departmentName: meta.department || '',
+          graduationYear: meta.set_year || '',
+        });
+
+        await env.DB.prepare(
+          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, datetime('now'))`
+        )
+          .bind(
+            txRow?.id || `tx-${reference}`,
+            reference,
+            albumId,
+            String(meta.department || ''),
+            String(meta.institution || ''),
+            Math.round(pskAmountKobo / 100),
+            pskAmountKobo,
+            sponsorName || payerEmail,
+            payerEmail,
+            completedMeta
+          )
+          .run();
+
+        return { applied: true, status: 'Paid', paymentType: 'slots', albumId, quantity, purchaseId };
+      }
+
+      // Fallback: Paid but nothing created / unknown target -> store as "paid, needs review"
+      const fallbackMeta = JSON.stringify({ ...meta, payerEmail });
+      await env.DB.prepare(
+        `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'paid, needs review', ?, ?, ?, datetime('now'))`
+      )
+        .bind(
+          txRow?.id || `tx-${reference}`,
+          reference,
+          albumId || null,
+          String(meta.department || ''),
+          String(meta.institution || ''),
+          Math.round(pskAmountKobo / 100),
+          pskAmountKobo,
+          payerEmail,
+          payerEmail,
+          fallbackMeta
+        )
+        .run();
+
+      return { applied: false, status: 'paid, needs review', paymentType: 'unknown', albumId };
+    };
+
+    // 4e-1. POST /api/payments/init
+    if (path === '/api/payments/init' && request.method === 'POST') {
+      if (!env.DB) {
+        return new Response(JSON.stringify({ error: 'Database unavailable' }), {
+          status: 503,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const paystackPublicKey = (env.PAYSTACK_PUBLIC_KEY || '').trim();
+      if (!paystackPublicKey || !env.PAYSTACK_SECRET_KEY) {
+        return new Response(
+          JSON.stringify({ error: 'payments_not_available', message: 'Payments are not available yet' }),
+          { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        type?: 'student' | 'slots';
+        albumId?: string;
+        submissionId?: string;
+        quantity?: number;
+        sponsorName?: string;
+        email?: string;
+      };
+
+      const paymentType = body.type;
+      const albumId = String(body.albumId || '').trim();
+
+      if ((paymentType !== 'student' && paymentType !== 'slots') || !albumId) {
+        return new Response(JSON.stringify({ error: 'Valid payment type and albumId are required.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+      if (!albumRow || albumRow.status === 'deleted') {
+        return new Response(JSON.stringify({ error: 'Album not found or not available.' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      let albumData: any = {};
+      try { albumData = JSON.parse(albumRow.data_json || '{}'); } catch {}
+
+      const settings = await getPlatformSettingsMap(env);
+      const feeKobo = Number(settings.student_fee_kobo) || 50000;
+
+      const institutionName = String(albumData.institutionName || albumData.universityName || albumRow.institution_id || '');
+      const departmentName = String(albumData.departmentName || albumRow.department_id || '');
+      const setYear = Number(albumData.graduationYear || albumRow.graduation_year || new Date().getFullYear());
+
+      const reference = `KHR-${paymentType === 'slots' ? 'SLT' : 'STD'}-${Date.now()}-${generateRandomHexToken(6)}`;
+      let amountKobo = feeKobo;
+      let payerEmail = '';
+      let payerName = '';
+      let metadata: any = {};
+
+      if (paymentType === 'student') {
+        const submissionId = String(body.submissionId || '').trim();
+        if (!submissionId) {
+          return new Response(JSON.stringify({ error: 'submissionId is required for student payment.' }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        const subRow = await env.DB.prepare(
+          `SELECT * FROM profile_submissions WHERE id = ? AND album_id = ?`
+        )
+          .bind(submissionId, albumId)
+          .first();
+
+        if (!subRow || subRow.status === 'removed' || subRow.status === 'declined') {
+          return new Response(JSON.stringify({ error: 'Submission not found or not eligible for payment.' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        if (subRow.payment_status === 'paid' || subRow.payment_status === 'waived') {
+          return new Response(JSON.stringify({ error: 'already_paid', message: 'This profile submission is already paid.' }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        let subPayload: any = {};
+        try { subPayload = JSON.parse(subRow.payload_json || '{}'); } catch {}
+        amountKobo = feeKobo;
+        payerEmail = String(subRow.email || body.email || '').trim().toLowerCase();
+        payerName = String(subPayload.fullName || payerEmail);
+        metadata = {
+          type: 'student',
+          institution: institutionName,
+          department: departmentName,
+          set_year: setYear,
+          album_id: albumId,
+          submission_id: submissionId,
+        };
+      } else {
+        // type === 'slots': require admin session with ownership of albumId
+        const sessionUser = await getSessionUser();
+        if (!sessionUser) {
+          return new Response(JSON.stringify({ error: 'Authentication required' }), {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        const ownerEmail = String(albumRow.admin_user_id || albumData.classRepEmail || '').toLowerCase();
+        if (ownerEmail !== sessionUser.email.toLowerCase() && sessionUser.role !== 'master_host') {
+          return new Response(JSON.stringify({ error: 'Forbidden: You do not own this album.' }), {
+            status: 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        const quantity = Math.max(1, Math.floor(Number(body.quantity) || 0));
+        const sponsorName = String(body.sponsorName || '')
+          .replace(/<[^>]*>/g, '')
+          .trim()
+          .slice(0, 60);
+        const purchaseId = `spurch-${reference}`;
+        amountKobo = quantity * feeKobo;
+        payerEmail = sessionUser.email.toLowerCase();
+        payerName = sponsorName || sessionUser.fullName || payerEmail;
+        metadata = {
+          type: 'slots',
+          institution: institutionName,
+          department: departmentName,
+          set_year: setYear,
+          album_id: albumId,
+          purchase_id: purchaseId,
+          quantity,
+          sponsor_name: sponsorName || 'Class Sponsor',
+        };
+      }
+
+      await env.DB.prepare(
+        `INSERT INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'pending', ?, ?, ?, datetime('now'))`
+      )
+        .bind(
+          `tx-${reference}`,
+          reference,
+          albumId,
+          departmentName,
+          institutionName,
+          Math.round(amountKobo / 100),
+          amountKobo,
+          payerName,
+          payerEmail,
+          JSON.stringify(metadata)
+        )
+        .run();
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          reference,
+          amountKobo,
+          email: payerEmail,
+          publicKey: paystackPublicKey,
+          metadata,
+        }),
+        { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 4e-2. POST /api/payments/verify
+    if (path === '/api/payments/verify' && request.method === 'POST') {
+      if (!env.PAYSTACK_SECRET_KEY) {
+        return new Response(
+          JSON.stringify({ error: 'payments_not_configured', message: 'Payments are not available yet' }),
+          { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const body = (await request.json().catch(() => ({}))) as { reference?: string };
+      const reference = String(body.reference || '').trim();
+      if (!reference || reference.startsWith('PSK-') || reference.startsWith('demo_')) {
+        return new Response(
+          JSON.stringify({ error: 'invalid_reference', message: 'Invalid payment reference.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      try {
+        const pskRes = await fetch(
+          `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+          {
+            headers: {
+              Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`,
+            },
+          }
+        );
+        const pskJson = (await pskRes.json().catch(() => ({}))) as any;
+        if (!pskRes.ok || !pskJson?.status || !pskJson?.data) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              status: 'failed',
+              error: 'payment_verification_failed',
+              message: 'Could not verify payment with Paystack.',
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const applyRes = await applyVerifiedPaystackPayment(reference, pskJson.data);
+        if (!applyRes.applied && applyRes.status !== 'paid, needs review') {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              status: applyRes.status,
+              error: applyRes.error || 'Payment verification failed.',
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            verified: true,
+            reference,
+            ...applyRes,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            status: 'error',
+            error: 'verification_network_error',
+            message: 'Payment received, confirming with server.',
+          }),
+          { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // 4e-3. POST /api/paystack/webhook — Verify x-paystack-signature (HMAC SHA-512), handle charge.success idempotently
+    if (path === '/api/paystack/webhook' && request.method === 'POST') {
+      if (!env.PAYSTACK_SECRET_KEY) {
+        return new Response('Webhook not configured', { status: 503 });
+      }
+      const signature = request.headers.get('x-paystack-signature') || '';
+      const rawBody = await request.text();
+      if (!signature || !rawBody) {
+        return new Response('Missing signature', { status: 401 });
+      }
+
+      const expectedSignature = await hmacSha512Hex(rawBody, env.PAYSTACK_SECRET_KEY);
+      if (signature.toLowerCase() !== expectedSignature.toLowerCase()) {
+        return new Response('Invalid signature', { status: 401 });
+      }
+
+      try {
+        const eventPayload = JSON.parse(rawBody);
+        if (eventPayload?.event === 'charge.success' && eventPayload?.data?.reference) {
+          const ref = String(eventPayload.data.reference).trim();
+          if (ref && !ref.startsWith('PSK-') && !ref.startsWith('demo_')) {
+            await applyVerifiedPaystackPayment(ref, eventPayload.data);
+          }
+        }
+      } catch {}
+
+      return new Response(JSON.stringify({ received: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     // 5. Founding Class Registration & Host Alert
@@ -2682,6 +3895,24 @@ ${message}
         version: nextVersion,
       };
 
+      // Delete any R2 media objects that were removed or replaced in this album update
+      try {
+        const oldKeys = collectAlbumMediaKeys(existingData);
+        const newKeys = collectAlbumMediaKeys(updatedAlbum);
+        for (const oldKey of oldKeys) {
+          if (!newKeys.has(oldKey)) {
+            const subStillUses = await env.DB.prepare(
+              `SELECT id FROM profile_submissions WHERE album_id = ? AND status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
+            )
+              .bind(albumId, oldKey, `%${oldKey}%`)
+              .first();
+            if (!subStillUses) {
+              await deleteR2ObjectAndRecord(oldKey);
+            }
+          }
+        }
+      } catch {}
+
       await env.DB.prepare(
         `UPDATE class_sets SET title = ?, status = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
       ).bind(
@@ -2767,7 +3998,7 @@ ${message}
       });
     }
 
-    // 12e. Transactions Routes (GET Host/Admin, POST Authenticated)
+    // 12e. Transactions Routes (GET Host/Admin; never mark paid from browser)
     if (path === '/api/transactions' && request.method === 'GET') {
       const sessionUser = await getSessionUser();
       if (!sessionUser) {
@@ -2781,25 +4012,35 @@ ${message}
         const res = await env.DB.prepare(`SELECT * FROM transactions ORDER BY created_at DESC`).all();
         for (const r of res?.results || []) {
           let meta: any = {};
-          try { meta = JSON.parse(r.raw_payload_json || '{}'); } catch {}
+          try { meta = JSON.parse(r.paystack_data_json || r.raw_payload_json || '{}'); } catch {}
+          const rawStatus = String(r.status || 'Paid');
+          const normalizedStatus =
+            rawStatus === 'Paid' || rawStatus === 'success'
+              ? 'Completed'
+              : rawStatus; // Preserves 'paid, needs review', 'pending', etc.
           const txItem = {
             id: r.id,
             reference: r.reference,
             universityId: meta.universityId || '',
-            universityName: meta.universityName || '',
+            universityName: meta.universityName || meta.institution || r.institution || '',
             departmentId: meta.departmentId || '',
-            departmentName: meta.departmentName || '',
-            graduationYear: Number(meta.graduationYear) || new Date().getFullYear(),
-            amountPaid: Math.round((Number(r.amount_kobo) || 0) / 100),
+            departmentName: meta.departmentName || meta.department || r.set_name || '',
+            graduationYear: Number(meta.graduationYear || meta.set_year) || new Date().getFullYear(),
+            amountPaid: Math.round((Number(r.amount_kobo) || 0) / 100) || Number(r.amount) || 0,
             paymentMethod: r.channel || meta.paymentMethod || 'Paystack',
-            status: r.status === 'success' ? 'Completed' : r.status || 'Completed',
-            payerName: meta.payerName || '',
-            payerEmail: meta.payerEmail || '',
+            status: normalizedStatus,
+            rawStatus,
+            needsReview: rawStatus.toLowerCase().includes('needs review'),
+            payerName: r.payer_name || meta.payerName || meta.sponsor_name || '',
+            payerEmail: r.payer_email || meta.payerEmail || '',
             date: (r.paid_at || r.created_at || new Date().toISOString()).split('T')[0],
-            paymentCategory: meta.paymentCategory || 'slot_purchase',
-            slotsPurchased: Number(meta.slotsPurchased) || 0,
-            sponsorName: meta.sponsorName || '',
-            albumId: meta.albumId || r.registration_id || '',
+            paymentCategory:
+              meta.paymentCategory ||
+              (meta.type === 'student' ? 'student_submission' : 'slot_purchase'),
+            slotsPurchased: Number(meta.slotsPurchased || meta.quantity) || 0,
+            sponsorName: meta.sponsorName || meta.sponsor_name || '',
+            albumId: meta.albumId || meta.album_id || r.set_id || r.registration_id || '',
+            submissionId: meta.submissionId || meta.submission_id || '',
           };
           if (sessionUser.role === 'master_host' || String(txItem.payerEmail).toLowerCase() === sessionUser.email.toLowerCase()) {
             transactions.push(txItem);
@@ -2813,32 +4054,13 @@ ${message}
     }
 
     if (path === '/api/transactions' && request.method === 'POST') {
-      const sessionUser = await getSessionUser();
-      if (!sessionUser) {
-        return new Response(JSON.stringify({ error: 'Authentication required' }), {
-          status: 401,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      const body = (await request.json().catch(() => ({}))) as any;
-      const tx = body.transaction || body;
-      if (env.DB && tx && tx.reference) {
-        await env.DB.prepare(
-          `INSERT OR REPLACE INTO transactions (id, registration_id, reference, amount_kobo, currency, status, channel, paid_at, raw_payload_json, created_at)
-           VALUES (?, ?, ?, ?, 'NGN', 'success', ?, datetime('now'), ?, datetime('now'))`
-        ).bind(
-          tx.id || `tx-${Date.now()}`,
-          tx.albumId || '',
-          tx.reference,
-          (Number(tx.amountPaid) || 0) * 100,
-          tx.paymentMethod || 'Paystack',
-          JSON.stringify(tx)
-        ).run();
-      }
-      return new Response(JSON.stringify({ success: true }), {
-        status: 201,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({
+          error: 'forbidden',
+          message: 'Payments cannot be marked paid from the browser. Use /api/payments/init and /api/payments/verify.',
+        }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     // 12f. Testimonials Routes (GET Public/Host/Admin, POST Admin, PUT Host)
@@ -2999,6 +4221,22 @@ ${message}
       const body = (await request.json().catch(() => ({}))) as any;
       const content = body.content || body;
       if (env.DB) {
+        const existingRow = await env.DB.prepare(`SELECT * FROM website_content_overrides WHERE id = 'default'`).first();
+        if (existingRow) {
+          try {
+            const oldContent = JSON.parse(existingRow.data_json || existingRow.content_json || '{}');
+            const oldVideoKey = oldContent.heroVideoKey || extractMediaKeyFromUrl(oldContent.heroVideoUrl);
+            const newVideoKey = content.heroVideoKey || extractMediaKeyFromUrl(content.heroVideoUrl);
+            if (oldVideoKey && oldVideoKey !== newVideoKey) {
+              await deleteR2ObjectAndRecord(oldVideoKey);
+            }
+            const oldPosterKey = oldContent.heroPosterKey || extractMediaKeyFromUrl(oldContent.heroPosterUrl);
+            const newPosterKey = content.heroPosterKey || extractMediaKeyFromUrl(content.heroPosterUrl);
+            if (oldPosterKey && oldPosterKey !== newPosterKey) {
+              await deleteR2ObjectAndRecord(oldPosterKey);
+            }
+          } catch {}
+        }
         await env.DB.prepare(
           `INSERT OR REPLACE INTO website_content_overrides (id, data_json, updated_at) VALUES ('default', ?, datetime('now'))`
         ).bind(JSON.stringify(content)).run();
@@ -3080,53 +4318,54 @@ ${message}
       );
     }
 
-    // 13b. POST /api/albums/:albumId/slots/purchase
+    // 13b. POST /api/albums/:albumId/slots/purchase — Requires admin session, ownership, and a verified paid reference in transactions
     const slotPurchaseMatch = path.match(/^\/api\/albums\/([^/]+)\/slots\/purchase$/);
     if (slotPurchaseMatch && request.method === 'POST') {
       const albumId = decodeURIComponent(slotPurchaseMatch[1]);
-      const body = (await request.json().catch(() => ({}))) as any;
-      const quantity = Math.max(1, Number(body.quantity) || 1);
-      const reference = String(body.reference || `SLOT-${Date.now()}`).trim();
-      const sponsorName = String(body.sponsorName || 'Class Sponsor').trim();
-      const settings = await getPlatformSettingsMap(env);
-      const unitFeeKobo = Number(settings.student_fee_kobo) || 50000;
-      const amountKobo = Number(body.amountKobo) || quantity * unitFeeKobo;
-
-      if (!env.DB) {
-        return new Response(JSON.stringify({ error: 'Database unavailable' }), {
-          status: 500,
+      const access = await verifyAlbumAccess(albumId, false);
+      if (!access.allowed) {
+        return new Response(JSON.stringify({ error: access.error }), {
+          status: access.status,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
+      const body = (await request.json().catch(() => ({}))) as any;
+      const reference = String(body.reference || '').trim();
+      if (!reference || reference.startsWith('PSK-') || reference.startsWith('demo_') || reference.startsWith('SLT-') || reference.startsWith('SLOT-')) {
+        return new Response(
+          JSON.stringify({
+            error: 'verified_payment_required',
+            message: 'A verified Paystack payment reference is required to credit slots.',
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
 
-      const purchaseId = `spurch-${reference}`;
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO slot_purchases (id, album_id, quantity, amount_kobo, reference, sponsor_name, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'completed', datetime('now'))`
-      ).bind(purchaseId, albumId, quantity, amountKobo, reference, sponsorName).run();
+      // Check that the reference is already verified & paid in D1 transactions for this album
+      const txRow = await env.DB.prepare(
+        `SELECT * FROM transactions WHERE reference = ? AND set_id = ? AND status = 'Paid'`
+      )
+        .bind(reference, albumId)
+        .first();
 
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, purchase_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
-         VALUES (?, ?, ?, 'purchase', ?, ?, ?, ?, ?, datetime('now'))`
-      ).bind(
-        `sled-${reference}`,
-        albumId,
-        quantity,
-        purchaseId,
-        sponsorName,
-        unitFeeKobo,
-        `purchase:${reference}`,
-        sponsorName
-      ).run();
+      if (!txRow) {
+        return new Response(
+          JSON.stringify({
+            error: 'payment_not_verified',
+            message: 'Payment reference has not been verified by Paystack yet.',
+          }),
+          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
 
       const summary = await getAlbumSlotSummary(albumId);
       return new Response(
         JSON.stringify({
           success: true,
-          purchaseId,
+          purchaseId: `spurch-${reference}`,
           ...summary,
         }),
-        { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -3143,7 +4382,7 @@ ${message}
       }
       const body = (await request.json().catch(() => ({}))) as any;
       const ledgerId = body.ledgerId || body.id;
-      const newSponsorName = String(body.sponsorName || '').trim();
+      const newSponsorName = String(body.sponsorName || '').trim().slice(0, 60);
       if (!newSponsorName) {
         return new Response(JSON.stringify({ error: 'Sponsor name cannot be empty.' }), {
           status: 400,
@@ -3179,12 +4418,12 @@ ${message}
     }
 
     // 13d. POST /api/albums/:albumId/submissions/submit (and /api/albums/:albumId/profiles)
+    // Student submit route ignores client-supplied paymentStatus and paidReference; submissions start unpaid and only verify or webhook can mark them paid.
     const submitProfileMatch = path.match(/^\/api\/albums\/([^/]+)\/(?:submissions\/submit|profiles)$/);
     if (submitProfileMatch && request.method === 'POST') {
       const albumId = decodeURIComponent(submitProfileMatch[1]);
       const body = (await request.json().catch(() => ({}))) as any;
       const profilePayload = body.profile || body.payload || body;
-      const source: 'student' | 'admin' = body.source === 'admin' ? 'admin' : 'student';
       const email = String(profilePayload.personalEmail || body.email || '').trim().toLowerCase();
 
       if (!email) {
@@ -3194,8 +4433,24 @@ ${message}
         });
       }
 
+      // Reject base64 data URLs in profile image: must be an R2 /media/ URL or empty
+      if (typeof profilePayload.image === 'string' && profilePayload.image.startsWith('data:')) {
+        return new Response(
+          JSON.stringify({ error: 'base64_not_allowed', message: 'Photo must be uploaded to media storage first. Please retry photo upload.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Only allow source='admin' if the requester is authenticated and owns the album
+      let source: 'student' | 'admin' = 'student';
+      if (body.source === 'admin') {
+        const access = await verifyAlbumAccess(albumId, false);
+        if (access.allowed) {
+          source = 'admin';
+        }
+      }
+
       if (source === 'student' && !body.consent && !profilePayload.consentAt) {
-        // Record consent timestamp on student submissions
         profilePayload.consentAt = new Date().toISOString();
       }
 
@@ -3243,14 +4498,31 @@ ${message}
       const rawStatusToken = generateRandomHexToken(24);
       const tokenHash = await sha256Hex(rawStatusToken);
       const subId = existingByEmail?.id || profilePayload.id || `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const paymentStatus = body.paymentStatus || profilePayload.paymentStatus || (profilePayload.paidReference ? 'paid' : 'unpaid');
+
+      // NEVER trust client-supplied paymentStatus or paidReference:
+      // Preserve existing DB payment_status if already paid/waived on the server, otherwise start 'unpaid'
+      const paymentStatus =
+        existingByEmail && (existingByEmail.payment_status === 'paid' || existingByEmail.payment_status === 'waived')
+          ? existingByEmail.payment_status
+          : 'unpaid';
+      const paidReference =
+        existingByEmail && existingByEmail.payment_status === 'paid'
+          ? existingByEmail.paid_reference
+          : null;
       const nextStatus = body.saveAsDraft ? 'draft' : 'pending';
+      const newPhotoKey = profilePayload.photoKey || extractMediaKeyFromUrl(profilePayload.image) || null;
+
+      // If replacing an existing submission's photo, delete the old R2 object
+      if (existingByEmail?.photo_key && existingByEmail.photo_key !== newPhotoKey) {
+        await deleteR2ObjectAndRecord(existingByEmail.photo_key);
+      }
 
       const enrichedPayload = {
         ...profilePayload,
         id: subId,
         personalEmail: email,
         paymentStatus,
+        paidReference: paidReference || undefined,
         claimsToBeCovered: Boolean(profilePayload.claimsToBeCovered || body.claimsToBeCovered),
         source,
         status: nextStatus,
@@ -3264,11 +4536,11 @@ ${message}
         subId,
         albumId,
         JSON.stringify(enrichedPayload),
-        profilePayload.photoKey || null,
+        newPhotoKey,
         email,
         source,
         paymentStatus,
-        profilePayload.paidReference || body.paidReference || null,
+        paidReference,
         nextStatus,
         tokenHash
       ).run();
@@ -3312,15 +4584,18 @@ ${message}
       try { payload = JSON.parse(subRow.payload_json || '{}'); } catch {}
 
       if (request.method === 'GET') {
+        const settings = await getPlatformSettingsMap(env);
         return new Response(
           JSON.stringify({
             success: true,
+            studentFeeKobo: Number(settings.student_fee_kobo) || 50000,
             submission: {
               id: subRow.id,
               albumId: subRow.album_id,
               email: subRow.email,
               status: subRow.status,
               paymentStatus: subRow.payment_status,
+              paidReference: subRow.paid_reference,
               declineReason: subRow.decline_reason,
               declinedAt: subRow.declined_at,
               canEdit: subRow.status === 'draft' || subRow.status === 'changes_requested',
@@ -3343,17 +4618,34 @@ ${message}
       }
 
       const body = (await request.json().catch(() => ({}))) as any;
+      const incomingPayload = body.payload || body;
+      if (typeof incomingPayload.image === 'string' && incomingPayload.image.startsWith('data:')) {
+        return new Response(
+          JSON.stringify({ error: 'base64_not_allowed', message: 'Photo must be uploaded to media storage first.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const oldPhotoKey = subRow.photo_key || extractMediaKeyFromUrl(payload.image);
+      const nextPhotoKey = incomingPayload.photoKey || extractMediaKeyFromUrl(incomingPayload.image) || oldPhotoKey || null;
+      if (oldPhotoKey && nextPhotoKey && oldPhotoKey !== nextPhotoKey) {
+        await deleteR2ObjectAndRecord(oldPhotoKey);
+      }
+
+      // Never allow client edit to overwrite paymentStatus or paidReference
       const updatedPayload = {
         ...payload,
-        ...(body.payload || body),
+        ...incomingPayload,
         id: subRow.id,
         personalEmail: subRow.email,
+        paymentStatus: subRow.payment_status,
+        paidReference: subRow.paid_reference || undefined,
         status: body.saveAsDraft ? 'draft' : 'pending',
       };
       const nextStatus = body.saveAsDraft ? 'draft' : 'pending';
       await env.DB.prepare(
-        `UPDATE profile_submissions SET payload_json = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
-      ).bind(JSON.stringify(updatedPayload), nextStatus, subRow.id).run();
+        `UPDATE profile_submissions SET payload_json = ?, photo_key = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
+      ).bind(JSON.stringify(updatedPayload), nextPhotoKey, nextStatus, subRow.id).run();
 
       return new Response(
         JSON.stringify({
@@ -3394,8 +4686,8 @@ ${message}
         // Rule 7: Unapproved draft profiles expire after draft_retention_days (30 days); warn from day 23
         if ((r.status === 'draft' || r.status === 'pending') && ageDays >= retentionDays) {
           await env.DB.prepare(`DELETE FROM profile_submissions WHERE id = ?`).bind(r.id).run();
-          if (r.photo_key && env.BUCKET) {
-            try { await env.BUCKET.delete(r.photo_key); } catch {}
+          if (r.photo_key) {
+            await deleteR2ObjectAndRecord(r.photo_key);
           }
           continue;
         }
@@ -3481,7 +4773,7 @@ ${message}
         if (!subRow && Array.isArray(access.albumData?.students)) {
           const stFromAlbum = access.albumData.students.find((s: any) => s.id === reqId);
           if (stFromAlbum) {
-            const pStatus = stFromAlbum.paymentStatus || (stFromAlbum.paidReference ? 'paid' : 'unpaid');
+            const pStatus = stFromAlbum.paymentStatus === 'paid' || stFromAlbum.paymentStatus === 'waived' ? stFromAlbum.paymentStatus : 'unpaid';
             subRow = {
               id: stFromAlbum.id,
               album_id: albumId,
@@ -3779,7 +5071,7 @@ ${message}
       );
     }
 
-    // 13k. POST /api/albums/:albumId/submissions/remove — Remove profile (does NOT return slot)
+    // 13k. POST /api/albums/:albumId/submissions/remove — Remove profile (does NOT return slot, deletes R2 photo)
     const removeSubMatch = path.match(/^\/api\/albums\/([^/]+)\/submissions\/remove$/);
     if (removeSubMatch && request.method === 'POST') {
       const albumId = decodeURIComponent(removeSubMatch[1]);
@@ -3793,8 +5085,20 @@ ${message}
       const body = (await request.json().catch(() => ({}))) as any;
       const subId = String(body.submissionId || '').trim();
       if (env.DB && subId) {
+        const subRow = await env.DB.prepare(
+          `SELECT photo_key, payload_json FROM profile_submissions WHERE id = ? AND album_id = ?`
+        ).bind(subId, albumId).first();
+        if (subRow) {
+          if (subRow.photo_key) await deleteR2ObjectAndRecord(subRow.photo_key);
+          if (subRow.payload_json) {
+            try {
+              const p = JSON.parse(subRow.payload_json);
+              for (const k of collectAlbumMediaKeys(p)) await deleteR2ObjectAndRecord(k);
+            } catch {}
+          }
+        }
         await env.DB.prepare(
-          `UPDATE profile_submissions SET status = 'removed', updated_at = datetime('now') WHERE id = ? AND album_id = ?`
+          `UPDATE profile_submissions SET status = 'removed', photo_key = NULL, updated_at = datetime('now') WHERE id = ? AND album_id = ?`
         ).bind(subId, albumId).run();
       }
       const slotSummary = await getAlbumSlotSummary(albumId);

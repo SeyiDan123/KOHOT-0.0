@@ -31,10 +31,7 @@ import {
 } from 'lucide-react';
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 import { AlbumAdminHelpModal } from '../admin/AlbumAdminHelpModal';
-import { PaystackModal } from '../common/PaystackModal';
 import {
-  verifyPaystackPaymentOnServer,
-  STANDARD_PRICE,
   authenticateWithOAuthPayload,
   requestGoogleSignupToken,
   createFreeAlbumOnD1,
@@ -320,12 +317,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   const isDeptFoundingPendingDifferentYear = false;
 
-  // Pricing calculation
-  const perGraduateEstimate = useMemo(() => {
-    if (!estimatedGraduates || estimatedGraduates <= 0) return 0;
-    return Math.round((STANDARD_PRICE / estimatedGraduates) / 10) * 10;
-  }, [estimatedGraduates]);
-
   // Reset form on open (never pre-fill seyidan03@gmail.com; only use verifiedSignupSession if handed off)
   useEffect(() => {
     if (isOpen) {
@@ -334,7 +325,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       setSubmissionSuccess(false);
       setIsFoundingSubmitted(false);
       setIsAlbumAdminHelpOpen(false);
-      setIsPaystackOpen(false);
       setActiveOAuthProvider(null);
       setExistingAdminAccount(null);
 
@@ -713,150 +703,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       onClose();
     } catch (err: any) {
       setValidationError(err?.message || 'Network error while creating class album.');
-      setIsSubmitting(false);
-    }
-  };
-
-  // Paystack Success Handler for Standard Path
-  const handlePaystackSuccess = async (reference: string) => {
-    setIsPaystackOpen(false);
-    setIsSubmitting(true);
-
-    try {
-      // 1. Verify transaction with server endpoint
-      const verifyRes = await verifyPaystackPaymentOnServer({
-        reference,
-        institutionId: currentUni.id,
-        departmentId: selectedDepartmentId,
-        graduationYear: Number(graduationYear),
-        applicantEmail: adminEmail.trim().toLowerCase(),
-        applicantName: adminFullName.trim(),
-        applicantPhone: (repPhone || adminPhone).trim(),
-        classSetName: classSetName.trim() || `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`,
-        estimatedGraduates: Number(estimatedGraduates) || 100,
-        signupToken,
-      });
-
-      if (!verifyRes.success) {
-        setValidationError(verifyRes.message || 'Payment verification failed. Please contact support.');
-        setIsSubmitting(false);
-        return;
-      }
-
-      // 2. Re-check duplicate rule after payment succeeded (Prompt C.2.e safeguard)
-      const duplicateAfterPay = sets.find(
-        (s) =>
-          (s.institutionId === currentUni.id || s.universityId === currentUni.id) &&
-          s.departmentId === selectedDepartmentId &&
-          s.graduationYear === Number(graduationYear)
-      );
-
-      if (duplicateAfterPay) {
-        // Record refund needed transaction for Host finance view
-        const refundTx: FinancialTransaction = {
-          id: `tx-refund-${Date.now()}`,
-          reference,
-          date: new Date().toISOString().replace('T', ' ').slice(0, 16),
-          setId: duplicateAfterPay.id,
-          setName: duplicateAfterPay.classSetName,
-          institution: currentUni.name,
-          amount: STANDARD_PRICE,
-          currency: 'NGN',
-          status: 'paid, duplicate class, needs refund' as any,
-          payerName: adminFullName.trim(),
-          payerEmail: adminEmail.trim(),
-        };
-        // Hand off refund transaction without creating duplicate album
-        setValidationError(
-          'Payment received, but another user completed registration for this same graduation year moments ago. Your payment has been recorded for an immediate refund by the Master Host.'
-        );
-        setIsSubmitting(false);
-        return;
-      }
-
-      // 3. Create album set (Blank album: students: [], memories: [], etc.)
-      const nowIso = new Date().toISOString();
-      const newAlbumId = `${currentUni.id}-${selectedDepartmentId.replace(/^dept-/, '')}-${graduationYear}`;
-      const effectiveSetName = classSetName.trim()
-        ? formatClassSetName(classSetName, graduationYear)
-        : `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`;
-      const effectiveRole = applicantRole === 'Other' && customRole.trim() ? customRole.trim() : applicantRole;
-
-      const effectiveAdmin: UserAccount = {
-        id: `usr-rep-${Date.now()}`,
-        fullName: adminFullName.trim(),
-        email: adminEmail.trim().toLowerCase(),
-        phone: (repPhone || adminPhone).trim(),
-        role: 'class_rep',
-        assignedSetId: newAlbumId,
-      };
-
-      const newAlbumSet: ClassSet = {
-        id: newAlbumId,
-        institutionId: currentUni.id,
-        institutionName: currentUni.name,
-        institutionLogoUrl: currentUni.logoUrl,
-        departmentId: selectedDepartmentId,
-        departmentName: selectedDepartmentName,
-        faculty: currentDeptItem?.faculty || 'General Faculty',
-        graduationYear: Number(graduationYear),
-        classSetName: effectiveSetName,
-        classSlogan: classMotto.trim() || undefined,
-        academicYears: Number(academicYears) || 4,
-        estimatedGraduatesCount: Number(estimatedGraduates) || 100,
-        classRepName: effectiveAdmin.fullName,
-        classRepEmail: effectiveAdmin.email,
-        classRepPhone: (repPhone || adminPhone).trim(),
-        currentAdminUserId: effectiveAdmin.id,
-        backupContact: {
-          fullName: backupName.trim(),
-          phoneOrWhatsapp: backupPhone.trim(),
-          email: backupEmail.trim() || undefined,
-          relationshipOrRole: backupRole.trim() || undefined,
-        },
-        adminHistory: [
-          {
-            adminUserId: effectiveAdmin.id,
-            adminName: effectiveAdmin.fullName,
-            adminEmail: effectiveAdmin.email,
-            adminPhone: (repPhone || adminPhone).trim(),
-            appointedAt: nowIso,
-            reasonForTransition: 'initial_founder',
-            notes: `Official Class Album registered and paid for ${selectedDepartmentName} (Class of ${graduationYear}).`,
-          },
-        ],
-        activationStatus: 'active',
-        activationDate: nowIso.split('T')[0],
-        activationRef: reference,
-        showWelcomeMessage: true,
-        bannerImageUrl: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
-        legacyGroupImageUrl: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
-        ourStory: `Preserving the heritage of ${selectedDepartmentName}, our graduating class registered this official digital archive.`,
-        students: [], // Completely blank album per Prompt D.6
-        memories: [],
-        awards: [],
-        voices: [],
-      };
-
-      const paidTx: FinancialTransaction = {
-        id: `tx-paid-${Date.now()}`,
-        reference,
-        date: nowIso.replace('T', ' ').slice(0, 16),
-        setId: newAlbumId,
-        setName: effectiveSetName,
-        institution: currentUni.name,
-        amount: STANDARD_PRICE,
-        currency: 'NGN',
-        status: 'Paid',
-        payerName: effectiveAdmin.fullName,
-        payerEmail: effectiveAdmin.email,
-      };
-
-      setIsSubmitting(false);
-      onRegisterSuccess(newAlbumSet, effectiveAdmin, paidTx);
-      onClose();
-    } catch (err: any) {
-      setValidationError(err.message || 'Error completing registration after payment.');
       setIsSubmitting(false);
     }
   };
@@ -1774,24 +1620,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               </button>
             )}
           </div>
-        )}
-
-        {/* Paystack Inline Checkout Modal */}
-        {isPaystackOpen && (
-          <PaystackModal
-            isOpen={isPaystackOpen}
-            onClose={() => setIsPaystackOpen(false)}
-            amountNgn={STANDARD_PRICE}
-            customerEmail={adminEmail}
-            customerName={adminFullName}
-            metadata={{
-              universityName: currentUni?.name || '',
-              departmentName: selectedDepartmentName,
-              graduationYear: Number(graduationYear),
-              classSetName: classSetName.trim() || `${selectedDepartmentName} Class of '${String(graduationYear).slice(-2)}`,
-            }}
-            onSuccess={handlePaystackSuccess}
-          />
         )}
 
         {/* Album Admin Help Support Modal for Duplicate Album Inquiries */}

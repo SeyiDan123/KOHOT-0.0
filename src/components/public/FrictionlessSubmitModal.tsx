@@ -8,7 +8,7 @@ import { UniversalModal } from '../common/UniversalModal';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
 import { generateGoogleCalendarUrl, downloadIcsCalendarFile } from '../../utils/calendarHelper';
 import { getAlbumUrl } from '../../utils/urlHelper';
-import { uploadMediaToR2, submitStudentProfileOnServer } from '../../utils/apiClient';
+import { uploadMediaToR2, submitStudentProfileOnServer, fetchInviteUploadTokenFromServer } from '../../utils/apiClient';
 
 interface FrictionlessSubmitModalProps {
   currentSet: ClassSet;
@@ -40,7 +40,17 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
   const [showRemindOptions, setShowRemindOptions] = useState(false);
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [rawPhotoToCrop, setRawPhotoToCrop] = useState('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [inviteToken, setInviteToken] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (isOpen && currentSet.id) {
+      fetchInviteUploadTokenFromServer(currentSet.id).then((t) => {
+        if (t) setInviteToken(t);
+      });
+    }
+  }, [isOpen, currentSet.id]);
 
   if (!isOpen) return null;
 
@@ -61,6 +71,7 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
 
   const handleApplyCrop = async (croppedDataUrl: string) => {
     setIsCompressing(true);
+    setUploadError(null);
     try {
       const fetchRes = await fetch(croppedDataUrl);
       const blob = await fetchRes.blob();
@@ -69,21 +80,28 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
       const result = await compressImageToWebP(file, 800, 0.88);
       setCompressionInfo(result);
 
+      let tokenToUse = inviteToken;
+      if (!tokenToUse) {
+        tokenToUse = await fetchInviteUploadTokenFromServer(currentSet.id);
+        if (tokenToUse) setInviteToken(tokenToUse);
+      }
+
       // Upload to Cloudflare R2 object storage
       const uploadRes = await uploadMediaToR2(result.dataUrl, {
         setId: currentSet.id,
         category: 'portrait',
         fileName: `${fullName ? fullName.replace(/\s+/g, '-').toLowerCase() : 'student'}-portrait.webp`,
+        inviteToken: tokenToUse,
       });
 
-      if (uploadRes.success && uploadRes.url) {
+      if (uploadRes.success && uploadRes.url && !uploadRes.url.startsWith('data:')) {
         setPhotoDataUrl(uploadRes.url);
       } else {
-        setPhotoDataUrl(result.dataUrl);
+        setUploadError(uploadRes.error || 'Upload to cloud storage failed. Please click to retry.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Compression/upload error:', err);
-      setPhotoDataUrl(croppedDataUrl);
+      setUploadError(err?.message || 'Upload failed. Please try again.');
     } finally {
       setIsCompressing(false);
     }
@@ -308,6 +326,11 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
                       High-fidelity mobile portrait optimization in under 1 second
                     </p>
                   </div>
+                )}
+                {uploadError && (
+                  <p className="text-xs text-red-600 font-mono-tech mt-2">
+                    ⚠ {uploadError}
+                  </p>
                 )}
               </div>
 

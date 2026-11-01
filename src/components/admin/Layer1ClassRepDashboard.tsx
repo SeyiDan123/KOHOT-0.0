@@ -39,7 +39,10 @@ import {
   requestChangesAlbumSubmissionOnServer,
   reinstateAlbumSubmissionOnServer,
   removeAlbumSubmissionOnServer,
+  uploadMediaToR2,
+  migrateBase64ImagesOnServer,
 } from '../../utils/apiClient';
+import { PaystackModal } from '../common/PaystackModal';
 import { 
   User,
   AlertTriangle,
@@ -108,7 +111,8 @@ import {
   Sun,
   Moon,
   Pin,
-  PinOff
+  PinOff,
+  GripVertical
 } from 'lucide-react';
 import { ConvocationReminderModal } from './ConvocationReminderModal';
 import { InviteNextClassModal } from './InviteNextClassModal';
@@ -252,6 +256,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const [showInviteSheetQr, setShowInviteSheetQr] = useState<boolean>(false);
   const [isBuySlotsModalOpen, setIsBuySlotsModalOpen] = useState<boolean>(false);
   const [buySlotsCount, setBuySlotsCount] = useState<number>(25);
+  const [buySlotsInput, setBuySlotsInput] = useState<string>('25');
   const [buySlotsSponsorName, setBuySlotsSponsorName] = useState<string>('');
   const [buySlotsShowSponsor, setBuySlotsShowSponsor] = useState<boolean>(true);
   const [isBuyingSlots, setIsBuyingSlots] = useState<boolean>(false);
@@ -544,28 +549,35 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           'Adjust Album Hero Banner Framing',
           async (croppedUrl) => {
             setIsCompressingHero(true);
-            let finalHeroUrl = croppedUrl;
             try {
               const fetchRes = await fetch(croppedUrl);
               const blob = await fetchRes.blob();
               const croppedFile = new File([blob], 'hero-banner.webp', { type: 'image/webp' });
               const res = await compressImageToWebP(croppedFile, 1600, 0.85);
-              finalHeroUrl = res.dataUrl;
-            } catch (err) {
-              finalHeroUrl = croppedUrl;
+              const uploadRes = await uploadMediaToR2(res.dataUrl, {
+                setId: currentSet.id,
+                category: 'banner',
+                fileName: 'hero-banner.webp',
+              });
+              if (!uploadRes.success || !uploadRes.url || uploadRes.url.startsWith('data:')) {
+                showError('Upload failed', uploadRes.error || 'Could not upload hero banner to storage. Please retry.');
+                return;
+              }
+              setHeroBannerUrl(uploadRes.url);
+              onUpdateSet({
+                ...currentSet,
+                bannerImageUrl: uploadRes.url,
+                legacyGroupImageUrl: legacyFooterUrl,
+                socials: socials,
+                videos: videos,
+              });
+              setImagerySaveToast('✓ Album Hero Banner uploaded to R2 and applied to live album!');
+              setTimeout(() => setImagerySaveToast(null), 3500);
+            } catch (err: any) {
+              showError('Upload failed', err?.message || 'Error uploading hero banner. Please retry.');
             } finally {
               setIsCompressingHero(false);
             }
-            setHeroBannerUrl(finalHeroUrl);
-            onUpdateSet({
-              ...currentSet,
-              bannerImageUrl: finalHeroUrl,
-              legacyGroupImageUrl: legacyFooterUrl,
-              socials: socials,
-              videos: videos,
-            });
-            setImagerySaveToast('✓ Album Hero Banner updated and applied to live album!');
-            setTimeout(() => setImagerySaveToast(null), 3500);
           }
         );
       }
@@ -587,28 +599,35 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           'Adjust Footer Legacy Photo Framing',
           async (croppedUrl) => {
             setIsCompressingFooter(true);
-            let finalFooterUrl = croppedUrl;
             try {
               const fetchRes = await fetch(croppedUrl);
               const blob = await fetchRes.blob();
               const croppedFile = new File([blob], 'footer-photo.webp', { type: 'image/webp' });
               const res = await compressImageToWebP(croppedFile, 1600, 0.85);
-              finalFooterUrl = res.dataUrl;
-            } catch (err) {
-              finalFooterUrl = croppedUrl;
+              const uploadRes = await uploadMediaToR2(res.dataUrl, {
+                setId: currentSet.id,
+                category: 'footer',
+                fileName: 'footer-photo.webp',
+              });
+              if (!uploadRes.success || !uploadRes.url || uploadRes.url.startsWith('data:')) {
+                showError('Upload failed', uploadRes.error || 'Could not upload footer banner to storage. Please retry.');
+                return;
+              }
+              setLegacyFooterUrl(uploadRes.url);
+              onUpdateSet({
+                ...currentSet,
+                bannerImageUrl: heroBannerUrl,
+                legacyGroupImageUrl: uploadRes.url,
+                socials: socials,
+                videos: videos,
+              });
+              setImagerySaveToast('✓ Final Footer Banner uploaded to R2 and applied to live album!');
+              setTimeout(() => setImagerySaveToast(null), 3500);
+            } catch (err: any) {
+              showError('Upload failed', err?.message || 'Error uploading footer banner. Please retry.');
             } finally {
               setIsCompressingFooter(false);
             }
-            setLegacyFooterUrl(finalFooterUrl);
-            onUpdateSet({
-              ...currentSet,
-              bannerImageUrl: heroBannerUrl,
-              legacyGroupImageUrl: finalFooterUrl,
-              socials: socials,
-              videos: videos,
-            });
-            setImagerySaveToast('✓ Final Footer Banner updated and applied to live album!');
-            setTimeout(() => setImagerySaveToast(null), 3500);
           }
         );
       }
@@ -864,12 +883,29 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     fetch('/api/config', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        const feeKobo = Number(data?.settings?.student_fee_kobo || 0);
+        const feeKobo = Number(data?.slotFeeKobo || data?.studentFeeKobo || data?.settings?.student_fee_kobo || 0);
         if (feeKobo > 0) {
           setSlotPriceNaira(Math.round(feeKobo / 100));
         }
       })
       .catch(() => {});
+
+    // One-time migration: when an admin loads their album, upload any base64 images found in the album JSON to R2
+    if (!currentSet.id.startsWith('crownfield-') && JSON.stringify(currentSet).includes('data:image/')) {
+      migrateBase64ImagesOnServer({ albumId: currentSet.id })
+        .then((migRes) => {
+          if (migRes.success && migRes.migratedCount > 0) {
+            if (migRes.album) {
+              onUpdateSet(migRes.album);
+            }
+            showSuccess(
+              'Images Migrated to R2',
+              `Migrated ${migRes.migratedCount} inline image(s) to cloud storage.`
+            );
+          }
+        })
+        .catch(() => {});
+    }
   }, [currentSet.id]);
 
   // Helper to determine profile status across legacy `approved` boolean and new `submissionStatus`
@@ -1302,55 +1338,42 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     }
   };
 
-  // Purchase Profile Slots Handler
+  const [isSlotPaystackOpen, setIsSlotPaystackOpen] = useState(false);
+
+  // Purchase Profile Slots Handler — opens real Paystack checkout
   const handlePurchaseSlotsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (buySlotsCount <= 0) return;
+    const parsedQty = parseInt(buySlotsInput, 10);
+    const finalQty = !isNaN(parsedQty) && parsedQty >= 1 ? Math.min(1000, parsedQty) : Math.max(1, buySlotsCount);
+    setBuySlotsCount(finalQty);
+    setBuySlotsInput(String(finalQty));
+    setIsBuySlotsModalOpen(false);
+    setIsSlotPaystackOpen(true);
+  };
+
+  const handleSlotPaystackVerified = async () => {
     setIsBuyingSlots(true);
     try {
-      const amountKobo = buySlotsCount * slotPriceNaira * 100;
-      const reference = `SLT-${Date.now()}`;
-      const res = await purchaseAlbumSlotsOnServer(currentSet.id, {
-        quantity: buySlotsCount,
-        amountKobo,
-        reference,
-        sponsorName: buySlotsSponsorName.trim() || displayedAdminName,
-      });
-      if (res.success) {
-        const balRes = await fetchAlbumSlotBalanceOnServer(currentSet.id);
-        const nextUsed =
-          balRes.success && typeof balRes.totalUsed === 'number' ? balRes.totalUsed : totalSlotsUsed;
-        const nextCredited =
-          balRes.success && typeof balRes.totalCredited === 'number'
-            ? balRes.totalCredited
-            : totalSlotsCredited + buySlotsCount;
-        const nextBal =
-          balRes.success && typeof balRes.balance === 'number'
-            ? balRes.balance
-            : typeof res.balance === 'number'
-            ? res.balance
-            : Math.max(0, nextCredited - nextUsed);
+      const balRes = await fetchAlbumSlotBalanceOnServer(currentSet.id);
+      if (balRes.success) {
+        const nextUsed = typeof balRes.totalUsed === 'number' ? balRes.totalUsed : totalSlotsUsed;
+        const nextCredited = typeof balRes.totalCredited === 'number' ? balRes.totalCredited : totalSlotsCredited + buySlotsCount;
+        const nextBal = typeof balRes.balance === 'number' ? balRes.balance : Math.max(0, nextCredited - nextUsed);
         setSlotBalance(nextBal);
         setTotalSlotsCredited(nextCredited);
         setTotalSlotsUsed(nextUsed);
-        if (balRes.success && Array.isArray(balRes.purchases)) {
-          setSlotPurchasesList(balRes.purchases);
-        }
-        if (balRes.success && Array.isArray(balRes.ledger)) {
-          setSlotLedgerList(balRes.ledger);
-        }
+        if (Array.isArray(balRes.purchases)) setSlotPurchasesList(balRes.purchases);
+        if (Array.isArray(balRes.ledger)) setSlotLedgerList(balRes.ledger);
         onUpdateSet({
           ...currentSet,
           profileSlotBalance: nextBal,
           totalSlotsCredited: nextCredited,
           totalSlotsUsed: nextUsed,
         });
-        setIsBuySlotsModalOpen(false);
-        setBuySlotsSponsorName('');
-        showSuccess('Slots Credited', `Added ${buySlotsCount} profile slots. Available balance: ${nextBal}.`);
-      } else {
-        showError('Purchase Failed', res.error || 'Unable to credit profile slots.');
+        showSuccess('Slots Credited', `Verified ${buySlotsCount} profile slots. Available balance: ${nextBal}.`);
       }
+      setBuySlotsSponsorName('');
+      setTimeout(() => setIsSlotPaystackOpen(false), 800);
     } finally {
       setIsBuyingSlots(false);
     }
@@ -1515,7 +1538,15 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const [isVoicePickerOpen, setIsVoicePickerOpen] = useState(false);
   const voicePhotoInputRef = useRef<HTMLInputElement>(null);
 
-  // Dedicated Edit Modals for Awards and Final Thoughts to eliminate scrolling
+  // Dedicated Edit Modals for Moments, Awards, and Voices to eliminate scrolling
+  const [editingMomentBatchModal, setEditingMomentBatchModal] = useState<MemoryEvent | null>(null);
+  const [draggedMomentPhotoIndex, setDraggedMomentPhotoIndex] = useState<number | null>(null);
+  const [dragOverMomentPhotoIndex, setDragOverMomentPhotoIndex] = useState<number | null>(null);
+  const [draggedDraftPhotoIndex, setDraggedDraftPhotoIndex] = useState<number | null>(null);
+  const [dragOverDraftPhotoIndex, setDragOverDraftPhotoIndex] = useState<number | null>(null);
+  const [draggedBatchIndex, setDraggedBatchIndex] = useState<number | null>(null);
+  const [dragOverBatchIndex, setDragOverBatchIndex] = useState<number | null>(null);
+  const editMomentAddPhotosInputRef = useRef<HTMLInputElement>(null);
   const [editingAwardModalItem, setEditingAwardModalItem] = useState<AwardItem | null>(null);
   const [editingVoiceModalItem, setEditingVoiceModalItem] = useState<VoiceItem | null>(null);
   const [isShareAlbumModalOpen, setIsShareAlbumModalOpen] = useState(false);
@@ -1652,13 +1683,27 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       reader.onload = (uploadEvent) => {
         const rawUrl = uploadEvent.target?.result as string;
         if (rawUrl) {
-          triggerCropForImage(rawUrl, '1:1', 'Crop Award Recipient Photo', (cropped) => {
-            if (editingAwardModalItem) {
-              setEditingAwardModalItem({ 
-                ...editingAwardModalItem, 
-                winnerAvatar: cropped, 
-                rawAvatar: rawUrl 
+          triggerCropForImage(rawUrl, '1:1', 'Crop Award Recipient Photo', async (cropped) => {
+            try {
+              const comp = await compressImageToWebP(cropped, 720, 0.88);
+              const upRes = await uploadMediaToR2(comp.dataUrl, {
+                setId: currentSet.id,
+                category: 'award',
+                fileName: 'award-avatar.webp',
               });
+              if (upRes.success && upRes.url && !upRes.url.startsWith('data:')) {
+                if (editingAwardModalItem) {
+                  setEditingAwardModalItem({
+                    ...editingAwardModalItem,
+                    winnerAvatar: upRes.url,
+                    rawAvatar: upRes.url,
+                  });
+                }
+              } else {
+                showError('Upload failed', upRes.error || 'Could not upload award photo. Please retry.');
+              }
+            } catch (err: any) {
+              showError('Upload failed', err?.message || 'Could not upload award photo. Please retry.');
             }
           });
         }
@@ -1675,13 +1720,27 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       reader.onload = (uploadEvent) => {
         const rawUrl = uploadEvent.target?.result as string;
         if (rawUrl) {
-          triggerCropForImage(rawUrl, '1:1', 'Crop Contributor Photo', (cropped) => {
-            if (editingVoiceModalItem) {
-              setEditingVoiceModalItem({ 
-                ...editingVoiceModalItem, 
-                headshotUrl: cropped, 
-                rawHeadshotUrl: rawUrl 
+          triggerCropForImage(rawUrl, '1:1', 'Crop Contributor Photo', async (cropped) => {
+            try {
+              const comp = await compressImageToWebP(cropped, 720, 0.88);
+              const upRes = await uploadMediaToR2(comp.dataUrl, {
+                setId: currentSet.id,
+                category: 'voice',
+                fileName: 'voice-headshot.webp',
               });
+              if (upRes.success && upRes.url && !upRes.url.startsWith('data:')) {
+                if (editingVoiceModalItem) {
+                  setEditingVoiceModalItem({
+                    ...editingVoiceModalItem,
+                    headshotUrl: upRes.url,
+                    rawHeadshotUrl: upRes.url,
+                  });
+                }
+              } else {
+                showError('Upload failed', upRes.error || 'Could not upload headshot. Please retry.');
+              }
+            } catch (err: any) {
+              showError('Upload failed', err?.message || 'Could not upload headshot. Please retry.');
             }
           });
         }
@@ -1778,29 +1837,28 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     });
   };
 
-  // Image Upload with Universal Gallery Compatibility & Safe Framing
+  // Image Upload with Universal Gallery Compatibility & R2 Upload
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsCompressing(true);
     try {
-      // 1. Immediately extract universal displayable data URL from any gallery format (HEIC/JPG/PNG)
-      const rawUrl = await fileToUniversalDataUrl(file);
-      if (rawUrl) {
-        setNewStudentPhotoUrl(rawUrl);
+      const result = await compressImageToWebP(file, compressionResolution, 0.85);
+      setNewStudentCompression(result);
+      const upRes = await uploadMediaToR2(result.dataUrl, {
+        setId: currentSet.id,
+        category: 'portrait',
+        fileName: file.name || 'student-portrait.webp',
+      });
+      if (upRes.success && upRes.url && !upRes.url.startsWith('data:')) {
+        setNewStudentPhotoUrl(upRes.url);
+      } else {
+        showError('Upload failed', upRes.error || 'Failed to upload portrait to cloud storage. Please retry.');
       }
-
-      // 2. Perform background WebP optimization
-      try {
-        const result = await compressImageToWebP(file, compressionResolution, 0.85);
-        setNewStudentCompression(result);
-        setNewStudentPhotoUrl(result.dataUrl);
-      } catch (err) {
-        console.warn('Silent compression fallback applied:', err);
-      }
-    } catch (err) {
-      console.error('Error reading gallery image:', err);
+    } catch (err: any) {
+      console.error('Error uploading gallery image:', err);
+      showError('Upload failed', err?.message || 'Error uploading image. Please retry.');
     } finally {
       setIsCompressing(false);
     }
@@ -1883,13 +1941,24 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const res = await compressImageToWebP(file, compressionResolution, 0.85);
+        const upRes = await uploadMediaToR2(res.dataUrl, {
+          setId: currentSet.id,
+          category: 'moments',
+          fileName: file.name || `moment-${i + 1}.webp`,
+        });
+        if (!upRes.success || !upRes.url || upRes.url.startsWith('data:')) {
+          showError('Upload failed', upRes.error || `Failed to upload ${file.name || 'image'}. Please retry.`);
+          continue;
+        }
         newItems.push({
           id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          url: res.dataUrl,
+          url: upRes.url,
           caption: '',
         });
       }
-      setBatchImages((prev) => [...prev, ...newItems]);
+      if (newItems.length > 0) {
+        setBatchImages((prev) => [...prev, ...newItems]);
+      }
 
       // Extract event date from photo metadata (EXIF / Filename / System modified)
       const extracted = await extractDateFromBatchFiles(files, currentSet.graduationYear);
@@ -2127,12 +2196,22 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const res = await compressImageToWebP(file, compressionResolution, 0.85);
+        const upRes = await uploadMediaToR2(res.dataUrl, {
+          setId: currentSet.id,
+          category: 'moments',
+          fileName: file.name || `moment-${i + 1}.webp`,
+        });
+        if (!upRes.success || !upRes.url || upRes.url.startsWith('data:')) {
+          showError('Upload failed', upRes.error || `Failed to upload ${file.name || 'image'}. Please retry.`);
+          continue;
+        }
         newItems.push({
           id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          url: res.dataUrl,
+          url: upRes.url,
           caption: '',
         });
       }
+      if (newItems.length === 0) return;
 
       const updatedMemories = currentSet.memories.map((m) => {
         if (m.id === batchId) {
@@ -2154,6 +2233,143 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       setTimeout(() => setHierarchyToast(null), 3000);
     } catch (err) {
       console.error('Error appending images to category:', err);
+    }
+  };
+
+  // Open Edit Moment Category Pop-up Modal
+  const handleOpenEditMomentBatchModal = (batch: MemoryEvent) => {
+    setEditingMomentBatchModal({
+      ...batch,
+      images: batch.images.map((img) => ({ ...img })),
+    });
+  };
+
+  // Save edited Moment Category from Pop-up Modal
+  const handleSaveEditMomentBatchModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMomentBatchModal) return;
+    const trimmedTitle = editingMomentBatchModal.title.trim() || editingMomentBatchModal.eventTag.trim() || 'Moment';
+    const trimmedTag = editingMomentBatchModal.eventTag.trim() || trimmedTitle;
+    const isConv =
+      trimmedTitle.toLowerCase().includes('convocation') ||
+      trimmedTag.toLowerCase().includes('convocation') ||
+      Boolean(editingMomentBatchModal.isConvocationBatch);
+
+    const updatedBatch: MemoryEvent = {
+      ...editingMomentBatchModal,
+      title: trimmedTitle,
+      eventTag: trimmedTag,
+      caption: editingMomentBatchModal.caption?.trim() || undefined,
+      isConvocationBatch: isConv,
+    };
+
+    const updatedMemories = currentSet.memories.map((m) =>
+      m.id === updatedBatch.id ? updatedBatch : m
+    );
+
+    let updatedSet: ClassSet = {
+      ...currentSet,
+      memories: updatedMemories,
+    };
+
+    if (isConv && updatedBatch.dateStr) {
+      updatedSet = {
+        ...updatedSet,
+        convocationDate: updatedBatch.dateStr,
+      };
+    }
+
+    onUpdateSet(updatedSet);
+    setEditingMomentBatchModal(null);
+    setHierarchyToast(`✓ Moment "${updatedBatch.title}" updated!`);
+    setTimeout(() => setHierarchyToast(null), 3000);
+    showSuccess('Moment updated.', `"${updatedBatch.title}" has been saved.`);
+  };
+
+  // Canva-style Hold & Drag-and-Drop reorder for photos inside Edit Moment Modal
+  const handleReorderEditMomentPhotos = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || !editingMomentBatchModal) return;
+    const updatedImages = [...editingMomentBatchModal.images];
+    if (fromIndex < 0 || fromIndex >= updatedImages.length || toIndex < 0 || toIndex >= updatedImages.length) return;
+    const [moved] = updatedImages.splice(fromIndex, 1);
+    updatedImages.splice(toIndex, 0, moved);
+    setEditingMomentBatchModal({
+      ...editingMomentBatchModal,
+      images: updatedImages,
+    });
+  };
+
+  // Canva-style Hold & Drag-and-Drop reorder for photos inside Create New Category Modal
+  const handleReorderDraftPhotos = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    setBatchImages((prev) => {
+      const next = [...prev];
+      if (fromIndex < 0 || fromIndex >= next.length || toIndex < 0 || toIndex >= next.length) return prev;
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
+  // Canva-style Hold & Drag-and-Drop reorder for Moment Category cards
+  const handleReorderMomentBatches = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    const list = [...currentSet.memories];
+    if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length) return;
+    const [moved] = list.splice(fromIndex, 1);
+    list.splice(toIndex, 0, moved);
+    const updatedMemories = list.map((m, idx) => ({
+      ...m,
+      order: idx + 1,
+    }));
+    onUpdateSet({
+      ...currentSet,
+      memories: updatedMemories,
+    });
+    setHierarchyToast(`✓ Rearranged "${moved.title}" to position #${toIndex + 1}.`);
+    setTimeout(() => setHierarchyToast(null), 2500);
+  };
+
+  // Append new photos directly inside the Edit Moment Pop-up Modal
+  const handleAppendFilesToEditingMomentModal = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !editingMomentBatchModal) return;
+    setIsCompressingBatch(true);
+    try {
+      const newItems: Array<{ id: string; url: string; caption: string }> = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const res = await compressImageToWebP(file, compressionResolution, 0.85);
+        const upRes = await uploadMediaToR2(res.dataUrl, {
+          setId: currentSet.id,
+          category: 'moments',
+          fileName: file.name || `moment-${i + 1}.webp`,
+        });
+        if (!upRes.success || !upRes.url || upRes.url.startsWith('data:')) {
+          showError('Upload failed', upRes.error || `Failed to upload ${file.name || 'image'}. Please retry.`);
+          continue;
+        }
+        newItems.push({
+          id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          url: upRes.url,
+          caption: '',
+        });
+      }
+      if (newItems.length === 0) return;
+      setEditingMomentBatchModal((prev) =>
+        prev
+          ? {
+              ...prev,
+              images: [...prev.images, ...newItems],
+            }
+          : null
+      );
+      setHierarchyToast(`✓ Added ${newItems.length} photo${newItems.length > 1 ? 's' : ''} to moment!`);
+      setTimeout(() => setHierarchyToast(null), 2500);
+    } catch (err) {
+      console.error('Error adding photos to editing moment:', err);
+    } finally {
+      setIsCompressingBatch(false);
+      if (editMomentAddPhotosInputRef.current) editMomentAddPhotosInputRef.current.value = '';
     }
   };
 
@@ -2185,13 +2401,35 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     setIsCompressingBatch(true);
     try {
       const res = await compressImageToWebP(file, compressionResolution, 0.85);
+      const upRes = await uploadMediaToR2(res.dataUrl, {
+        setId: currentSet.id,
+        category: 'moments',
+        fileName: file.name || 'moment-replacement.webp',
+      });
+      if (!upRes.success || !upRes.url || upRes.url.startsWith('data:')) {
+        showError('Upload failed', upRes.error || 'Could not upload replacement image to storage. Please retry.');
+        return;
+      }
+      if (editingMomentBatchModal && editingMomentBatchModal.id === replacingTarget.categoryId) {
+        const updatedModalImages = [...editingMomentBatchModal.images];
+        if (updatedModalImages[replacingTarget.imageIndex]) {
+          updatedModalImages[replacingTarget.imageIndex] = {
+            ...updatedModalImages[replacingTarget.imageIndex],
+            url: upRes.url,
+          };
+        }
+        setEditingMomentBatchModal({
+          ...editingMomentBatchModal,
+          images: updatedModalImages,
+        });
+      }
       const updatedMemories = currentSet.memories.map((m) => {
         if (m.id === replacingTarget.categoryId) {
           const updatedImages = [...m.images];
           if (updatedImages[replacingTarget.imageIndex]) {
             updatedImages[replacingTarget.imageIndex] = {
               ...updatedImages[replacingTarget.imageIndex],
-              url: res.dataUrl,
+              url: upRes.url,
             };
           }
           return { ...m, images: updatedImages };
@@ -2199,7 +2437,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         return m;
       });
       onUpdateSet({ ...currentSet, memories: updatedMemories });
-      setHierarchyToast('✓ Image replaced successfully!');
+      setHierarchyToast('✓ Image replaced and uploaded to R2!');
       setTimeout(() => setHierarchyToast(null), 3000);
     } catch (err) {
       console.error('Error replacing image:', err);
@@ -2311,10 +2549,20 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         res.dataUrl,
         '1:1',
         'Crop Speaker / Mentor Headshot',
-        (croppedUrl) => {
-          setVoiceHeadshotUrl(croppedUrl);
-          setHierarchyToast('✓ Headshot photo cropped successfully!');
-          setTimeout(() => setHierarchyToast(null), 3000);
+        async (croppedUrl) => {
+          const comp = await compressImageToWebP(croppedUrl, 720, 0.88);
+          const upRes = await uploadMediaToR2(comp.dataUrl, {
+            setId: currentSet.id,
+            category: 'voice',
+            fileName: 'voice-headshot.webp',
+          });
+          if (upRes.success && upRes.url && !upRes.url.startsWith('data:')) {
+            setVoiceHeadshotUrl(upRes.url);
+            setHierarchyToast('✓ Headshot photo uploaded to R2!');
+            setTimeout(() => setHierarchyToast(null), 3000);
+          } else {
+            showError('Upload failed', upRes.error || 'Could not upload headshot. Please retry.');
+          }
         }
       );
     } catch {
@@ -2332,10 +2580,20 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         res.dataUrl,
         '1:1',
         'Crop Award Winner Portrait',
-        (croppedUrl) => {
-          setAwardAvatar(croppedUrl);
-          setHierarchyToast('✓ Winner photo cropped successfully!');
-          setTimeout(() => setHierarchyToast(null), 3000);
+        async (croppedUrl) => {
+          const comp = await compressImageToWebP(croppedUrl, 720, 0.88);
+          const upRes = await uploadMediaToR2(comp.dataUrl, {
+            setId: currentSet.id,
+            category: 'award',
+            fileName: 'award-avatar.webp',
+          });
+          if (upRes.success && upRes.url && !upRes.url.startsWith('data:')) {
+            setAwardAvatar(upRes.url);
+            setHierarchyToast('✓ Winner photo uploaded to R2!');
+            setTimeout(() => setHierarchyToast(null), 3000);
+          } else {
+            showError('Upload failed', upRes.error || 'Could not upload award photo. Please retry.');
+          }
         }
       );
     } catch {
@@ -2826,25 +3084,23 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
         {/* Dashboard Section Navigation Tabs (40px high) */}
         <div
-          className={`flex items-center gap-1.5 overflow-x-auto no-scrollbar border-b pb-1.5 ${
+          className={`flex items-center gap-2 overflow-x-auto no-scrollbar border-b pb-2.5 ${
             isLightMode ? 'border-zinc-200' : 'border-white/[0.08]'
           }`}
         >
           <button
             id="tab-btn-students"
             onClick={() => setActiveTab('students')}
-            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-4 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'students'
-                ? isLightMode
-                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
-                  : 'bg-white text-black font-semibold shadow'
+                ? 'bg-[#2563eb] text-white font-semibold shadow-lg shadow-blue-600/25'
                 : isLightMode
                 ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
-                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                : 'bg-[#0e1117] hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>People ({approvedStudents.length})</span>
+            <span>Classmates ({approvedStudents.length})</span>
             {pendingStudents.length > 0 && (
               <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-black font-bold text-[10px]">
                 {pendingStudents.length}
@@ -2855,31 +3111,27 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           <button
             id="tab-btn-memories"
             onClick={() => setActiveTab('memories')}
-            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-4 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'memories'
-                ? isLightMode
-                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
-                  : 'bg-white text-black font-semibold shadow'
+                ? 'bg-[#2563eb] text-white font-semibold shadow-lg shadow-blue-600/25'
                 : isLightMode
                 ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
-                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                : 'bg-[#0e1117] hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10'
             }`}
           >
             <Camera className="w-3.5 h-3.5" />
-            <span>Moments</span>
+            <span>Moments ({currentSet.memories.length})</span>
           </button>
 
           <button
             id="tab-btn-awards"
             onClick={() => setActiveTab('awards')}
-            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-4 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'awards'
-                ? isLightMode
-                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
-                  : 'bg-white text-black font-semibold shadow'
+                ? 'bg-[#2563eb] text-white font-semibold shadow-lg shadow-blue-600/25'
                 : isLightMode
                 ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
-                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                : 'bg-[#0e1117] hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10'
             }`}
           >
             <Trophy className="w-3.5 h-3.5" />
@@ -2889,31 +3141,27 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           <button
             id="tab-btn-voices"
             onClick={() => setActiveTab('voices')}
-            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-4 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'voices'
-                ? isLightMode
-                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
-                  : 'bg-white text-black font-semibold shadow'
+                ? 'bg-[#2563eb] text-white font-semibold shadow-lg shadow-blue-600/25'
                 : isLightMode
                 ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
-                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                : 'bg-[#0e1117] hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10'
             }`}
           >
             <Quote className="w-3.5 h-3.5" />
-            <span>Final Thoughts ({currentSet.voices.length})</span>
+            <span>Voices ({currentSet.voices.length})</span>
           </button>
 
           <button
             id="tab-btn-story"
             onClick={() => setActiveTab('story')}
-            className={`h-10 px-3.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+            className={`h-10 px-4 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'story'
-                ? isLightMode
-                  ? 'bg-zinc-950 text-white font-semibold shadow-md'
-                  : 'bg-white text-black font-semibold shadow'
+                ? 'bg-[#2563eb] text-white font-semibold shadow-lg shadow-blue-600/25'
                 : isLightMode
                 ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs'
-                : 'bg-[#0c0d14] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                : 'bg-[#0e1117] hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10'
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
@@ -2991,27 +3239,38 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               );
             })()}
 
-            {/* ACTIONS ROW: Two equal buttons, 42px high: gold INVITE + outlined ADD CLASSMATE */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                id="invite-classmates-btn"
-                type="button"
-                onClick={() => setIsInviteBottomSheetOpen(true)}
-                className="h-[42px] px-3 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne text-xs tracking-wider uppercase font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow"
-              >
-                <UserPlus className="w-4 h-4 shrink-0" />
-                <span className="truncate">INVITE</span>
-              </button>
+            {/* Classmates Section Header + Invite Classmates & Add Classmate Buttons */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              <div className="min-w-0">
+                <h3 className="font-serif text-lg sm:text-xl text-white leading-tight">
+                  Classmate Profiles ({approvedStudents.length})
+                </h3>
+                <p className="font-body text-xs text-zinc-400 mt-0.5 leading-snug">
+                  Manage approved profiles, leadership roles, and pending class submissions.
+                </p>
+              </div>
 
-              <button
-                id="add-student-btn"
-                type="button"
-                onClick={() => setIsAddingStudent(true)}
-                className="h-[42px] px-3 rounded-xl bg-transparent hover:bg-white/10 text-white border border-white/25 font-syne text-xs tracking-wider uppercase font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Plus className="w-4 h-4 shrink-0" />
-                <span className="truncate">ADD CLASSMATE</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  id="invite-classmates-btn"
+                  type="button"
+                  onClick={() => setIsInviteClassmatesModalOpen(true)}
+                  className="px-3.5 py-2.5 rounded-2xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-mono-tech text-[11px] uppercase tracking-wider font-bold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-[#d4af37]/15"
+                >
+                  <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                  <span className="leading-tight text-center">INVITE<br className="sm:hidden" /> CLASSMATES</span>
+                </button>
+
+                <button
+                  id="add-student-btn"
+                  type="button"
+                  onClick={() => setIsAddingStudent(true)}
+                  className="px-4 py-2.5 rounded-2xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] uppercase tracking-wider font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-blue-600/20"
+                >
+                  <Plus className="w-3.5 h-3.5 shrink-0" />
+                  <span className="leading-tight text-center">ADD<br className="sm:hidden" /> CLASSMATE</span>
+                </button>
+              </div>
             </div>
 
             {/* ONE-TIME DISMISSIBLE TIP */}
@@ -3048,8 +3307,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </div>
             )}
 
-            {/* HORIZONTALLY SCROLLABLE FILTER CHIP ROW + SEARCH ICON AT END */}
-            <div className="space-y-1.5">
+            {/* HORIZONTALLY SCROLLABLE FILTER CHIP ROW + ALWAYS-VISIBLE SEARCH BAR */}
+            <div className="space-y-2">
               <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
                 <button
                   id="admin-subtab-pending"
@@ -3121,85 +3380,68 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     <span>Declined ({declinedStudents.length})</span>
                   </button>
                 )}
-
-                {/* Search icon at the end */}
-                <button
-                  id="toggle-people-search-btn"
-                  type="button"
-                  onClick={() => setIsSearchExpanded((prev) => !prev)}
-                  className={`ml-auto p-1.5 rounded-xl border transition-colors cursor-pointer shrink-0 ${
-                    isSearchExpanded || adminStudentSearch
-                      ? 'bg-[#d4af37] text-black border-[#d4af37]'
-                      : 'bg-[#0c0d14] text-zinc-300 hover:text-white border-white/10'
-                  }`}
-                  title="Search & Sort"
-                  aria-label="Search profiles"
-                >
-                  <Search className="w-4 h-4" />
-                </button>
               </div>
 
-              {/* Expandable Search Field + Small Sort Menu (Recent first, A-Z) */}
-              {isSearchExpanded && (
-                <div className="flex items-center gap-2 pt-1 animate-fadeIn">
-                  <div className="relative flex-1">
-                    <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={adminStudentSearch}
-                      onChange={(e) => setAdminStudentSearch(e.target.value)}
-                      placeholder="Search profiles..."
-                      className="w-full bg-[#0c0d14] border border-white/15 rounded-xl pl-8 pr-7 py-1.5 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-white/30 font-body"
-                    />
-                    {adminStudentSearch && (
-                      <button
-                        type="button"
-                        onClick={() => setAdminStudentSearch('')}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="flex items-center p-0.5 rounded-xl bg-[#0c0d14] border border-white/15 text-[11px] font-mono-tech shrink-0">
+              {/* Revealed Search Bar + Sort Menu (Recent first, A-Z) */}
+              <div className="flex items-center gap-2 pt-0.5">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    id="admin-student-search-input"
+                    type="text"
+                    value={adminStudentSearch}
+                    onChange={(e) => setAdminStudentSearch(e.target.value)}
+                    placeholder="Search classmates by name, nickname, or role..."
+                    className="w-full bg-[#0c0d14] border border-white/15 rounded-xl pl-8 pr-7 py-2 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-white/30 font-body"
+                  />
+                  {adminStudentSearch && (
                     <button
                       type="button"
-                      onClick={() => setStudentSortMode('recent')}
-                      className={`px-2 py-1 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
-                        studentSortMode === 'recent'
-                          ? 'bg-white text-black font-bold shadow'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
+                      onClick={() => setAdminStudentSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white cursor-pointer"
                     >
-                      Recent first
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setStudentSortMode('alpha')}
-                      className={`px-2 py-1 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
-                        studentSortMode === 'alpha'
-                          ? 'bg-white text-black font-bold shadow'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      A-Z
-                    </button>
-                  </div>
-
-                  {studentDirectoryTab === 'leaders' && (
-                    <button
-                      id="reset-intuitive-hierarchy-btn"
-                      type="button"
-                      onClick={handleResetToIntuitiveHierarchy}
-                      className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-[11px] font-mono-tech text-zinc-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer shrink-0"
-                    >
-                      <RefreshCw className="w-3 h-3 text-amber-400" />
-                      <span>Auto-Rank</span>
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
-              )}
+
+                <div className="flex items-center p-0.5 rounded-xl bg-[#0c0d14] border border-white/15 text-[11px] font-mono-tech shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setStudentSortMode('recent')}
+                    className={`px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      studentSortMode === 'recent'
+                        ? 'bg-white text-black font-bold shadow'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Recent first
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudentSortMode('alpha')}
+                    className={`px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      studentSortMode === 'alpha'
+                        ? 'bg-white text-black font-bold shadow'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    A-Z
+                  </button>
+                </div>
+
+                {studentDirectoryTab === 'leaders' && (
+                  <button
+                    id="reset-intuitive-hierarchy-btn"
+                    type="button"
+                    onClick={handleResetToIntuitiveHierarchy}
+                    className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-[11px] font-mono-tech text-zinc-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                  >
+                    <RefreshCw className="w-3 h-3 text-amber-400" />
+                    <span>Auto-Rank</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* FIRST-TIME STATE: When album has fewer than 5 profiles and nothing is awaiting approval */}
@@ -3437,12 +3679,12 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             </UniversalModal>
 
             {/* =====================================================================
-                VIEW 1: ALL VIEW (COMPACT 44PX ROWS, ADMIN FIRST ROW "You · Admin")
+                VIEW 1: ALL VIEW (RESIZED PROFILE CARDS MATCHING SCREENSHOT 1 + DETAILS)
                ===================================================================== */}
             {studentDirectoryTab === 'all' && (
-              <div className="space-y-2">
-                <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
-                  {/* First Row: Admin's own profile tagged "You · Admin" with Edit link */}
+              <div className="space-y-2.5">
+                <div className="space-y-2.5">
+                  {/* First Card: Admin's own profile tagged "You · Admin" with Edit link */}
                   {myProfile && (
                     <div
                       id="admin-top-my-profile-row"
@@ -3450,39 +3692,49 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                         setInspectedProfileRow(myProfile);
                         setBottomSheetActionMode('none');
                       }}
-                      className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                      className="p-4 rounded-2xl bg-[#0e1117] border border-white/[0.08] hover:border-white/20 transition-all flex items-start justify-between gap-3.5 cursor-pointer shadow-sm"
                     >
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="flex items-start gap-3.5 min-w-0 flex-1">
                         {myProfile.photoUrl ? (
                           <img
                             src={myProfile.photoUrl}
                             alt={myProfile.fullName}
-                            className="w-11 h-11 rounded-lg object-cover border border-[#d4af37]/40 shrink-0 bg-black"
+                            className="w-16 h-20 rounded-xl object-cover border border-[#d4af37]/40 shrink-0 bg-black"
                           />
                         ) : (
-                          <div className="w-11 h-11 rounded-lg bg-[#d4af37]/15 border border-[#d4af37]/40 flex items-center justify-center text-[#d4af37] font-syne font-bold text-sm shrink-0">
+                          <div className="w-16 h-20 rounded-xl bg-[#d4af37]/15 border border-[#d4af37]/40 flex items-center justify-center text-[#d4af37] font-syne font-bold text-base shrink-0">
                             {myProfile.fullName ? myProfile.fullName.charAt(0).toUpperCase() : 'A'}
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="font-syne font-bold text-sm text-white truncate">
-                              {myProfile.fullName}
+                          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                            <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-wider text-[#d4af37] font-semibold truncate">
+                              {myProfile.position || 'CLASS REPRESENTATIVE'}
                             </span>
                             <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] font-bold shrink-0">
                               You · Admin
                             </span>
+                            <span className="text-[10px] font-mono-tech text-emerald-400">
+                              • Approved
+                            </span>
                           </div>
-                          <p className="font-mono-tech text-xs text-[#d4af37] truncate mt-0.5">
-                            {myProfile.position || 'Class Representative'}
+                          <p className="font-syne font-bold text-sm sm:text-base text-white truncate mt-0.5">
+                            {myProfile.fullName}
                           </p>
+                          {myProfile.nickname && (
+                            <p className="font-mono-tech text-xs text-zinc-400 truncate mt-0.5">
+                              "{myProfile.nickname}"
+                            </p>
+                          )}
+                          {myProfile.quote && (
+                            <p className="font-serif italic text-xs text-zinc-400 line-clamp-1 mt-0.5">
+                              "{myProfile.quote}"
+                            </p>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-3 shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <span className="text-[11px] font-mono-tech text-emerald-400">
-                          Approved
-                        </span>
+                      <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           id="edit-top-my-profile-btn"
                           type="button"
@@ -3495,13 +3747,12 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     </div>
                   )}
 
-                  {/* Approved Classmate Compact Rows (20 at a time) */}
+                  {/* Approved Classmate Profile Cards (20 at a time) */}
                   {adminAllStudents
                     .filter((s) => s.id !== myProfile?.id)
                     .slice(0, visiblePeopleCount)
                     .map((student) => {
-                      const isLeader = isLeaderProfile(student);
-                      const roleLabel = student.position?.trim() || 'Member';
+                      const roleLabel = (student.position?.trim() || 'Member').toUpperCase();
                       return (
                         <div
                           key={student.id}
@@ -3509,41 +3760,57 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                             setInspectedProfileRow(student);
                             setBottomSheetActionMode('none');
                           }}
-                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                          className="p-4 rounded-2xl bg-[#0e1117] border border-white/[0.08] hover:border-white/20 transition-all flex items-start justify-between gap-3.5 cursor-pointer shadow-sm"
                         >
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="flex items-start gap-3.5 min-w-0 flex-1">
                             <img
                               src={student.photoUrl}
                               alt={student.fullName}
-                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
+                              className="w-16 h-20 rounded-xl object-cover border border-white/10 shrink-0 bg-black"
                             />
                             <div className="min-w-0 flex-1">
-                              <p className="font-syne font-bold text-sm text-white truncate">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-wider text-[#d4af37] font-semibold truncate">
+                                  {roleLabel}
+                                </span>
+                                <span className="text-[10px] font-mono-tech text-emerald-400">
+                                  • Approved
+                                </span>
+                              </div>
+                              <p className="font-syne font-bold text-sm sm:text-base text-white truncate mt-0.5">
                                 {student.fullName}
                               </p>
-                              <p
-                                className={`font-mono-tech text-xs truncate mt-0.5 ${
-                                  isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
-                                }`}
-                              >
-                                {roleLabel}
-                              </p>
+                              {student.nickname && (
+                                <p className="font-mono-tech text-xs text-zinc-400 truncate mt-0.5">
+                                  "{student.nickname}"
+                                </p>
+                              )}
+                              {student.quote && (
+                                <p className="font-serif italic text-xs text-zinc-400 line-clamp-1 mt-0.5">
+                                  "{student.quote}"
+                                </p>
+                              )}
                             </div>
                           </div>
 
                           <div
-                            className="flex items-center gap-3 shrink-0"
+                            className="flex items-center gap-2 shrink-0"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <span className="text-[11px] font-mono-tech text-emerald-400">
-                              Approved
-                            </span>
                             <button
                               type="button"
                               onClick={() => setEditingStudent(student)}
                               className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer"
                             >
                               Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteStudent(student.id)}
+                              className="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                              title="Delete profile"
+                            >
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
@@ -3566,12 +3833,12 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             )}
 
             {/* =====================================================================
-                VIEW 2: LEADERS VIEW (COMPACT 44PX ROWS, LEADERS ONLY + REORDER)
+                VIEW 2: LEADERS VIEW (RESIZED PROFILE CARDS + REORDER)
                ===================================================================== */}
             {studentDirectoryTab === 'leaders' && (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {adminLeaders.length === 0 ? (
-                  <div className="p-10 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                  <div className="p-10 text-center rounded-2xl bg-[#0e1117] border border-white/10 space-y-1.5">
                     <Crown className="w-7 h-7 text-amber-400/40 mx-auto" />
                     <p className="text-sm font-syne text-white">No leadership profiles yet</p>
                     <p className="text-xs text-zinc-400">
@@ -3579,7 +3846,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     </p>
                   </div>
                 ) : (
-                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
+                  <div className="space-y-2.5">
                     {adminLeaders.slice(0, visiblePeopleCount).map((leader, index) => {
                       const isFirst = index === 0;
                       const isLast = index === adminLeaders.length - 1;
@@ -3592,33 +3859,46 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                             setInspectedProfileRow(leader);
                             setBottomSheetActionMode('none');
                           }}
-                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                          className="p-4 rounded-2xl bg-[#0e1117] border border-white/[0.08] hover:border-white/20 transition-all flex items-start justify-between gap-3.5 cursor-pointer shadow-sm"
                         >
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="flex items-start gap-3.5 min-w-0 flex-1">
                             <img
                               src={leader.photoUrl}
                               alt={leader.fullName}
-                              className="w-11 h-11 rounded-lg object-cover border border-[#d4af37]/30 shrink-0 bg-black"
+                              className="w-16 h-20 rounded-xl object-cover border border-[#d4af37]/30 shrink-0 bg-black"
                             />
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <p className="font-syne font-bold text-sm text-white truncate">
-                                  {leader.fullName}
-                                </p>
+                              <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-wider text-[#d4af37] font-semibold truncate">
+                                  {(leader.position || 'Leader').toUpperCase()}
+                                </span>
                                 {isAdminRow && (
                                   <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] font-bold shrink-0">
                                     You · Admin
                                   </span>
                                 )}
+                                <span className="text-[10px] font-mono-tech text-emerald-400">
+                                  • Approved
+                                </span>
                               </div>
-                              <p className="font-mono-tech text-xs text-[#d4af37] truncate mt-0.5">
-                                {leader.position || 'Leader'}
+                              <p className="font-syne font-bold text-sm sm:text-base text-white truncate mt-0.5">
+                                {leader.fullName}
                               </p>
+                              {leader.nickname && (
+                                <p className="font-mono-tech text-xs text-zinc-400 truncate mt-0.5">
+                                  "{leader.nickname}"
+                                </p>
+                              )}
+                              {leader.quote && (
+                                <p className="font-serif italic text-xs text-zinc-400 line-clamp-1 mt-0.5">
+                                  "{leader.quote}"
+                                </p>
+                              )}
                             </div>
                           </div>
 
                           <div
-                            className="flex items-center gap-2.5 shrink-0"
+                            className="flex items-center gap-2 shrink-0"
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="flex items-center gap-1">
@@ -3643,9 +3923,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                                 <ArrowDown className="w-3.5 h-3.5" />
                               </button>
                             </div>
-                            <span className="text-[11px] font-mono-tech text-emerald-400">
-                              Approved
-                            </span>
                             <button
                               type="button"
                               onClick={() => setEditingStudent(leader)}
@@ -3653,6 +3930,16 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                             >
                               Edit
                             </button>
+                            {!isAdminRow && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteStudent(leader.id)}
+                                className="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                                title="Delete profile"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -3675,10 +3962,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             )}
 
             {/* =====================================================================
-                VIEW 3: PENDING VIEW (CHECKBOX, SLOT TAGS, BATCH BAR, COMPACT 44PX ROWS)
+                VIEW 3: PENDING VIEW (RESIZED PROFILE CARDS + CHECKBOX + SLOT TAGS)
                ===================================================================== */}
             {studentDirectoryTab === 'pending' && (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {/* Compact Pending Header: "N awaiting approval" and "Select all" */}
                 {pendingStudents.length > 0 && (
                   <div className="px-3 py-1.5 rounded-xl bg-amber-400/[0.06] border border-amber-400/25 flex items-center justify-between gap-2">
@@ -3723,7 +4010,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
                 {pendingStudents.length === 0 ? (
                   currentSet.students.length < 5 ? null : (
-                    <div className="p-6 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                    <div className="p-6 text-center rounded-2xl bg-[#0e1117] border border-white/10 space-y-1.5">
                       <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto" />
                       <p className="text-sm font-syne font-bold text-white">No Pending Submissions</p>
                       <p className="text-xs text-zinc-400">
@@ -3732,9 +4019,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     </div>
                   )
                 ) : (
-                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
+                  <div className="space-y-2.5">
                     {pendingStudents.slice(0, visiblePeopleCount).map((student) => {
-                      const isLeader = isLeaderProfile(student);
                       const isPaid = isStudentSlotFree(student);
                       const claimsCovered = Boolean(student.claimsToBeCovered);
                       const isChecked = selectedPendingIds.includes(student.id);
@@ -3748,10 +4034,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                             setInspectedProfileRow(student);
                             setBottomSheetActionMode('none');
                           }}
-                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                          className="p-4 rounded-2xl bg-[#0e1117] border border-white/[0.08] hover:border-white/20 transition-all flex items-start justify-between gap-3 cursor-pointer shadow-sm"
                         >
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <div onClick={(e) => e.stopPropagation()} className="flex items-center">
+                          <div className="flex items-start gap-3 min-w-0 flex-1">
+                            <div onClick={(e) => e.stopPropagation()} className="flex items-center pt-1">
                               <input
                                 type="checkbox"
                                 checked={isChecked}
@@ -3771,20 +4057,13 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                             <img
                               src={student.photoUrl}
                               alt={student.fullName}
-                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
+                              className="w-16 h-20 rounded-xl object-cover border border-white/10 shrink-0 bg-black"
                             />
 
                             <div className="min-w-0 flex-1">
-                              <p className="font-syne font-bold text-sm text-white truncate">
-                                {student.fullName}
-                              </p>
-                              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                <span
-                                  className={`font-mono-tech text-xs truncate ${
-                                    isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
-                                  }`}
-                                >
-                                  {student.position || 'Member'}
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-wider text-[#d4af37] font-semibold truncate">
+                                  {(student.position || 'Member').toUpperCase()}
                                 </span>
                                 <span
                                   className={`px-2 py-0.5 rounded-md font-mono-tech text-[10px] font-semibold ${
@@ -3801,11 +4080,24 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                                   </span>
                                 )}
                               </div>
+                              <p className="font-syne font-bold text-sm sm:text-base text-white truncate mt-0.5">
+                                {student.fullName}
+                              </p>
+                              {student.nickname && (
+                                <p className="font-mono-tech text-xs text-zinc-400 truncate mt-0.5">
+                                  "{student.nickname}"
+                                </p>
+                              )}
+                              {student.quote && (
+                                <p className="font-serif italic text-xs text-zinc-400 line-clamp-1 mt-0.5">
+                                  "{student.quote}"
+                                </p>
+                              )}
                             </div>
                           </div>
 
                           <div
-                            className="flex items-center gap-2.5 shrink-0"
+                            className="flex items-center gap-2 shrink-0"
                             onClick={(e) => e.stopPropagation()}
                           >
                             {canApprove ? (
@@ -3850,68 +4142,81 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             )}
 
             {/* =====================================================================
-                VIEW 4: CHANGES REQUESTED VIEW (COMPACT 44PX ROWS)
+                VIEW 4: CHANGES REQUESTED VIEW (RESIZED PROFILE CARDS)
                ===================================================================== */}
             {studentDirectoryTab === 'changes_requested' && (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {changesRequestedStudents.length === 0 ? (
-                  <div className="p-10 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                  <div className="p-10 text-center rounded-2xl bg-[#0e1117] border border-white/10 space-y-1.5">
                     <p className="text-sm font-syne text-white">No profiles awaiting changes</p>
                     <p className="text-xs text-zinc-400">
                       When you request changes on a submission, it appears under this filter chip.
                     </p>
                   </div>
                 ) : (
-                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
-                    {changesRequestedStudents.slice(0, visiblePeopleCount).map((student) => {
-                      const isLeader = isLeaderProfile(student);
-                      return (
-                        <div
-                          key={student.id}
-                          onClick={() => {
-                            setInspectedProfileRow(student);
-                            setBottomSheetActionMode('none');
-                          }}
-                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
-                        >
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <img
-                              src={student.photoUrl}
-                              alt={student.fullName}
-                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="font-syne font-bold text-sm text-white truncate">
-                                {student.fullName}
-                              </p>
-                              <p
-                                className={`font-mono-tech text-xs truncate mt-0.5 ${
-                                  isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
-                                }`}
-                              >
-                                {student.position || 'Member'}
-                              </p>
+                  <div className="space-y-2.5">
+                    {changesRequestedStudents.slice(0, visiblePeopleCount).map((student) => (
+                      <div
+                        key={student.id}
+                        onClick={() => {
+                          setInspectedProfileRow(student);
+                          setBottomSheetActionMode('none');
+                        }}
+                        className="p-4 rounded-2xl bg-[#0e1117] border border-white/[0.08] hover:border-white/20 transition-all flex items-start justify-between gap-3.5 cursor-pointer shadow-sm"
+                      >
+                        <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                          <img
+                            src={student.photoUrl}
+                            alt={student.fullName}
+                            className="w-16 h-20 rounded-xl object-cover border border-white/10 shrink-0 bg-black"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-wider text-[#d4af37] font-semibold truncate">
+                                {(student.position || 'Member').toUpperCase()}
+                              </span>
+                              <span className="text-[10px] font-mono-tech text-sky-400">
+                                • Changes Requested
+                              </span>
                             </div>
-                          </div>
-
-                          <div
-                            className="flex items-center gap-3 shrink-0"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <span className="text-[11px] font-mono-tech text-sky-400">
-                              Changes Requested
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setEditingStudent(student)}
-                              className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer"
-                            >
-                              Edit
-                            </button>
+                            <p className="font-syne font-bold text-sm sm:text-base text-white truncate mt-0.5">
+                              {student.fullName}
+                            </p>
+                            {student.nickname && (
+                              <p className="font-mono-tech text-xs text-zinc-400 truncate mt-0.5">
+                                "{student.nickname}"
+                              </p>
+                            )}
+                            {student.quote && (
+                              <p className="font-serif italic text-xs text-zinc-400 line-clamp-1 mt-0.5">
+                                "{student.quote}"
+                              </p>
+                            )}
                           </div>
                         </div>
-                      );
-                    })}
+
+                        <div
+                          className="flex items-center gap-2 shrink-0"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setEditingStudent(student)}
+                            className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStudent(student.id)}
+                            className="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                            title="Delete profile"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -3930,68 +4235,81 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             )}
 
             {/* =====================================================================
-                VIEW 5: DECLINED VIEW (COMPACT 44PX ROWS)
+                VIEW 5: DECLINED VIEW (RESIZED PROFILE CARDS)
                ===================================================================== */}
             {studentDirectoryTab === 'declined' && (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {declinedStudents.length === 0 ? (
-                  <div className="p-10 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-1.5">
+                  <div className="p-10 text-center rounded-2xl bg-[#0e1117] border border-white/10 space-y-1.5">
                     <p className="text-sm font-syne text-white">No declined profiles</p>
                     <p className="text-xs text-zinc-400">
                       Declined submissions appear here and can be reinstated within 7 days.
                     </p>
                   </div>
                 ) : (
-                  <div className="rounded-2xl bg-[#0c0d14] border border-white/10 divide-y divide-white/[0.06] overflow-hidden">
-                    {declinedStudents.slice(0, visiblePeopleCount).map((student) => {
-                      const isLeader = isLeaderProfile(student);
-                      return (
-                        <div
-                          key={student.id}
-                          onClick={() => {
-                            setInspectedProfileRow(student);
-                            setBottomSheetActionMode('none');
-                          }}
-                          className="px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center justify-between gap-3 cursor-pointer"
-                        >
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <img
-                              src={student.photoUrl}
-                              alt={student.fullName}
-                              className="w-11 h-11 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="font-syne font-bold text-sm text-white truncate">
-                                {student.fullName}
-                              </p>
-                              <p
-                                className={`font-mono-tech text-xs truncate mt-0.5 ${
-                                  isLeader ? 'text-[#d4af37]' : 'text-zinc-400'
-                                }`}
-                              >
-                                {student.position || 'Member'}
-                              </p>
+                  <div className="space-y-2.5">
+                    {declinedStudents.slice(0, visiblePeopleCount).map((student) => (
+                      <div
+                        key={student.id}
+                        onClick={() => {
+                          setInspectedProfileRow(student);
+                          setBottomSheetActionMode('none');
+                        }}
+                        className="p-4 rounded-2xl bg-[#0e1117] border border-white/[0.08] hover:border-white/20 transition-all flex items-start justify-between gap-3.5 cursor-pointer shadow-sm"
+                      >
+                        <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                          <img
+                            src={student.photoUrl}
+                            alt={student.fullName}
+                            className="w-16 h-20 rounded-xl object-cover border border-white/10 shrink-0 bg-black"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-mono-tech text-[10px] sm:text-[11px] uppercase tracking-wider text-[#d4af37] font-semibold truncate">
+                                {(student.position || 'Member').toUpperCase()}
+                              </span>
+                              <span className="text-[10px] font-mono-tech text-red-400">
+                                • Declined
+                              </span>
                             </div>
-                          </div>
-
-                          <div
-                            className="flex items-center gap-3 shrink-0"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <span className="text-[11px] font-mono-tech text-red-400">
-                              Declined
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleReinstateSubmission(student)}
-                              className="text-xs font-mono-tech text-emerald-400 hover:underline font-semibold cursor-pointer"
-                            >
-                              Reinstate
-                            </button>
+                            <p className="font-syne font-bold text-sm sm:text-base text-white truncate mt-0.5">
+                              {student.fullName}
+                            </p>
+                            {student.nickname && (
+                              <p className="font-mono-tech text-xs text-zinc-400 truncate mt-0.5">
+                                "{student.nickname}"
+                              </p>
+                            )}
+                            {student.quote && (
+                              <p className="font-serif italic text-xs text-zinc-400 line-clamp-1 mt-0.5">
+                                "{student.quote}"
+                              </p>
+                            )}
                           </div>
                         </div>
-                      );
-                    })}
+
+                        <div
+                          className="flex items-center gap-2 shrink-0"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleReinstateSubmission(student)}
+                            className="text-xs font-mono-tech text-emerald-400 hover:underline font-semibold cursor-pointer"
+                          >
+                            Reinstate
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStudent(student.id)}
+                            className="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                            title="Delete profile"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -4227,23 +4545,46 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     Number of Profile Slots *
                   </label>
                   <input
-                    type="number"
-                    min={1}
-                    max={1000}
+                    id="buy-slots-quantity-input"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     required
-                    value={buySlotsCount}
-                    onChange={(e) => setBuySlotsCount(Math.max(1, Number(e.target.value)))}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-mono-tech text-sm"
+                    value={buySlotsInput}
+                    placeholder="e.g. 25"
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      setBuySlotsInput(raw);
+                      if (raw !== '') {
+                        const parsed = parseInt(raw, 10);
+                        if (!isNaN(parsed) && parsed >= 1) {
+                          setBuySlotsCount(Math.min(1000, parsed));
+                        }
+                      }
+                    }}
+                    onBlur={() => {
+                      const parsed = parseInt(buySlotsInput, 10);
+                      if (isNaN(parsed) || parsed < 1) {
+                        setBuySlotsInput('1');
+                        setBuySlotsCount(1);
+                      } else {
+                        const clamped = Math.min(1000, parsed);
+                        setBuySlotsInput(String(clamped));
+                        setBuySlotsCount(clamped);
+                      }
+                    }}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-mono-tech text-sm focus:outline-none focus:border-[#d4af37]"
                   />
                 </div>
                 <div>
                   <label className="block font-mono-tech text-[11px] uppercase text-zinc-400 mb-1.5">
-                    Sponsor Display Name (Optional)
+                    Sponsor Display Name (Optional, max 60 chars)
                   </label>
                   <input
                     type="text"
+                    maxLength={60}
                     value={buySlotsSponsorName}
-                    onChange={(e) => setBuySlotsSponsorName(e.target.value)}
+                    onChange={(e) => setBuySlotsSponsorName(e.target.value.slice(0, 60))}
                     placeholder="e.g. Class of '26 Exco or Alumni Sponsor"
                     className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-body text-xs"
                   />
@@ -4269,14 +4610,37 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   </button>
                   <button
                     type="submit"
-                    disabled={isBuyingSlots}
-                    className="px-5 py-2 rounded-full bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer"
+                    disabled={isBuyingSlots || !buySlotsInput || parseInt(buySlotsInput, 10) < 1}
+                    className="px-5 py-2 rounded-full bg-[#d4af37] disabled:opacity-40 text-black font-syne font-bold text-xs uppercase cursor-pointer"
                   >
-                    {isBuyingSlots ? 'Crediting...' : `Credit ${buySlotsCount} Slots`}
+                    {isBuyingSlots
+                      ? 'Opening Checkout...'
+                      : `Pay ₦${((parseInt(buySlotsInput, 10) || 0) * slotPriceNaira).toLocaleString()} (${parseInt(buySlotsInput, 10) || 0} Slots)`}
                   </button>
                 </div>
               </form>
             </UniversalModal>
+
+            {isSlotPaystackOpen && (
+              <PaystackModal
+                isOpen={isSlotPaystackOpen}
+                onClose={() => setIsSlotPaystackOpen(false)}
+                amountNgn={buySlotsCount * slotPriceNaira}
+                customerEmail={currentSet.classRepEmail || currentUser?.email || 'admin@kohot.ng'}
+                customerName={displayedAdminName || 'Class Admin'}
+                paymentType="slots"
+                albumId={currentSet.id}
+                quantity={buySlotsCount}
+                sponsorName={buySlotsSponsorName.trim().slice(0, 60)}
+                metadata={{
+                  universityName: currentSet.institutionName,
+                  departmentName: currentSet.departmentName,
+                  graduationYear: currentSet.graduationYear,
+                  classSetName: currentSet.classSetName,
+                }}
+                onSuccess={handleSlotPaystackVerified}
+              />
+            )}
 
             {/* EDIT SPONSOR DISPLAY MODAL (Rule 6: Never changes amount, quantity, reference, slots used, or balance) */}
             <UniversalModal
@@ -4948,7 +5312,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             ========================================================================= */}
         {activeTab === 'memories' && (
           <div id="moments-edit-section" className="space-y-6">
-            {/* The 2 Sub-Section Buttons: Upload Moments vs Highlights */}
+            {/* The 2 Sub-Section Buttons: Moments vs Highlights */}
             <div className={`flex items-center gap-3 border-b pb-4 ${
               isLightMode ? 'border-zinc-200' : 'border-white/10'
             }`}>
@@ -4967,7 +5331,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 }`}
               >
                 <Camera className="w-3.5 h-3.5" />
-                <span>Upload Moments ({currentSet.memories.length} Categories)</span>
+                <span>Moments ({currentSet.memories.length})</span>
               </button>
 
               <button
@@ -4985,926 +5349,1047 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 }`}
               >
                 <Film className="w-3.5 h-3.5" />
-                <span>Highlights ({videos.length} Videos)</span>
+                <span>Highlights ({videos.length})</span>
               </button>
             </div>
 
-            {/* SUB-TAB A: VIDEO HIGHLIGHTS */}
+            {/* SUB-TAB A: VIDEO HIGHLIGHTS (URL-ONLY, POSITIONED LIKE OTHER SECTIONS) */}
             {memoriesAdminSubTab === 'highlights' && (
-              <div id="video-highlights-manager-section" className="space-y-6 animate-fadeIn">
-                <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-6 shadow-lg">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <h4 className="font-syne font-bold text-lg text-white flex items-center gap-2">
-                        <Film className="w-4 h-4 text-red-500" />
-                        <span>Video Highlights ({videos.length})</span>
-                      </h4>
-                      <p className="text-xs text-zinc-400 font-mono-tech mt-0.5">
-                        Embed convocation speeches, valedictory addresses, award banquets, and class project reels.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleOpenAddVideo}
-                      className="px-4 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-all cursor-pointer shadow flex items-center gap-1.5 shrink-0 self-start sm:self-auto"
-                    >
-                      <Plus className="w-3.5 h-3.5 text-black" />
-                      <span>Add YouTube Video</span>
-                    </button>
-                  </div>
-
-                  {/* Video Add / Edit Form */}
-                  {isAddingVideo && (
-                    <form
-                      onSubmit={handleSaveVideoItem}
-                      className="p-5 sm:p-6 rounded-2xl bg-black/60 border border-white/20 space-y-4 animate-fadeIn"
-                    >
-                      <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                        <span className="font-syne font-bold text-sm text-white">
-                          {editingVideo ? 'Edit YouTube Video' : 'Add New YouTube Video to Album'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setIsAddingVideo(false)}
-                          className="text-zinc-400 hover:text-white p-1 cursor-pointer"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {/* Video Title */}
-                        <div className="space-y-1.5">
-                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                            Video Title *
-                          </label>
-                          <input
-                            required
-                            type="text"
-                            value={videoTitle}
-                            onChange={(e) => setVideoTitle(e.target.value)}
-                            placeholder="e.g. Convocation Ceremony & Valedictory Address"
-                            className="w-full px-3.5 py-2 rounded-xl bg-[#0a0c12] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
-                          />
-                        </div>
-
-                        {/* YouTube URL */}
-                        <div className="space-y-1.5">
-                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                            YouTube URL or Video ID *
-                          </label>
-                          <input
-                            required
-                            type="text"
-                            value={videoYoutubeUrl}
-                            onChange={(e) => setVideoYoutubeUrl(e.target.value)}
-                            placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ or youtu.be/..."
-                            className="w-full px-3.5 py-2 rounded-xl bg-[#0a0c12] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
-                          />
-                        </div>
-
-                        {/* Custom Thumbnail URL */}
-                        <div className="space-y-1.5">
-                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                            Optional Custom Thumbnail Image URL
-                          </label>
-                          <input
-                            type="text"
-                            value={videoThumbnailUrl}
-                            onChange={(e) => setVideoThumbnailUrl(e.target.value)}
-                            placeholder="Leave blank to auto-use YouTube's HQ thumbnail"
-                            className="w-full px-3.5 py-2 rounded-xl bg-[#0a0c12] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
-                          />
-                        </div>
-
-                        {/* Event Tag / Date */}
-                        <div className="space-y-1.5">
-                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                            Event Tag / Occasion Date
-                          </label>
-                          <input
-                            type="text"
-                            value={videoDateStr}
-                            onChange={(e) => setVideoDateStr(e.target.value)}
-                            placeholder="e.g. Convocation Day • Oct 2026"
-                            className="w-full px-3.5 py-2 rounded-xl bg-[#0a0c12] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
-                          />
-                        </div>
-
-                        {/* Description */}
-                        <div className="space-y-1.5 sm:col-span-2">
-                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                            Video Description / Highlights
-                          </label>
-                          <textarea
-                            rows={2}
-                            value={videoDescription}
-                            onChange={(e) => setVideoDescription(e.target.value)}
-                            placeholder="Brief summary of speeches, special awards, or memorable moments in this video..."
-                            className="w-full px-3.5 py-2 rounded-xl bg-[#0a0c12] border border-white/15 text-white text-xs font-body focus:outline-none focus:border-white/30"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-end gap-2 pt-2">
-                        <button
-                          type="button"
-                          onClick={() => setIsAddingVideo(false)}
-                          className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 text-xs font-mono-tech transition-colors cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-syne font-bold uppercase tracking-wider transition-colors cursor-pointer shadow"
-                        >
-                          {editingVideo ? 'Update Video' : 'Save Video to Album'}
-                        </button>
-                      </div>
-                    </form>
-                  )}
-
-                  {/* Videos List */}
-                  {videos.length === 0 ? (
-                    <div className="p-8 rounded-2xl bg-black/30 border border-dashed border-white/15 text-center space-y-3">
-                      <Film className="w-8 h-8 text-zinc-600 mx-auto" />
-                      <div className="space-y-1">
-                        <p className="font-syne font-bold text-sm text-white">No Department Videos Added Yet</p>
-                        <p className="font-body text-xs text-zinc-400 max-w-md mx-auto">
-                          Bring your class album to life with memorable graduation video footage, award banquets, project pitches, or farewell speeches.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const sample: DepartmentVideoItem = {
-                            id: `vid-${Date.now()}`,
-                            title: `${currentSet.departmentName} Convocation Highlights & Valedictory`,
-                            youtubeUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-                            description: `Official celebratory highlights and memorable milestones for the Class of ${currentSet.graduationYear}.`,
-                            dateStr: `Convocation • ${currentSet.graduationYear}`,
-                          };
-                          const updated = [...videos, sample];
-                          setVideos(updated);
-                          onUpdateSet({ ...currentSet, videos: updated });
-                        }}
-                        className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer inline-flex items-center gap-2"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Add Demo Video Clip</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {videos.map((vid) => {
-                        const thumb = vid.thumbnailUrl || getYouTubeThumbnailUrl(vid.youtubeUrl);
-                        return (
-                          <div
-                            key={vid.id}
-                            className="rounded-2xl bg-black/50 border border-white/10 overflow-hidden group hover:border-white/25 transition-all flex flex-col justify-between"
-                          >
-                            <div>
-                              {/* Thumbnail with Play Button */}
-                              <div className="relative aspect-video bg-zinc-900 overflow-hidden">
-                                <img
-                                  src={thumb}
-                                  alt={vid.title}
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                                />
-                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center group-hover:bg-black/20 transition-colors">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setPreviewVideo(vid);
-                                      setIsPreviewVideoModalOpen(true);
-                                    }}
-                                    className="w-11 h-11 rounded-full bg-red-600/90 hover:bg-red-500 text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110 cursor-pointer"
-                                    title="Play video preview"
-                                  >
-                                    <Play className="w-5 h-5 ml-0.5 fill-current" />
-                                  </button>
-                                </div>
-
-                                {vid.dateStr && (
-                                  <span className="absolute bottom-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono-tech text-zinc-300">
-                                    {vid.dateStr}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Content */}
-                              <div className="p-3.5 space-y-1">
-                                <h5 className="font-syne font-bold text-xs text-white line-clamp-1">
-                                  {vid.title}
-                                </h5>
-                                {vid.description && (
-                                  <p className="font-body text-[11px] text-zinc-400 line-clamp-2 leading-relaxed">
-                                    {vid.description}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Video Actions */}
-                            <div className="p-3 border-t border-white/5 flex items-center justify-between gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPreviewVideo(vid);
-                                  setIsPreviewVideoModalOpen(true);
-                                }}
-                                className="text-[11px] font-mono-tech text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
-                              >
-                                <Play className="w-3 h-3 text-red-500" />
-                                <span>Preview</span>
-                              </button>
-
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditVideo(vid)}
-                                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer"
-                                  title="Edit video details"
-                                >
-                                  <Edit3 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteVideo(vid.id)}
-                                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-colors cursor-pointer"
-                                  title="Remove video"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* SUB-TAB B: MOMENTS CATEGORIES */}
-            {memoriesAdminSubTab === 'moments' && (
-              <div id="moments-batches-manager-section" className="space-y-6 animate-fadeIn">
-                {/* Header & Capacity Bar */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-syne font-bold text-xl text-white">
-                      Moments &amp; Milestone Categories ({currentSet.memories.length} Categories)
+              <div id="video-highlights-manager-section" className="space-y-4 animate-fadeIn">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="font-serif text-xl sm:text-2xl text-white leading-tight">
+                      Video Highlights ({videos.length})
                     </h3>
-                    <p className="font-body text-xs text-zinc-400 mt-1">
-                      Upload photos in themed categories (e.g., Convocation, Dinner &amp; Awards, Defenses). Rearrange category hierarchy and individual photo sequences for the album.
+                    <p className="font-body text-xs text-zinc-400 mt-1 leading-snug">
+                      Share video URLs from convocation speeches, dinner night, and class events.
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      id="create-batch-btn"
-                      type="button"
-                      onClick={() => setIsAddingBatch(true)}
-                      className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-5 rounded-full flex items-center gap-2 transition-colors cursor-pointer shadow"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Create New Category</span>
-                    </button>
-                  </div>
+                  <button
+                    id="add-video-highlight-btn"
+                    type="button"
+                    onClick={handleOpenAddVideo}
+                    className="px-4 py-2.5 rounded-2xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] tracking-wider uppercase font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-blue-600/20"
+                  >
+                    <Plus className="w-3.5 h-3.5 shrink-0" />
+                    <span className="leading-tight text-center">ADD<br className="sm:hidden" /> VIDEO</span>
+                  </button>
                 </div>
 
-            {/* Album Image Limit & Capacity Card */}
-            <div className="p-5 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <ImageIcon className="w-4 h-4 text-emerald-400" />
-                  <span className="font-syne font-bold text-sm text-white">
-                    Moments Gallery Capacity
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 text-xs font-mono-tech">
-                  <span className="text-zinc-400">
-                    <strong className="text-white font-bold">{totalMomentImages}</strong> / {maxImagesPerAlbum} images max
-                  </span>
-                  <span className={`px-2.5 py-0.5 rounded-full font-bold ${
-                    totalMomentImages >= maxImagesPerAlbum
-                      ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                      : totalMomentImages >= maxImagesPerAlbum * 0.8
-                        ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
-                        : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                  }`}>
-                    {Math.max(0, maxImagesPerAlbum - totalMomentImages)} slots remaining
-                  </span>
-                </div>
-              </div>
+                {/* Video Add / Edit Modal (URL Only — No Direct Video File Upload) */}
+                <UniversalModal
+                  isOpen={isAddingVideo}
+                  onClose={() => {
+                    setIsAddingVideo(false);
+                    setEditingVideo(null);
+                  }}
+                  title={editingVideo ? 'Edit Video Highlight' : 'Add Video Highlight'}
+                  subtitle="Paste a video URL (YouTube link) to embed in your class album."
+                  maxWidth="lg"
+                >
+                  <form
+                    onSubmit={handleSaveVideoItem}
+                    className="space-y-4 text-xs font-body p-1"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Video Title */}
+                      <div className="space-y-1.5">
+                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
+                          Video Title *
+                        </label>
+                        <input
+                          required
+                          type="text"
+                          value={videoTitle}
+                          onChange={(e) => setVideoTitle(e.target.value)}
+                          placeholder="e.g. Convocation Ceremony & Valedictory Address"
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
+                        />
+                      </div>
 
-              {/* Progress bar */}
-              <div className="w-full h-2 rounded-full bg-black/60 overflow-hidden border border-white/10">
-                <div
-                  className={`h-full transition-all duration-500 rounded-full ${
-                    totalMomentImages >= maxImagesPerAlbum
-                      ? 'bg-rose-500'
-                      : totalMomentImages >= maxImagesPerAlbum * 0.8
-                        ? 'bg-amber-400'
-                        : 'bg-emerald-500'
-                  }`}
-                  style={{ width: `${Math.min(100, Math.round((totalMomentImages / maxImagesPerAlbum) * 100))}%` }}
-                />
-              </div>
+                      {/* Video URL */}
+                      <div className="space-y-1.5">
+                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
+                          Video URL *
+                        </label>
+                        <input
+                          required
+                          type="url"
+                          value={videoYoutubeUrl}
+                          onChange={(e) => setVideoYoutubeUrl(e.target.value)}
+                          placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
+                        />
+                      </div>
 
-              <p className="text-[11px] font-mono-tech text-zinc-500">
-                All uploaded images undergo automated optimization for instant, high-resolution viewing across mobile and desktop.
-              </p>
-            </div>
+                      {/* Custom Thumbnail URL */}
+                      <div className="space-y-1.5">
+                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
+                          Custom Thumbnail URL (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={videoThumbnailUrl}
+                          onChange={(e) => setVideoThumbnailUrl(e.target.value)}
+                          placeholder="Leave blank to auto-use video thumbnail"
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
+                        />
+                      </div>
 
-            {/* CREATE NEW CATEGORY POP-UP MODAL */}
-            <UniversalModal
-              isOpen={isAddingBatch}
-              onClose={() => setIsAddingBatch(false)}
-              title="Create New Category"
-              maxWidth="xl"
-              zIndex={9980}
-            >
-              <form onSubmit={handleSaveBatch} className="space-y-5 text-xs font-body">
-                {/* Category Name & Quick Presets */}
-                <div className="space-y-2">
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                    Category Name <span className="text-red-400">*</span>
-                  </label>
-                  <input
-                    required
-                    type="text"
-                    value={batchCategory}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setBatchCategory(val);
-                      setBatchTitle(val);
-                      if (val.toLowerCase().includes('convocation')) {
-                        setIsConvocationBatchToggle(true);
-                      }
-                    }}
-                    placeholder="e.g. Sign-out Day, Dinner & Awards, Convocation..."
-                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none font-mono-tech text-xs transition-colors"
-                  />
+                      {/* Event Tag / Date */}
+                      <div className="space-y-1.5">
+                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
+                          Occasion / Event Tag
+                        </label>
+                        <input
+                          type="text"
+                          value={videoDateStr}
+                          onChange={(e) => setVideoDateStr(e.target.value)}
+                          placeholder="e.g. Convocation Day • Oct 2026"
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-white/30"
+                        />
+                      </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    {[
-                      'Convocation',
-                      'Sign-out Day',
-                      'Dinner & Awards',
-                      'Project Defense',
-                      'Lecture Hall Life',
-                      'Sports & Picnics',
-                      'Matriculation',
-                      'Campus Culture',
-                    ].map((cat) => (
+                      {/* Description */}
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
+                          Short Description (Optional)
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={videoDescription}
+                          onChange={(e) => setVideoDescription(e.target.value)}
+                          placeholder="Brief summary of speeches or memorable moments in this video..."
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white text-xs font-body focus:outline-none focus:border-white/30 resize-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-white/10">
                       <button
-                        key={cat}
                         type="button"
                         onClick={() => {
-                          setBatchCategory(cat);
-                          setBatchTitle(cat);
-                          if (cat.toLowerCase().includes('convocation')) {
+                          setIsAddingVideo(false);
+                          setEditingVideo(null);
+                        }}
+                        className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 text-xs font-mono-tech uppercase transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-6 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-mono-tech font-bold uppercase tracking-wider transition-colors cursor-pointer shadow"
+                      >
+                        {editingVideo ? 'Update Video' : 'Save Video'}
+                      </button>
+                    </div>
+                  </form>
+                </UniversalModal>
+
+                {/* Videos List */}
+                {videos.length === 0 ? (
+                  <div className="p-10 rounded-2xl bg-[#0e1117] border border-white/10 text-center space-y-3">
+                    <Film className="w-8 h-8 text-zinc-600 mx-auto" />
+                    <div className="space-y-1">
+                      <p className="font-syne font-bold text-sm text-white">No Video Highlights Added Yet</p>
+                      <p className="font-body text-xs text-zinc-400 max-w-md mx-auto">
+                        Click "+ ADD VIDEO" to paste a video link from convocation, dinner night, or class events.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {videos.map((vid) => {
+                      const thumb = vid.thumbnailUrl || getYouTubeThumbnailUrl(vid.youtubeUrl);
+                      return (
+                        <div
+                          key={vid.id}
+                          onClick={() => handleOpenEditVideo(vid)}
+                          className="rounded-2xl bg-[#0e1117] border border-white/[0.08] overflow-hidden group hover:border-white/25 transition-all flex flex-col justify-between cursor-pointer shadow-sm"
+                        >
+                          <div>
+                            {/* Thumbnail with Play Button */}
+                            <div className="relative aspect-video bg-zinc-900 overflow-hidden">
+                              <img
+                                src={thumb}
+                                alt={vid.title}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              />
+                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center group-hover:bg-black/20 transition-colors">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPreviewVideo(vid);
+                                    setIsPreviewVideoModalOpen(true);
+                                  }}
+                                  className="w-11 h-11 rounded-full bg-red-600/90 hover:bg-red-500 text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110 cursor-pointer"
+                                  title="Play video preview"
+                                >
+                                  <Play className="w-5 h-5 ml-0.5 fill-current" />
+                                </button>
+                              </div>
+
+                              {vid.dateStr && (
+                                <span className="absolute bottom-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono-tech text-zinc-300">
+                                  {vid.dateStr}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Content */}
+                            <div className="p-3.5 space-y-1">
+                              <h5 className="font-syne font-bold text-xs text-white line-clamp-1">
+                                {vid.title}
+                              </h5>
+                              {vid.description && (
+                                <p className="font-body text-[11px] text-zinc-400 line-clamp-2 leading-relaxed">
+                                  {vid.description}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Video Actions */}
+                          <div
+                            className="p-3 border-t border-white/5 flex items-center justify-between gap-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreviewVideo(vid);
+                                setIsPreviewVideoModalOpen(true);
+                              }}
+                              className="text-[11px] font-mono-tech text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                            >
+                              <Play className="w-3 h-3 text-red-500" />
+                              <span>Preview</span>
+                            </button>
+
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditVideo(vid)}
+                                className="text-xs font-mono-tech text-[#d4af37] hover:underline font-semibold cursor-pointer px-1.5 py-1"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteVideo(vid.id)}
+                                className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-colors cursor-pointer"
+                                title="Remove video"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* SUB-TAB B: MOMENTS CATEGORIES (MATCHING SCREENSHOT 5 + POP-UP EDITOR + CANVA DRAG & DROP) */}
+            {memoriesAdminSubTab === 'moments' && (
+              <div id="moments-batches-manager-section" className="space-y-4 animate-fadeIn">
+                {/* Class Moments Header */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="font-serif text-xl sm:text-2xl text-white leading-tight">
+                      Class Moments ({currentSet.memories.length})
+                    </h3>
+                    <p className="font-body text-xs text-zinc-400 mt-1 leading-snug">
+                      Photo collections from Sign-out Day, Dinner Party, Convocation, and class milestones.
+                    </p>
+                  </div>
+
+                  <button
+                    id="create-batch-btn"
+                    type="button"
+                    onClick={() => setIsAddingBatch(true)}
+                    className="px-4 py-2.5 rounded-2xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] tracking-wider uppercase font-semibold flex items-center gap-2 transition-colors cursor-pointer shrink-0 shadow-md shadow-blue-600/20"
+                  >
+                    <Plus className="w-3.5 h-3.5 shrink-0" />
+                    <span className="leading-tight text-center">ADD<br className="sm:hidden" /> MOMENT</span>
+                  </button>
+                </div>
+
+                {/* CREATE NEW CATEGORY POP-UP MODAL */}
+                <UniversalModal
+                  isOpen={isAddingBatch}
+                  onClose={() => setIsAddingBatch(false)}
+                  title="Create New Category"
+                  maxWidth="xl"
+                  zIndex={9980}
+                >
+                  <form onSubmit={handleSaveBatch} className="space-y-5 text-xs font-body">
+                    {/* Category Name & Quick Presets */}
+                    <div className="space-y-2">
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                        Category Name <span className="text-red-400">*</span>
+                      </label>
+                      <input
+                        required
+                        type="text"
+                        value={batchCategory}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setBatchCategory(val);
+                          setBatchTitle(val);
+                          if (val.toLowerCase().includes('convocation')) {
                             setIsConvocationBatchToggle(true);
                           }
                         }}
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tech transition-all cursor-pointer ${
-                          batchCategory === cat
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold'
-                            : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
-                        }`}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                        placeholder="e.g. Sign-out Day, Dinner Party, Bonfire Night..."
+                        className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none font-mono-tech text-xs transition-colors"
+                      />
 
-                {/* Event Date (Calendar Picker like Publish Album Date Choosing) */}
-                <div className="space-y-2">
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                    Event Date
-                  </label>
-                  <input
-                    type="date"
-                    value={
-                      typeof batchDay === 'number' && batchMonth && batchYear
-                        ? `${String(batchYear).padStart(4, '0')}-${String(batchMonth).padStart(2, '0')}-${String(batchDay).padStart(2, '0')}`
-                        : ''
-                    }
-                    onClick={(e) => {
-                      try {
-                        (e.currentTarget as any).showPicker?.();
-                      } catch {}
-                    }}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (!val) {
-                        setBatchDate('');
-                        setBatchDay('');
-                        return;
-                      }
-                      const [yStr, mStr, dStr] = val.split('-');
-                      const y = parseInt(yStr, 10);
-                      const m = parseInt(mStr, 10);
-                      const d = parseInt(dStr, 10);
-                      if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-                        setBatchYear(y);
-                        setBatchMonth(m);
-                        setBatchDay(d);
-                        setIsBatchDayUnknown(false);
-                        setBatchDate(formatDateComponents(d, m, y));
-                      }
-                    }}
-                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-amber-400 transition-colors cursor-pointer"
-                  />
-                </div>
-
-                {/* Short Caption (Optional) */}
-                <div className="space-y-1.5">
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400">
-                    Short Caption (Optional)
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={batchCaption}
-                    onChange={(e) => setBatchCaption(e.target.value)}
-                    placeholder="Brief description of this moment..."
-                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none resize-none transition-colors"
-                  />
-                </div>
-
-                {/* Upload Photos */}
-                <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                      Photos ({batchImages.length})
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => batchFileInputRef.current?.click()}
-                      disabled={isCompressingBatch}
-                      className="py-2 px-4 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>{isCompressingBatch ? 'Processing...' : 'Select Photos'}</span>
-                    </button>
-                  </div>
-
-                  <input
-                    type="file"
-                    ref={batchFileInputRef}
-                    multiple
-                    accept="image/*,.heic,.heif,.avif,.webp,.png,.jpg,.jpeg,.jfif,.bmp,.gif"
-                    onChange={(e) => handleBatchFilesUpload(e.target.files)}
-                    className="hidden"
-                  />
-
-                  {batchImages.length > 0 && (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1 max-h-56 overflow-y-auto pr-1">
-                      {batchImages.map((img, index) => (
-                        <div
-                          key={img.id || index}
-                          className="p-2 rounded-xl bg-black/60 border border-white/10 flex items-center gap-2.5"
-                        >
-                          <img
-                            src={img.url}
-                            alt={`Photo ${index + 1}`}
-                            className="w-12 h-12 rounded-lg object-cover border border-white/15 shrink-0"
-                          />
-                          <div className="min-w-0 flex-1 flex flex-col gap-1 text-[11px] font-mono-tech">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                triggerCropForImage(
-                                  img.url,
-                                  'free',
-                                  `Crop Photo #${index + 1}`,
-                                  (croppedUrl) => {
-                                    const updated = [...batchImages];
-                                    updated[index].url = croppedUrl;
-                                    setBatchImages(updated);
-                                  }
-                                );
-                              }}
-                              className="text-amber-400 hover:text-amber-300 cursor-pointer flex items-center gap-1 text-left"
-                            >
-                              <Crop className="w-2.5 h-2.5 shrink-0" />
-                              <span>Crop</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setBatchImages(batchImages.filter((_, i) => i !== index));
-                              }}
-                              className="text-red-400 hover:text-red-300 cursor-pointer text-left"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Modal Actions */}
-                <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddingBatch(false)}
-                    className="py-2.5 px-5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!batchCategory.trim() || batchImages.length === 0}
-                    className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-6 rounded-full transition-colors cursor-pointer shadow"
-                  >
-                    Save Category ({batchImages.length})
-                  </button>
-                </div>
-              </form>
-            </UniversalModal>
-
-            {/* Hidden Input for Replacing a Single Image in Any Category */}
-            <input
-              type="file"
-              ref={replaceImageInputRef}
-              accept="image/*"
-              onChange={(e) => handleExecuteImageReplacement(e.target.files)}
-              className="hidden"
-            />
-
-            {/* CATEGORIES LIST & HIERARCHICAL REORDERING */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between text-xs font-mono-tech text-zinc-400 px-1">
-                <span>
-                  Showing {currentSet.memories.length} Categories (Ordered Hierarchically)
-                </span>
-                <span className="text-[11px] text-zinc-500">
-                  Use the Up &amp; Down arrows to rearrange category display order.
-                </span>
-              </div>
-
-              {currentSet.memories.length === 0 ? (
-                <div className="p-12 text-center rounded-2xl bg-[#0c0d14] border border-white/10 space-y-3">
-                  <Camera className="w-8 h-8 text-zinc-600 mx-auto" />
-                  <p className="text-sm font-syne text-white">No Moments Categories Created Yet</p>
-                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
-                    Click "Create New Category" to upload a series of photos under a single milestone event like Sign-out Day or Project Defenses.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {currentSet.memories.map((batch, index) => {
-                    const isFirst = index === 0;
-                    const isLast = index === currentSet.memories.length - 1;
-                    const isAppending = activeAppendBatchId === batch.id;
-                    const isCollapsed = collapsedCategories[batch.id] === true;
-
-                    return (
-                      <div
-                        key={batch.id}
-                        id={`category-row-${batch.id}`}
-                        className="p-5 rounded-3xl bg-[#0c0d14] border border-white/10 hover:border-white/20 transition-all space-y-4 shadow-lg"
-                      >
-                        {/* Category Header Bar */}
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <span className="w-8 h-8 rounded-full bg-white/10 text-white font-mono-tech font-bold text-xs flex items-center justify-center shrink-0 border border-white/15">
-                              #{index + 1}
-                            </span>
-                            <div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <h4 className="font-syne font-bold text-base text-white">
-                                  {batch.title}
-                                </h4>
-                                <span className="px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] font-mono-tech uppercase text-zinc-300">
-                                  {batch.eventTag}
-                                </span>
-                                {(batch.isConvocationBatch || batch.eventTag === 'Convocation') && (
-                                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[10px] font-mono-tech text-emerald-300 font-bold flex items-center gap-1">
-                                    <Bell className="w-3 h-3" />
-                                    Annual Reminder Trigger
-                                  </span>
-                                )}
-                                {batch.dateStr && (
-                                  <span className="text-xs font-mono-tech text-zinc-400">
-                                    • {batch.dateStr}
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-xs font-mono-tech text-zinc-400 mt-0.5">
-                                {batch.images.length} photo{batch.images.length > 1 ? 's' : ''} in this category
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* Reordering Controls, Collapse Toggle & Actions */}
-                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap sm:flex-nowrap">
-                            <button
-                              id={`move-batch-up-${batch.id}`}
-                              disabled={isFirst}
-                              onClick={() => handleMoveBatch(batch.id, 'up')}
-                              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 disabled:opacity-20 text-white transition-colors cursor-pointer"
-                              title="Move category up in album hierarchy"
-                            >
-                              <ArrowUp className="w-4 h-4" />
-                            </button>
-
-                            <button
-                              id={`move-batch-down-${batch.id}`}
-                              disabled={isLast}
-                              onClick={() => handleMoveBatch(batch.id, 'down')}
-                              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 disabled:opacity-20 text-white transition-colors cursor-pointer"
-                              title="Move category down in album hierarchy"
-                            >
-                              <ArrowDown className="w-4 h-4" />
-                            </button>
-
-                            <button
-                              id={`append-to-batch-btn-${batch.id}`}
-                              onClick={() => {
-                                if (isCollapsed) toggleCategoryCollapse(batch.id);
-                                setActiveAppendBatchId(isAppending ? null : batch.id);
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer flex items-center gap-1"
-                              title="Add more photos to this category"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              <span>{isAppending ? 'Close' : 'Add Photos'}</span>
-                            </button>
-
-                            <button
-                              onClick={() => handleDeleteBatch(batch.id)}
-                              className="p-2 rounded-xl hover:bg-red-500/20 text-zinc-500 hover:text-red-400 transition-colors cursor-pointer"
-                              title="Delete category"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-
-                            {/* Arrow navigation for swipable image track */}
-                            {batch.images.length > 1 && (
-                              <div className="flex items-center gap-1 bg-white/5 rounded-xl p-0.5 border border-white/10">
-                                <button
-                                  type="button"
-                                  onClick={() => scrollBatchTrack(batch.id, 'left')}
-                                  className="p-1.5 rounded-lg hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer"
-                                  title="Scroll images left"
-                                >
-                                  <ChevronLeft className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => scrollBatchTrack(batch.id, 'right')}
-                                  className="p-1.5 rounded-lg hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer"
-                                  title="Scroll images right"
-                                >
-                                  <ChevronRight className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            )}
-
-                            {/* Collapse/Expand Toggle Button */}
-                            <button
-                              type="button"
-                              onClick={() => toggleCategoryCollapse(batch.id)}
-                              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer ml-0.5"
-                              title={isCollapsed ? 'Expand category gallery' : 'Collapse category gallery'}
-                            >
-                              {isCollapsed ? (
-                                <ChevronDown className="w-4 h-4 text-emerald-400" />
-                              ) : (
-                                <ChevronUp className="w-4 h-4 text-zinc-400" />
-                              )}
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Collapsed Compact Preview Bar */}
-                        {isCollapsed ? (
-                          <div
-                            onClick={() => toggleCategoryCollapse(batch.id)}
-                            className="py-3 px-4 rounded-2xl bg-black/40 hover:bg-black/60 border border-white/5 flex items-center justify-between text-xs font-mono-tech text-zinc-400 cursor-pointer transition-colors"
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        {[
+                          'Sign-out Day',
+                          'Dinner Party',
+                          'Bonfire Night',
+                          'Convocation',
+                          'Project Defense',
+                          'Sports & Picnics',
+                          'Matriculation',
+                          'Campus Culture',
+                        ].map((cat) => (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => {
+                              setBatchCategory(cat);
+                              setBatchTitle(cat);
+                              if (cat.toLowerCase().includes('convocation')) {
+                                setIsConvocationBatchToggle(true);
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tech transition-all cursor-pointer ${
+                              batchCategory === cat
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold'
+                                : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
+                            }`}
                           >
-                            <span>{batch.images.length} photo{batch.images.length > 1 ? 's' : ''} saved in this category</span>
-                            <span className="text-emerald-400 font-semibold flex items-center gap-1 text-xs">
-                              <span>Expand to view &amp; manage photos</span>
-                              <ChevronDown className="w-3.5 h-3.5" />
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Event Date (Calendar Picker like Publish Album Date Choosing) */}
+                    <div className="space-y-2">
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                        Event Date
+                      </label>
+                      <input
+                        type="date"
+                        value={
+                          typeof batchDay === 'number' && batchMonth && batchYear
+                            ? `${String(batchYear).padStart(4, '0')}-${String(batchMonth).padStart(2, '0')}-${String(batchDay).padStart(2, '0')}`
+                            : ''
+                        }
+                        onClick={(e) => {
+                          try {
+                            (e.currentTarget as any).showPicker?.();
+                          } catch {}
+                        }}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (!val) {
+                            setBatchDate('');
+                            setBatchDay('');
+                            return;
+                          }
+                          const [yStr, mStr, dStr] = val.split('-');
+                          const y = parseInt(yStr, 10);
+                          const m = parseInt(mStr, 10);
+                          const d = parseInt(dStr, 10);
+                          if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                            setBatchYear(y);
+                            setBatchMonth(m);
+                            setBatchDay(d);
+                            setIsBatchDayUnknown(false);
+                            setBatchDate(formatDateComponents(d, m, y));
+                          }
+                        }}
+                        className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-amber-400 transition-colors cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Sub Caption (Optional) */}
+                    <div className="space-y-1.5">
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400">
+                        Sub Caption / Moment Story (Optional)
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={batchCaption}
+                        onChange={(e) => setBatchCaption(e.target.value)}
+                        placeholder="Brief description or story behind this moment..."
+                        className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none resize-none transition-colors"
+                      />
+                    </div>
+
+                    {/* Upload Photos + Hold & Drag-and-Drop Rearrange */}
+                    <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <span className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold block">
+                            Photos ({batchImages.length})
+                          </span>
+                          {batchImages.length > 1 && (
+                            <span className="font-mono-tech text-[10px] text-zinc-500">
+                              Hold &amp; drag any photo to rearrange order
                             </span>
-                          </div>
-                        ) : (
-                          <>
-                            {/* Category Narrative / Caption */}
-                            {(batch.caption || batch.images[0]?.caption) && (
-                              <div className="bg-black/30 p-3.5 rounded-xl border border-white/5 space-y-1">
-                                <div className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
-                                  Category Narrative
-                                </div>
-                                <p className="font-body text-xs sm:text-sm text-zinc-200 italic">
-                                  "{batch.caption || batch.images[0]?.caption}"
-                                </p>
-                              </div>
-                            )}
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => batchFileInputRef.current?.click()}
+                          disabled={isCompressingBatch}
+                          className="py-2 px-4 rounded-full bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{isCompressingBatch ? 'Processing...' : 'Select Photos'}</span>
+                        </button>
+                      </div>
 
-                            {/* Inline Append Form if Active */}
-                            {isAppending && (
-                              <div className="p-4 rounded-2xl bg-black/60 border border-emerald-500/30 space-y-3 animate-fadeIn">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-mono-tech uppercase tracking-wider text-emerald-400 font-bold">
-                                    Append Photos to "{batch.title}"
+                      <input
+                        type="file"
+                        ref={batchFileInputRef}
+                        multiple
+                        accept="image/*,.heic,.heif,.avif,.webp,.png,.jpg,.jpeg,.jfif,.bmp,.gif"
+                        onChange={(e) => handleBatchFilesUpload(e.target.files)}
+                        className="hidden"
+                      />
+
+                      {batchImages.length > 0 && (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1 max-h-60 overflow-y-auto pr-1">
+                          {batchImages.map((img, index) => {
+                            const isBeingDragged = draggedDraftPhotoIndex === index;
+                            const isDragTarget = dragOverDraftPhotoIndex === index && draggedDraftPhotoIndex !== index;
+                            return (
+                              <div
+                                key={img.id || index}
+                                data-draft-moment-photo-idx={index}
+                                draggable
+                                onDragStart={() => {
+                                  setDraggedDraftPhotoIndex(index);
+                                  setDragOverDraftPhotoIndex(index);
+                                }}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  if (dragOverDraftPhotoIndex !== index) {
+                                    setDragOverDraftPhotoIndex(index);
+                                  }
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  if (draggedDraftPhotoIndex !== null && draggedDraftPhotoIndex !== index) {
+                                    handleReorderDraftPhotos(draggedDraftPhotoIndex, index);
+                                  }
+                                  setDraggedDraftPhotoIndex(null);
+                                  setDragOverDraftPhotoIndex(null);
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedDraftPhotoIndex(null);
+                                  setDragOverDraftPhotoIndex(null);
+                                }}
+                                onTouchStart={() => {
+                                  setDraggedDraftPhotoIndex(index);
+                                  setDragOverDraftPhotoIndex(index);
+                                }}
+                                onTouchMove={(e) => {
+                                  if (draggedDraftPhotoIndex === null) return;
+                                  const touch = e.touches[0];
+                                  if (!touch) return;
+                                  const targetEl = document
+                                    .elementFromPoint(touch.clientX, touch.clientY)
+                                    ?.closest('[data-draft-moment-photo-idx]');
+                                  if (targetEl) {
+                                    const targetIdx = parseInt(
+                                      targetEl.getAttribute('data-draft-moment-photo-idx') || '-1',
+                                      10
+                                    );
+                                    if (!isNaN(targetIdx) && targetIdx >= 0 && targetIdx !== draggedDraftPhotoIndex) {
+                                      handleReorderDraftPhotos(draggedDraftPhotoIndex, targetIdx);
+                                      setDraggedDraftPhotoIndex(targetIdx);
+                                      setDragOverDraftPhotoIndex(targetIdx);
+                                    }
+                                  }
+                                }}
+                                onTouchEnd={() => {
+                                  setDraggedDraftPhotoIndex(null);
+                                  setDragOverDraftPhotoIndex(null);
+                                }}
+                                className={`p-2 rounded-xl bg-black/60 border transition-all flex items-center gap-2 cursor-grab active:cursor-grabbing select-none ${
+                                  isBeingDragged
+                                    ? 'opacity-60 scale-95 border-[#2563eb] ring-2 ring-[#2563eb]/40'
+                                    : isDragTarget
+                                    ? 'border-amber-400 bg-amber-400/10'
+                                    : 'border-white/10 hover:border-white/25'
+                                }`}
+                              >
+                                <div className="relative shrink-0">
+                                  <img
+                                    src={img.url}
+                                    alt={`Photo ${index + 1}`}
+                                    className="w-12 h-12 rounded-lg object-cover border border-white/15 pointer-events-none"
+                                  />
+                                  <span className="absolute -top-1 -left-1 px-1.5 py-0.2 rounded bg-black/85 border border-white/20 text-[9px] font-mono-tech text-white font-bold">
+                                    {index + 1}
                                   </span>
-                                  <button
-                                    onClick={() => setActiveAppendBatchId(null)}
-                                    className="text-zinc-500 hover:text-white"
-                                  >
-                                    <X className="w-4 h-4" />
-                                  </button>
                                 </div>
-
-                                <input
-                                  type="file"
-                                  ref={appendFileInputRef}
-                                  multiple
-                                  accept="image/*,.heic,.heif,.avif,.webp,.png,.jpg,.jpeg,.jfif,.bmp,.gif"
-                                  onChange={(e) => handleAppendFilesToExistingBatch(e.target.files, batch.id)}
-                                  className="hidden"
-                                />
-
-                                <div className="flex flex-wrap items-center gap-3">
+                                <div className="min-w-0 flex-1 flex flex-col gap-1 text-[11px] font-mono-tech">
                                   <button
                                     type="button"
-                                    onClick={() => appendFileInputRef.current?.click()}
-                                    disabled={isCompressingBatch}
-                                    className="py-2 px-4 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-tech text-xs tracking-wider uppercase font-bold transition-colors flex items-center gap-2 cursor-pointer shadow"
+                                    onClick={() => {
+                                      triggerCropForImage(
+                                        img.url,
+                                        'free',
+                                        `Crop Photo #${index + 1}`,
+                                        (croppedUrl) => {
+                                          const updated = [...batchImages];
+                                          updated[index].url = croppedUrl;
+                                          setBatchImages(updated);
+                                        }
+                                      );
+                                    }}
+                                    className="text-amber-400 hover:text-amber-300 cursor-pointer flex items-center gap-1 text-left"
                                   >
-                                    <Upload className="w-3.5 h-3.5" />
-                                    <span>{isCompressingBatch ? 'Processing Photos...' : 'Select Photos to Append'}</span>
+                                    <Crop className="w-2.5 h-2.5 shrink-0" />
+                                    <span>Crop</span>
                                   </button>
-                                  <span className="text-zinc-500 font-mono-tech text-xs">
-                                    Selected photos will instantly be optimized and added to this category.
-                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setBatchImages(batchImages.filter((_, i) => i !== index));
+                                    }}
+                                    className="text-red-400 hover:text-red-300 cursor-pointer text-left"
+                                  >
+                                    Remove
+                                  </button>
                                 </div>
+                                <GripVertical className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                               </div>
-                            )}
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
 
-                            {/* Swipable Image Cards (University Directory Style) with In-Place Caption Editing, Image Replace & Remove */}
-                            <div
-                              id={`batch-scroll-${batch.id}`}
-                              className="flex gap-4 overflow-x-auto pb-4 pt-1 px-1 scroll-smooth snap-x snap-mandatory focus:outline-none"
-                              style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch' }}
-                            >
-                              {batch.images.map((img, imgIdx) => (
+                    {/* Modal Actions */}
+                    <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddingBatch(false)}
+                        className="py-2.5 px-5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!batchCategory.trim() || batchImages.length === 0}
+                        className="bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-40 text-white font-mono-tech text-xs tracking-wider uppercase font-bold py-2.5 px-6 rounded-full transition-colors cursor-pointer shadow"
+                      >
+                        Save Category ({batchImages.length})
+                      </button>
+                    </div>
+                  </form>
+                </UniversalModal>
+
+                {/* POP-UP WINDOW: EDIT MOMENT CATEGORY MODAL (FULL SUB-CAPTION, RENAME, CALENDAR DATE, CANVA DRAG & DROP PHOTOS) */}
+                <UniversalModal
+                  isOpen={!!editingMomentBatchModal}
+                  onClose={() => setEditingMomentBatchModal(null)}
+                  title="Edit Moment Category"
+                  subtitle="Tap or hold and drag photos to rearrange sequence like Canva pages."
+                  maxWidth="2xl"
+                  zIndex={9985}
+                >
+                  {editingMomentBatchModal && (
+                    <form onSubmit={handleSaveEditMomentBatchModal} className="space-y-4 text-xs font-body">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        {/* Category Title */}
+                        <div className="space-y-1.5">
+                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                            Moment Title / Category Name *
+                          </label>
+                          <input
+                            required
+                            type="text"
+                            value={editingMomentBatchModal.title}
+                            onChange={(e) =>
+                              setEditingMomentBatchModal({
+                                ...editingMomentBatchModal,
+                                title: e.target.value,
+                              })
+                            }
+                            placeholder="e.g. Sign-out Day & White Shirt Signing"
+                            className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-syne font-bold text-xs focus:border-[#2563eb] focus:outline-none"
+                          />
+                        </div>
+
+                        {/* Short Badge Tag (Top-Right Blue Badge on Card) */}
+                        <div className="space-y-1.5">
+                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                            Category Badge Label
+                          </label>
+                          <input
+                            type="text"
+                            value={editingMomentBatchModal.eventTag}
+                            onChange={(e) =>
+                              setEditingMomentBatchModal({
+                                ...editingMomentBatchModal,
+                                eventTag: e.target.value,
+                              })
+                            }
+                            placeholder="e.g. Sign-out Day, Dinner Party"
+                            className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-[#58a6ff] font-mono-tech text-xs focus:border-[#2563eb] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Event Date Picker (Calendar input just like public date choosing) */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                            Event Date
+                          </label>
+                          {editingMomentBatchModal.dateStr && (
+                            <span className="font-mono-tech text-[11px] text-amber-300">
+                              Current: {editingMomentBatchModal.dateStr}
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          type="date"
+                          value={
+                            editingMomentBatchModal.eventDay &&
+                            editingMomentBatchModal.eventMonth &&
+                            editingMomentBatchModal.eventYear
+                              ? `${String(editingMomentBatchModal.eventYear).padStart(4, '0')}-${String(
+                                  editingMomentBatchModal.eventMonth
+                                ).padStart(2, '0')}-${String(editingMomentBatchModal.eventDay).padStart(2, '0')}`
+                              : ''
+                          }
+                          onClick={(e) => {
+                            try {
+                              (e.currentTarget as any).showPicker?.();
+                            } catch {}
+                          }}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) {
+                              setEditingMomentBatchModal({
+                                ...editingMomentBatchModal,
+                                dateStr: '',
+                                eventDay: undefined,
+                              });
+                              return;
+                            }
+                            const [yStr, mStr, dStr] = val.split('-');
+                            const y = parseInt(yStr, 10);
+                            const m = parseInt(mStr, 10);
+                            const d = parseInt(dStr, 10);
+                            if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                              setEditingMomentBatchModal({
+                                ...editingMomentBatchModal,
+                                eventYear: y,
+                                eventMonth: m,
+                                eventDay: d,
+                                isDayUnknown: false,
+                                dateStr: formatDateComponents(d, m, y),
+                              });
+                            }
+                          }}
+                          className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-[#2563eb] transition-colors cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Full Sub-Caption / Narrative Message */}
+                      <div className="space-y-1.5">
+                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                          Sub-Caption / Full Moment Message
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={editingMomentBatchModal.caption || ''}
+                          onChange={(e) =>
+                            setEditingMomentBatchModal({
+                              ...editingMomentBatchModal,
+                              caption: e.target.value,
+                            })
+                          }
+                          placeholder="Write the full sub-caption or memory story for this event..."
+                          className="w-full px-4 py-3 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-[#2563eb] focus:outline-none resize-none font-body text-xs sm:text-sm leading-relaxed"
+                        />
+                      </div>
+
+                      {/* Canva-Style Hold & Drag-and-Drop Photo Grid */}
+                      <div className="p-4 rounded-2xl bg-[#08090e] border border-white/10 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <span className="font-syne font-bold text-xs sm:text-sm text-white block">
+                              Event Photos ({editingMomentBatchModal.images.length})
+                            </span>
+                            <span className="font-mono-tech text-[10px] text-zinc-400">
+                              Hold and drag any photo card to rearrange its position
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => editMomentAddPhotosInputRef.current?.click()}
+                            disabled={isCompressingBatch}
+                            className="px-3.5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] uppercase tracking-wider font-semibold flex items-center gap-1.5 cursor-pointer shadow"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>{isCompressingBatch ? 'Adding...' : 'Add Photos'}</span>
+                          </button>
+
+                          <input
+                            type="file"
+                            ref={editMomentAddPhotosInputRef}
+                            multiple
+                            accept="image/*,.heic,.heif,.avif,.webp,.png,.jpg,.jpeg,.jfif,.bmp,.gif"
+                            onChange={(e) => handleAppendFilesToEditingMomentModal(e.target.files)}
+                            className="hidden"
+                          />
+                        </div>
+
+                        {editingMomentBatchModal.images.length === 0 ? (
+                          <div className="p-8 text-center rounded-xl border border-dashed border-white/10 text-zinc-500 font-mono-tech text-xs">
+                            No photos in this moment. Click "Add Photos" to upload.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[320px] overflow-y-auto pr-1 pt-1">
+                            {editingMomentBatchModal.images.map((img, imgIdx) => {
+                              const isBeingDragged = draggedMomentPhotoIndex === imgIdx;
+                              const isDragTarget =
+                                dragOverMomentPhotoIndex === imgIdx && draggedMomentPhotoIndex !== imgIdx;
+
+                              return (
                                 <div
                                   key={img.id || imgIdx}
-                                  className="w-[230px] sm:w-[260px] shrink-0 snap-start rounded-2xl bg-black/60 border border-white/10 hover:border-white/25 p-3 flex flex-col justify-between space-y-3 shadow-lg relative group transition-all"
+                                  data-edit-moment-photo-idx={imgIdx}
+                                  draggable
+                                  onDragStart={() => {
+                                    setDraggedMomentPhotoIndex(imgIdx);
+                                    setDragOverMomentPhotoIndex(imgIdx);
+                                  }}
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                    if (dragOverMomentPhotoIndex !== imgIdx) {
+                                      setDragOverMomentPhotoIndex(imgIdx);
+                                    }
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    if (
+                                      draggedMomentPhotoIndex !== null &&
+                                      draggedMomentPhotoIndex !== imgIdx
+                                    ) {
+                                      handleReorderEditMomentPhotos(draggedMomentPhotoIndex, imgIdx);
+                                    }
+                                    setDraggedMomentPhotoIndex(null);
+                                    setDragOverMomentPhotoIndex(null);
+                                  }}
+                                  onDragEnd={() => {
+                                    setDraggedMomentPhotoIndex(null);
+                                    setDragOverMomentPhotoIndex(null);
+                                  }}
+                                  onTouchStart={() => {
+                                    setDraggedMomentPhotoIndex(imgIdx);
+                                    setDragOverMomentPhotoIndex(imgIdx);
+                                  }}
+                                  onTouchMove={(e) => {
+                                    if (draggedMomentPhotoIndex === null) return;
+                                    const touch = e.touches[0];
+                                    if (!touch) return;
+                                    const targetEl = document
+                                      .elementFromPoint(touch.clientX, touch.clientY)
+                                      ?.closest('[data-edit-moment-photo-idx]');
+                                    if (targetEl) {
+                                      const targetIdx = parseInt(
+                                        targetEl.getAttribute('data-edit-moment-photo-idx') || '-1',
+                                        10
+                                      );
+                                      if (
+                                        !isNaN(targetIdx) &&
+                                        targetIdx >= 0 &&
+                                        targetIdx !== draggedMomentPhotoIndex
+                                      ) {
+                                        handleReorderEditMomentPhotos(draggedMomentPhotoIndex, targetIdx);
+                                        setDraggedMomentPhotoIndex(targetIdx);
+                                        setDragOverMomentPhotoIndex(targetIdx);
+                                      }
+                                    }
+                                  }}
+                                  onTouchEnd={() => {
+                                    setDraggedMomentPhotoIndex(null);
+                                    setDragOverMomentPhotoIndex(null);
+                                  }}
+                                  className={`rounded-xl bg-[#0e1117] border p-2 flex flex-col justify-between gap-2 transition-all cursor-grab active:cursor-grabbing select-none ${
+                                    isBeingDragged
+                                      ? 'opacity-60 scale-95 border-[#2563eb] ring-2 ring-[#2563eb]/40 shadow-xl'
+                                      : isDragTarget
+                                      ? 'border-amber-400 bg-amber-400/10'
+                                      : 'border-white/10 hover:border-white/25'
+                                  }`}
                                 >
-                                  {/* Square aspect ratio photo */}
-                                  <div className="relative aspect-square w-full rounded-xl overflow-hidden bg-black border border-white/10 group-hover:border-white/20">
+                                  <div className="relative aspect-[4/3] w-full rounded-lg overflow-hidden bg-black border border-white/10">
                                     <img
                                       src={img.url}
                                       alt={img.caption || `Photo ${imgIdx + 1}`}
-                                      className="w-full h-full object-cover filter contrast-[1.05] group-hover:scale-105 transition-transform duration-300"
+                                      className="w-full h-full object-cover pointer-events-none"
                                     />
-
-                                    {/* Top bar: Order Tag & Move Left/Right Controls */}
-                                    <div className="absolute top-2 inset-x-2 flex items-center justify-between pointer-events-none z-10">
-                                      <span className="px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-md border border-white/20 text-[10px] font-mono-tech text-white font-bold pointer-events-auto">
+                                    <div className="absolute top-1.5 inset-x-1.5 flex items-center justify-between pointer-events-none">
+                                      <span className="px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-md border border-white/15 text-[10px] font-mono-tech text-white font-bold">
                                         #{imgIdx + 1}
                                       </span>
-                                      <div className="flex items-center gap-1 pointer-events-auto">
-                                        <button
-                                          type="button"
-                                          disabled={imgIdx === 0}
-                                          onClick={() => handleMoveImageInCategory(batch.id, imgIdx, 'left')}
-                                          className="p-1 rounded-md bg-black/80 hover:bg-white/20 text-white disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed border border-white/10 transition-colors"
-                                          title="Move photo left"
-                                        >
-                                          <ChevronLeft className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          disabled={imgIdx === batch.images.length - 1}
-                                          onClick={() => handleMoveImageInCategory(batch.id, imgIdx, 'right')}
-                                          className="p-1 rounded-md bg-black/80 hover:bg-white/20 text-white disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed border border-white/10 transition-colors"
-                                          title="Move photo right"
-                                        >
-                                          <ChevronRight className="w-3.5 h-3.5" />
-                                        </button>
-                                      </div>
+                                      <span className="p-1 rounded-md bg-black/80 text-zinc-300 border border-white/10">
+                                        <GripVertical className="w-3 h-3" />
+                                      </span>
                                     </div>
                                   </div>
 
-                                  {/* Direct Controls Below Each Photo: Frame/Crop, Replace Image, Remove */}
-                                  <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-1.5">
+                                  <div
+                                    className="flex items-center justify-between gap-1 pt-0.5"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        triggerCropForImage(
+                                          img.url,
+                                          'free',
+                                          `Crop Photo #${imgIdx + 1}`,
+                                          (croppedUrl) => {
+                                            setEditingMomentBatchModal((prev) => {
+                                              if (!prev) return null;
+                                              const nextImgs = [...prev.images];
+                                              if (nextImgs[imgIdx]) {
+                                                nextImgs[imgIdx] = { ...nextImgs[imgIdx], url: croppedUrl };
+                                              }
+                                              return { ...prev, images: nextImgs };
+                                            });
+                                          }
+                                        );
+                                      }}
+                                      className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-amber-300 text-[10px] font-mono-tech flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Crop className="w-2.5 h-2.5" />
+                                      <span>Crop</span>
+                                    </button>
 
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          triggerCropForImage(
-                                            img.url,
-                                            'free',
-                                            'Crop Moment Photo',
-                                            (croppedUrl) => {
-                                              const updatedMemories = currentSet.memories.map((m) => {
-                                                if (m.id === batch.id) {
-                                                  const updatedImages = [...m.images];
-                                                  if (updatedImages[imgIdx]) {
-                                                    updatedImages[imgIdx] = {
-                                                      ...updatedImages[imgIdx],
-                                                      url: croppedUrl,
-                                                    };
-                                                  }
-                                                  return { ...m, images: updatedImages };
-                                                }
-                                                return m;
-                                              });
-                                              onUpdateSet({ ...currentSet, memories: updatedMemories });
-                                              setHierarchyToast('✓ Image cropped and saved!');
-                                              setTimeout(() => setHierarchyToast(null), 3000);
-                                            }
-                                          );
-                                        }}
-                                        className="px-2 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white text-[10px] font-mono-tech flex items-center gap-1 transition-colors cursor-pointer"
-                                        title="Crop photo"
-                                      >
-                                        <Crop className="w-3 h-3 text-amber-400" />
-                                        <span>Crop</span>
-                                      </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleTriggerReplaceImage(editingMomentBatchModal.id, imgIdx)
+                                      }
+                                      className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-sky-300 text-[10px] font-mono-tech flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <RefreshCw className="w-2.5 h-2.5" />
+                                      <span>Replace</span>
+                                    </button>
 
-                                      <button
-                                        type="button"
-                                        onClick={() => handleTriggerReplaceImage(batch.id, imgIdx)}
-                                        className="px-2 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white text-[10px] font-mono-tech flex items-center gap-1 transition-colors cursor-pointer"
-                                        title="Replace photo"
-                                      >
-                                        <RefreshCw className="w-3 h-3 text-sky-400" />
-                                        <span>Replace</span>
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteImageFromBatch(batch.id, img.id)}
-                                        className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 text-[10px] font-mono-tech transition-colors cursor-pointer ml-auto"
-                                        title="Remove photo from category"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingMomentBatchModal((prev) => {
+                                          if (!prev) return null;
+                                          return {
+                                            ...prev,
+                                            images: prev.images.filter((_, i) => i !== imgIdx),
+                                          };
+                                        });
+                                      }}
+                                      className="p-1 rounded-lg bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 cursor-pointer"
+                                      title="Remove photo"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
                                   </div>
-                              ))}
-                            </div>
-                          </>
+                                </div>
+                              );
+                            })}
+                          </div>
                         )}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+
+                      {/* Footer Actions: Delete Category on Left, Cancel & Save on Right */}
+                      <div className="flex items-center justify-between gap-3 pt-3 border-t border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const idToDelete = editingMomentBatchModal.id;
+                            setEditingMomentBatchModal(null);
+                            handleDeleteBatch(idToDelete);
+                          }}
+                          className="px-3.5 py-2 rounded-full bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-mono-tech text-xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete Category</span>
+                        </button>
+
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setEditingMomentBatchModal(null)}
+                            className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs uppercase cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            className="px-6 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-xs uppercase tracking-wider font-bold shadow-lg cursor-pointer"
+                          >
+                            Save Changes
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  )}
+                </UniversalModal>
+
+                {/* Hidden Input for Replacing a Single Image in Any Category */}
+                <input
+                  type="file"
+                  ref={replaceImageInputRef}
+                  accept="image/*"
+                  onChange={(e) => handleExecuteImageReplacement(e.target.files)}
+                  className="hidden"
+                />
+
+                {/* COMPACT BATCHED EVENT CAROUSEL CARDS (MATCHES SCREENSHOT 5 — CLICK TO OPEN POPUP) */}
+                {currentSet.memories.length === 0 ? (
+                  <div className="p-10 text-center rounded-2xl bg-[#0e1117] border border-white/10 space-y-3">
+                    <Camera className="w-8 h-8 text-zinc-600 mx-auto" />
+                    <p className="text-sm font-syne text-white">No Moments Categories Created Yet</p>
+                    <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                      Click "+ ADD EVENT PHOTO" to upload a series of photos under a milestone event like Sign-out Day or Dinner Party.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5">
+                    {currentSet.memories.map((batch, index) => {
+                      const isBeingDragged = draggedBatchIndex === index;
+                      const isDragTarget = dragOverBatchIndex === index && draggedBatchIndex !== index;
+
+                      return (
+                        <div
+                          key={batch.id}
+                          id={`category-row-${batch.id}`}
+                          data-moment-batch-idx={index}
+                          draggable
+                          onDragStart={() => {
+                            setDraggedBatchIndex(index);
+                            setDragOverBatchIndex(index);
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            if (dragOverBatchIndex !== index) {
+                              setDragOverBatchIndex(index);
+                            }
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            if (draggedBatchIndex !== null && draggedBatchIndex !== index) {
+                              handleReorderMomentBatches(draggedBatchIndex, index);
+                            }
+                            setDraggedBatchIndex(null);
+                            setDragOverBatchIndex(null);
+                          }}
+                          onDragEnd={() => {
+                            setDraggedBatchIndex(null);
+                            setDragOverBatchIndex(null);
+                          }}
+                          onClick={() => handleOpenEditMomentBatchModal(batch)}
+                          className={`p-4 rounded-2xl bg-[#0e1117] border transition-all space-y-3 cursor-pointer shadow-md ${
+                            isBeingDragged
+                              ? 'opacity-60 scale-[0.99] border-[#2563eb] ring-2 ring-[#2563eb]/30'
+                              : isDragTarget
+                              ? 'border-amber-400 bg-amber-400/5'
+                              : 'border-white/[0.08] hover:border-white/20'
+                          }`}
+                        >
+                          {/* Top Row: Event Title on Left, Blue Event Tag Pill on Right (Matches Screenshot 5) */}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <h4 className="font-syne font-bold text-sm sm:text-base text-white leading-snug truncate">
+                                {batch.title}
+                              </h4>
+                              {(batch.dateStr || batch.caption) && (
+                                <p className="font-body text-[11px] text-zinc-400 truncate mt-0.5">
+                                  {batch.dateStr ? `${batch.dateStr}` : ''}
+                                  {batch.dateStr && batch.caption ? ' • ' : ''}
+                                  {batch.caption ? batch.caption : ''}
+                                </p>
+                              )}
+                            </div>
+
+                            <span className="px-2.5 py-1 rounded-lg bg-[#112236] border border-[#1f3a5c] text-[#58a6ff] text-[11px] font-mono-tech shrink-0">
+                              {batch.eventTag || batch.title}
+                            </span>
+                          </div>
+
+                          {/* Bottom Row: Horizontal Strip of Compact Thumbnails (Matches Screenshot 5) */}
+                          <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar pt-0.5">
+                            {batch.images.map((img, imgIdx) => (
+                              <img
+                                key={img.id || imgIdx}
+                                src={img.url}
+                                alt={img.caption || `${batch.title} ${imgIdx + 1}`}
+                                className="w-36 h-24 sm:w-44 sm:h-28 rounded-xl object-cover shrink-0 border border-white/10 bg-black"
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
-      </div>
-    )}
 
         {/* =========================================================================
-            TAB 3: AWARDS MANAGEMENT
+            TAB 3: AWARDS MANAGEMENT (MATCHING SCREENSHOT 4 + CLICK TO EDIT POPUP)
             ========================================================================= */}
         {activeTab === 'awards' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-syne font-bold text-xl text-white">
-                  Class Awards & Superlatives ({currentSet.awards.length})
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-serif text-xl sm:text-2xl text-white leading-tight">
+                  Class Awards ({currentSet.awards.length})
                 </h3>
-                <p className="font-body text-xs text-zinc-400 mt-1">
-                  Celebrate classmates with superlative trophies, cropped portraits, and citations. All edits immediately update on the general album view.
+                <p className="font-body text-xs text-zinc-400 mt-1 leading-snug">
+                  Celebrate standout classmates with superlative awards and citations.
                 </p>
               </div>
 
               <button
                 onClick={() => {
-                  if (isAddingAward) {
-                    setIsAddingAward(false);
-                    setEditingAwardId(null);
-                    setAwardCategory('');
-                    setAwardWinnerName('');
-                    setAwardWinnerNickname('');
-                    setAwardAvatar('');
-                    setAwardCitation('');
-                  } else {
-                    setEditingAwardId(null);
-                    setIsAddingAward(true);
-                  }
+                  setEditingAwardId(null);
+                  setAwardCategory('');
+                  setAwardWinnerName('');
+                  setAwardWinnerNickname('');
+                  setAwardAvatar('');
+                  setAwardCitation('');
+                  setIsAddingAward(true);
                 }}
-                className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-5 rounded-full flex items-center gap-2 transition-colors cursor-pointer"
+                className="px-4 py-2.5 rounded-2xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] tracking-wider uppercase font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-blue-600/20"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>{isAddingAward ? 'Cancel' : 'Add Award'}</span>
+                <Plus className="w-3.5 h-3.5 shrink-0" />
+                <span className="leading-tight text-center">ADD<br className="sm:hidden" /> AWARD</span>
               </button>
             </div>
 
@@ -5934,355 +6419,274 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 maxWidth="lg"
               >
                 <form onSubmit={handleSaveAward} className="space-y-4 text-xs font-body">
-                <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                  <span className="font-syne font-bold text-sm text-white">
-                    {editingAwardId ? 'Edit Class Award' : 'Add New Class Award'}
-                  </span>
-                  {editingAwardId && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono-tech text-[10px] uppercase tracking-wider font-semibold">
-                      Editing Mode
-                    </span>
-                  )}
-                </div>
-
-                {/* Profile Selector from Approved Classmates with Pocket Modal */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-amber-400 font-semibold flex items-center gap-1.5">
-                      <UserCheck className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Autofill from Approved Classmate (Optional)</span>
-                    </label>
-                    <span className="text-[10px] font-mono-tech text-zinc-400 px-2 py-0.5 rounded bg-white/5 border border-white/10">
-                      {approvedStudents.length} Profiles Available
-                    </span>
-                  </div>
-
-                  <p className="font-mono-tech text-[11px] text-zinc-400">
-                    Selecting an approved profile automatically populates both the recipient's name and portrait photo.
-                  </p>
-
-                  {selectedAwardStudentId && approvedStudents.find((s) => s.id === selectedAwardStudentId) ? (
-                    <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 animate-fadeIn">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-11 h-11 rounded-xl bg-zinc-800 border border-amber-500/30 overflow-hidden shrink-0 flex items-center justify-center">
-                          {awardAvatar ? (
-                            <img src={awardAvatar} alt="Winner" className="w-full h-full object-cover" />
-                          ) : (
-                            <UserCheck className="w-5 h-5 text-amber-400" />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-syne font-bold text-xs sm:text-sm text-white truncate">
-                            {awardWinnerName} {awardWinnerNickname ? `("${awardWinnerNickname}")` : ''}
-                          </p>
-                          <p className="font-mono-tech text-[10px] text-emerald-400 flex items-center gap-1 mt-0.5">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>Name &amp; photo automatically populated</span>
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setIsAwardPickerOpen(true)}
-                          className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[11px] uppercase transition-colors cursor-pointer"
-                        >
-                          Change
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedAwardStudentId('');
-                            setAwardWinnerName('');
-                            setAwardWinnerNickname('');
-                            setAwardAvatar('');
-                          }}
-                          className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
-                          title="Clear selection"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setIsAwardPickerOpen(true)}
-                      className="w-full py-3 px-4 rounded-xl bg-[#08090e] hover:bg-white/[0.06] border border-white/15 hover:border-amber-400/50 text-white font-mono-tech text-xs flex items-center justify-between transition-all cursor-pointer group shadow-sm"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <UserCheck className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
-                        <span>Choose from Approved Profiles ({approvedStudents.length})</span>
-                      </div>
-                      <span className="px-2.5 py-1 rounded-md bg-amber-400/20 text-amber-300 text-[10px] uppercase font-bold">
-                        Open Classmate Window →
+                  {/* Profile Selector from Approved Classmates with Pocket Modal */}
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-amber-400 font-semibold flex items-center gap-1.5">
+                        <UserCheck className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Autofill from Approved Classmate (Optional)</span>
+                      </label>
+                      <span className="text-[10px] font-mono-tech text-zinc-400 px-2 py-0.5 rounded bg-white/5 border border-white/10">
+                        {approvedStudents.length} Profiles Available
                       </span>
-                    </button>
-                  )}
-                </div>
+                    </div>
 
-                {/* Recipient Photo / Avatar Upload & Crop */}
-                <div className="flex items-center gap-4 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
-                  <div className="w-16 h-16 rounded-2xl bg-black border border-white/20 overflow-hidden relative group shrink-0 flex items-center justify-center">
-                    {awardAvatar ? (
-                      <img
-                        src={awardAvatar}
-                        alt="Award Winner"
-                        className="w-full h-full object-cover"
-                      />
+                    {selectedAwardStudentId && approvedStudents.find((s) => s.id === selectedAwardStudentId) ? (
+                      <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 animate-fadeIn">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-11 h-11 rounded-xl bg-zinc-800 border border-amber-500/30 overflow-hidden shrink-0 flex items-center justify-center">
+                            {awardAvatar ? (
+                              <img src={awardAvatar} alt="Winner" className="w-full h-full object-cover" />
+                            ) : (
+                              <UserCheck className="w-5 h-5 text-amber-400" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-syne font-bold text-xs sm:text-sm text-white truncate">
+                              {awardWinnerName} {awardWinnerNickname ? `("${awardWinnerNickname}")` : ''}
+                            </p>
+                            <p className="font-mono-tech text-[10px] text-emerald-400 flex items-center gap-1 mt-0.5">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Name &amp; photo automatically populated</span>
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setIsAwardPickerOpen(true)}
+                            className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[11px] uppercase transition-colors cursor-pointer"
+                          >
+                            Change
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedAwardStudentId('');
+                              setAwardWinnerName('');
+                              setAwardWinnerNickname('');
+                              setAwardAvatar('');
+                            }}
+                            className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                            title="Clear selection"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
                     ) : (
-                      <Trophy className="w-6 h-6 text-amber-400" />
-                    )}
-                  </div>
-                  <div className="space-y-1.5 flex-1">
-                    <span className="font-mono-tech text-xs text-white font-semibold block">
-                      Recipient Portrait Photo
-                    </span>
-                    <p className="font-mono-tech text-[10px] text-zinc-400">
-                      Upload and crop a clean portrait or square avatar for this award winner.
-                    </p>
-                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => awardPhotoInputRef.current?.click()}
-                        className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        onClick={() => setIsAwardPickerOpen(true)}
+                        className="w-full py-3 px-4 rounded-xl bg-[#08090e] hover:bg-white/[0.06] border border-white/15 hover:border-amber-400/50 text-white font-mono-tech text-xs flex items-center justify-between transition-all cursor-pointer group shadow-sm"
                       >
-                        <Upload className="w-3 h-3 text-[#d4af37]" />
-                        <span>{awardAvatar ? 'Change Photo' : 'Upload Photo'}</span>
+                        <div className="flex items-center gap-2.5">
+                          <UserCheck className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
+                          <span>Choose from Approved Profiles ({approvedStudents.length})</span>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-md bg-amber-400/20 text-amber-300 text-[10px] uppercase font-bold">
+                          Select →
+                        </span>
                       </button>
-                      {awardAvatar && (
+                    )}
+                  </div>
+
+                  {/* Recipient Photo / Avatar Upload & Crop */}
+                  <div className="flex items-center gap-4 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+                    <div className="w-14 h-14 rounded-2xl bg-black border border-white/20 overflow-hidden relative group shrink-0 flex items-center justify-center">
+                      {awardAvatar ? (
+                        <img
+                          src={awardAvatar}
+                          alt="Award Winner"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Trophy className="w-6 h-6 text-amber-400" />
+                      )}
+                    </div>
+                    <div className="space-y-1 flex-1">
+                      <span className="font-mono-tech text-xs text-white font-semibold block">
+                        Recipient Portrait Photo
+                      </span>
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => {
-                            triggerCropForImage(
-                              awardAvatar,
-                              '1:1',
-                              'Crop Award Winner Portrait',
-                              (croppedUrl) => {
-                                setAwardAvatar(croppedUrl);
-                                setHierarchyToast('✓ Winner photo cropped successfully!');
-                                setTimeout(() => setHierarchyToast(null), 3000);
-                              }
-                            );
-                          }}
-                          className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-amber-300 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          onClick={() => awardPhotoInputRef.current?.click()}
+                          className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
-                          <Crop className="w-3 h-3 text-amber-400" />
-                          <span>Re-crop</span>
+                          <Upload className="w-3 h-3 text-[#d4af37]" />
+                          <span>{awardAvatar ? 'Change Photo' : 'Upload Photo'}</span>
                         </button>
+                        {awardAvatar && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerCropForImage(
+                                awardAvatar,
+                                '1:1',
+                                'Crop Award Winner Portrait',
+                                (croppedUrl) => {
+                                  setAwardAvatar(croppedUrl);
+                                }
+                              );
+                            }}
+                            className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-amber-300 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Crop className="w-3 h-3 text-amber-400" />
+                            <span>Crop</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                        Award Category *
+                      </label>
+                      <input
+                        required
+                        type="text"
+                        value={awardCategory}
+                        onChange={(e) => setAwardCategory(e.target.value)}
+                        placeholder="e.g. Most Likely to Build a Unicorn"
+                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                        Recipient Name *
+                      </label>
+                      <input
+                        required
+                        type="text"
+                        value={awardWinnerName}
+                        onChange={(e) => setAwardWinnerName(e.target.value)}
+                        placeholder="e.g. Olumide Fashola"
+                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                        Nickname (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={awardWinnerNickname}
+                        onChange={(e) => setAwardWinnerNickname(e.target.value)}
+                        placeholder="e.g. Lumi_JS"
+                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <AwardTypeSelector
+                        value={awardTrophyType}
+                        onChange={(val) => setAwardTrophyType(val)}
+                        label="Trophy Finish Style"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                      Citation / Reason
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={awardCitation}
+                      onChange={(e) => setAwardCitation(e.target.value)}
+                      placeholder="e.g. For creating three revenue-generating production apps while completing his degree."
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingAward(false)}
+                      className="px-4 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase tracking-wider cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-xs tracking-wider uppercase font-bold py-2.5 px-6 rounded-full transition-colors cursor-pointer shadow"
+                    >
+                      Save Class Award
+                    </button>
+                  </div>
+                </form>
+              </UniversalModal>
+            )}
+
+            {/* COMPACT AWARD CARDS LIST (MATCHES SCREENSHOT 4 — CLICK CARD TO OPEN POPUP) */}
+            <div className="space-y-3">
+              {currentSet.awards.map((award) => (
+                <div
+                  key={award.id}
+                  onClick={() => handleOpenEditAwardModal(award)}
+                  className="p-4 rounded-2xl bg-[#0e1117] border border-white/[0.08] hover:border-white/20 transition-all flex items-start justify-between gap-3.5 cursor-pointer shadow-sm"
+                >
+                  <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                    <div className="w-11 h-11 rounded-xl bg-[#2a2415] border border-[#d4af37]/30 flex items-center justify-center text-[#d4af37] shrink-0">
+                      <Trophy className="w-5 h-5 text-[#d4af37]" />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-syne font-bold text-sm sm:text-base text-white leading-snug">
+                        {award.category}
+                      </h4>
+                      <p className="font-body text-xs text-zinc-300 mt-0.5">
+                        Winner: {award.winnerName}
+                        {award.winnerNickname ? ` ("${award.winnerNickname}")` : ''}
+                      </p>
+                      {award.citation && (
+                        <p className="font-serif italic text-xs text-zinc-400 mt-1 line-clamp-2 leading-relaxed">
+                          "{award.citation}"
+                        </p>
                       )}
                     </div>
                   </div>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Award Category *
-                    </label>
-                    <input
-                      required
-                      type="text"
-                      value={awardCategory}
-                      onChange={(e) => setAwardCategory(e.target.value)}
-                      placeholder="e.g. Pioneer of the Year"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Recipient Name *
-                    </label>
-                    <input
-                      required
-                      type="text"
-                      value={awardWinnerName}
-                      onChange={(e) => setAwardWinnerName(e.target.value)}
-                      placeholder="e.g. Amina Bello"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Nickname (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={awardWinnerNickname}
-                      onChange={(e) => setAwardWinnerNickname(e.target.value)}
-                      placeholder="e.g. Bayo"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <AwardTypeSelector
-                      value={awardTrophyType}
-                      onChange={(val) => setAwardTrophyType(val)}
-                      label="Trophy Finish Style"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                    Citation / Reason
-                  </label>
-                  <input
-                    type="text"
-                    value={awardCitation}
-                    onChange={(e) => setAwardCitation(e.target.value)}
-                    placeholder="e.g. For unwavering commitment to mentoring junior students throughout 4 years."
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                  />
-                </div>
-
-                <div className="flex items-center gap-3 pt-2">
-                  <button
-                    type="submit"
-                    className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-3 px-6 rounded-full transition-colors cursor-pointer"
-                  >
-                    {editingAwardId ? 'Update Award on Album' : 'Save Class Award'}
-                  </button>
-                  {editingAwardId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingAwardId(null);
-                        setAwardCategory('');
-                        setAwardWinnerName('');
-                        setAwardWinnerNickname('');
-                        setAwardAvatar('');
-                        setAwardCitation('');
-                        setIsAddingAward(false);
-                      }}
-                      className="px-4 py-3 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase tracking-wider cursor-pointer"
-                    >
-                      Cancel Edit
-                    </button>
-                  )}
-                </div>
-              </form>
-            </UniversalModal>
-          )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {currentSet.awards.map((award) => {
-                const visual = getAwardVisualConfig(award.trophyType);
-                const AwardIcon = visual.icon;
-                return (
-                  <div key={award.id} className="p-5 rounded-2xl bg-[#0c0d14] border border-white/10 hover:border-white/20 transition-all flex flex-col justify-between gap-4 shadow-md">
-                    <div>
-                      {/* Top Row: Award Trophy Visual Icon without text label */}
-                      <div className="flex items-center justify-between mb-4">
-                        <div className={`w-11 h-11 ${visual.shapeClass} flex items-center justify-center shrink-0 ${visual.glowClass}`}>
-                          <AwardIcon className={`w-5 h-5 ${visual.iconColor} ${visual.type === 'crystal' ? '-rotate-45' : ''}`} />
-                        </div>
-                      </div>
-
-                      <h3 className="font-syne font-bold text-lg text-white leading-snug">
-                        {award.category}
-                      </h3>
-
-                      {/* Winner Profile Snippet - Size matches album view side (w-16 h-16 sm:w-20 sm:h-20) */}
-                      <div className="flex items-center gap-3.5 mt-4 pt-3.5 border-t border-white/[0.08]">
-                        <div className={`w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden shrink-0 ${visual.borderClass} ${visual.glowClass} bg-zinc-900`}>
-                          {award.winnerAvatar ? (
-                            <img
-                              src={award.winnerAvatar}
-                              alt={award.winnerName}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-zinc-600">
-                              <Trophy className="w-6 h-6 text-[#d4af37]" />
-                            </div>
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <h4 className="font-syne font-bold text-base sm:text-lg text-white truncate">
-                            {award.winnerName}
-                          </h4>
-                          {award.winnerNickname && (
-                            <p className="font-mono-tech text-xs text-[#d4af37] font-semibold truncate mt-0.5">
-                              “{award.winnerNickname}”
-                            </p>
-                          )}
-                          <span className="inline-block mt-1 font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-full">
-                            Award Laureate
-                          </span>
-                        </div>
-                      </div>
-
-                      <p className="font-body text-xs text-zinc-300 italic mt-4 pt-3 border-t border-white/5 leading-relaxed">
-                        “{award.citation}”
-                      </p>
-                    </div>
-
-                  {/* Actions: Edit, Delete */}
-                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditAwardModal(award)}
-                      className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white text-[11px] font-mono-tech flex items-center gap-1.5 transition-colors cursor-pointer"
-                      title="Edit award details"
-                    >
-                      <Edit3 className="w-3 h-3 text-emerald-400" />
-                      <span>Edit</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteAward(award.id)}
-                      className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
-                      title="Delete award"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+              ))}
             </div>
           </div>
         )}
 
         {/* =========================================================================
-            TAB 4: FINAL THOUGHTS (LECTURERS & STUDENT LEADERS)
+            TAB 4: VOICES SWIPER (MATCHES SCREENSHOT 2 — NO MENTION OF LECTURERS)
             ========================================================================= */}
         {activeTab === 'voices' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-syne font-bold text-xl text-white">
-                  Final Thoughts ({currentSet.voices.length})
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-serif text-xl sm:text-2xl text-white leading-tight">
+                  Parting Voices ({currentSet.voices.length})
                 </h3>
-                <p className="font-body text-xs text-zinc-400 mt-1">
-                  Parting wisdom, farewell messages, and words of encouragement from lecturers and student leaders.
+                <p className="font-body text-xs text-zinc-400 mt-1 leading-snug">
+                  Farewell messages, reflections, and parting words from class leaders.
                 </p>
               </div>
 
               <button
                 onClick={() => {
-                  if (isAddingVoice) {
-                    setIsAddingVoice(false);
-                    setVoiceLecturerName('');
-                    setVoiceTitle('');
-                    setVoicePartingQuote('');
-                    setVoiceHeadshotUrl('');
-                    setSelectedVoiceStudentId(null);
-                  } else {
-                    setIsAddingVoice(true);
-                  }
+                  setVoiceLecturerName('');
+                  setVoiceTitle('');
+                  setVoicePartingQuote('');
+                  setVoiceHeadshotUrl('');
+                  setSelectedVoiceStudentId('');
+                  setIsAddingVoice(true);
                 }}
-                className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-5 rounded-full flex items-center gap-2 transition-colors cursor-pointer"
+                className="px-4 py-2.5 rounded-2xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] tracking-wider uppercase font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-blue-600/20"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>{isAddingVoice ? 'Cancel' : 'Add Final Thought'}</span>
+                <Plus className="w-3.5 h-3.5 shrink-0" />
+                <span className="leading-tight text-center">ADD<br className="sm:hidden" /> VOICE</span>
               </button>
             </div>
 
@@ -6304,322 +6708,283 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   setVoiceTitle('');
                   setVoicePartingQuote('');
                   setVoiceHeadshotUrl('');
-                  setSelectedVoiceStudentId(null);
+                  setSelectedVoiceStudentId('');
                 }}
-                title="Add Final Thought & Parting Words"
-                subtitle="Parting wisdom, farewell messages, and words of encouragement from lecturers or student leaders"
+                title="Add Voice & Parting Words"
+                subtitle="Parting wisdom, farewell messages, and words of encouragement from class leaders"
                 maxWidth="lg"
               >
                 <form onSubmit={handleSaveVoice} className="space-y-4 text-xs font-body">
-
-                {/* Profile Selector from Approved Student Leaders with Pocket Modal */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-amber-400 font-semibold flex items-center gap-1.5">
-                      <Crown className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Autofill from Approved Student Leader (Optional)</span>
-                    </label>
-                    <span className="text-[10px] font-mono-tech text-amber-400/80 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
-                      {approvedStudentLeaders.length} Student Leaders Available
-                    </span>
-                  </div>
-
-                  <p className="font-mono-tech text-[11px] text-zinc-400">
-                    Selecting an approved student leader automatically populates both their name, leadership role, and headshot image.
-                  </p>
-
-                  {selectedVoiceStudentId && approvedStudentLeaders.find((s) => s.id === selectedVoiceStudentId) ? (
-                    <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 animate-fadeIn">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-11 h-11 rounded-xl bg-zinc-800 border border-amber-500/30 overflow-hidden shrink-0 flex items-center justify-center">
-                          {voiceHeadshotUrl ? (
-                            <img src={voiceHeadshotUrl} alt="Leader" className="w-full h-full object-cover" />
-                          ) : (
-                            <Crown className="w-5 h-5 text-amber-400" />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-syne font-bold text-xs sm:text-sm text-white truncate">
-                            {voiceLecturerName}
-                          </p>
-                          <p className="font-mono-tech text-[10px] text-amber-300 truncate mt-0.5">
-                            {voiceTitle || 'Student Leader'} • Auto-populated from profile
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setIsVoicePickerOpen(true)}
-                          className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[11px] uppercase transition-colors cursor-pointer"
-                        >
-                          Change
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedVoiceStudentId('');
-                            setVoiceLecturerName('');
-                            setVoiceTitle('');
-                            setVoiceHeadshotUrl('');
-                            setVoicePartingQuote('');
-                          }}
-                          className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
-                          title="Clear selection"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setIsVoicePickerOpen(true)}
-                      className="w-full py-3 px-4 rounded-xl bg-[#08090e] hover:bg-white/[0.06] border border-white/15 hover:border-amber-400/50 text-white font-mono-tech text-xs flex items-center justify-between transition-all cursor-pointer group shadow-sm"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Crown className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
-                        <span>Choose Student Leader ({approvedStudentLeaders.length})</span>
-                      </div>
-                      <span className="px-2.5 py-1 rounded-md bg-amber-400/20 text-amber-300 text-[10px] uppercase font-bold">
-                        Open Leader Window →
+                  {/* Profile Selector from Approved Student Leaders with Pocket Modal */}
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-amber-400 font-semibold flex items-center gap-1.5">
+                        <Crown className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Autofill from Approved Class Leader (Optional)</span>
+                      </label>
+                      <span className="text-[10px] font-mono-tech text-amber-400/80 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                        {approvedStudentLeaders.length} Leaders Available
                       </span>
-                    </button>
-                  )}
-                </div>
+                    </div>
 
-                {/* Speaker Photo / Headshot Upload & Crop */}
-                <div className="flex items-center gap-4 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
-                  <div className="w-16 h-16 rounded-2xl bg-black border border-white/20 overflow-hidden relative group shrink-0 flex items-center justify-center">
-                    {voiceHeadshotUrl ? (
-                      <img
-                        src={voiceHeadshotUrl}
-                        alt="Speaker Headshot"
-                        className="w-full h-full object-cover"
-                      />
+                    {selectedVoiceStudentId && approvedStudentLeaders.find((s) => s.id === selectedVoiceStudentId) ? (
+                      <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 animate-fadeIn">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-11 h-11 rounded-xl bg-zinc-800 border border-amber-500/30 overflow-hidden shrink-0 flex items-center justify-center">
+                            {voiceHeadshotUrl ? (
+                              <img src={voiceHeadshotUrl} alt="Leader" className="w-full h-full object-cover" />
+                            ) : (
+                              <Crown className="w-5 h-5 text-amber-400" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-syne font-bold text-xs sm:text-sm text-white truncate">
+                              {voiceLecturerName}
+                            </p>
+                            <p className="font-mono-tech text-[10px] text-amber-300 truncate mt-0.5">
+                              {voiceTitle || 'Class Leader'} • Auto-populated from profile
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setIsVoicePickerOpen(true)}
+                            className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[11px] uppercase transition-colors cursor-pointer"
+                          >
+                            Change
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedVoiceStudentId('');
+                              setVoiceLecturerName('');
+                              setVoiceTitle('');
+                              setVoiceHeadshotUrl('');
+                              setVoicePartingQuote('');
+                            }}
+                            className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                            title="Clear selection"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
                     ) : (
-                      <Crown className="w-6 h-6 text-zinc-500" />
-                    )}
-                  </div>
-                  <div className="space-y-1.5 flex-1">
-                    <span className="font-mono-tech text-xs text-white font-semibold block">
-                      Leader or Lecturer Portrait / Headshot
-                    </span>
-                    <p className="font-mono-tech text-[10px] text-zinc-400">
-                      Upload a clean portrait or headshot for this contributor.
-                    </p>
-                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => voicePhotoInputRef.current?.click()}
-                        className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        onClick={() => setIsVoicePickerOpen(true)}
+                        className="w-full py-3 px-4 rounded-xl bg-[#08090e] hover:bg-white/[0.06] border border-white/15 hover:border-amber-400/50 text-white font-mono-tech text-xs flex items-center justify-between transition-all cursor-pointer group shadow-sm"
                       >
-                        <Upload className="w-3 h-3 text-[#d4af37]" />
-                        <span>{voiceHeadshotUrl ? 'Change Photo' : 'Upload Photo'}</span>
+                        <div className="flex items-center gap-2.5">
+                          <Crown className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
+                          <span>Choose Class Leader ({approvedStudentLeaders.length})</span>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-md bg-amber-400/20 text-amber-300 text-[10px] uppercase font-bold">
+                          Select →
+                        </span>
                       </button>
-                      {voiceHeadshotUrl && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            triggerCropForImage(
-                              voiceHeadshotUrl,
-                              '1:1',
-                              'Crop Leader Headshot',
-                              (croppedUrl) => {
-                                setVoiceHeadshotUrl(croppedUrl);
-                                setHierarchyToast('✓ Headshot cropped successfully!');
-                                setTimeout(() => setHierarchyToast(null), 3000);
-                              }
-                            );
-                          }}
-                          className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-amber-300 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <Crop className="w-3 h-3 text-amber-400" />
-                          <span>Re-crop</span>
-                        </button>
+                    )}
+                  </div>
+
+                  {/* Speaker Photo / Headshot Upload & Crop */}
+                  <div className="flex items-center gap-4 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
+                    <div className="w-14 h-14 rounded-full bg-black border border-white/20 overflow-hidden relative group shrink-0 flex items-center justify-center">
+                      {voiceHeadshotUrl ? (
+                        <img
+                          src={voiceHeadshotUrl}
+                          alt="Speaker Headshot"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Crown className="w-6 h-6 text-zinc-500" />
                       )}
                     </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Lecturer or Student Leader Name *
-                    </label>
-                    <input
-                      required
-                      type="text"
-                      value={voiceLecturerName}
-                      onChange={(e) => setVoiceLecturerName(e.target.value)}
-                      placeholder="e.g. Prof. O. Balogun or Oluwaseun Adeleke"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Role / Position *
-                    </label>
-                    <input
-                      required
-                      type="text"
-                      value={voiceTitle}
-                      onChange={(e) => setVoiceTitle(e.target.value)}
-                      placeholder="e.g. HOD, Level Adviser, Department President, Tech Lead"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                    Parting Words &amp; Wisdom *
-                  </label>
-                  <textarea
-                    required
-                    rows={3}
-                    value={voicePartingQuote}
-                    onChange={(e) => setVoicePartingQuote(e.target.value)}
-                    placeholder="Carry the discipline and brotherhood we forged in these lecture halls into every sphere of your life."
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none font-body"
-                  />
-                </div>
-
-                {/* Pin as Featured Message (e.g. From the President) */}
-                <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
-                  <label className="flex items-center gap-2.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={voiceIsPinned}
-                      onChange={(e) => setVoiceIsPinned(e.target.checked)}
-                      className="w-4 h-4 rounded border-zinc-600 text-amber-500 focus:ring-amber-400"
-                    />
-                    <div className="flex items-center gap-1.5 font-mono-tech text-xs text-white font-semibold">
-                      <Pin className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Pin this message to the top</span>
+                    <div className="space-y-1 flex-1">
+                      <span className="font-mono-tech text-xs text-white font-semibold block">
+                        Contributor Portrait / Headshot
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => voicePhotoInputRef.current?.click()}
+                          className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Upload className="w-3 h-3 text-[#d4af37]" />
+                          <span>{voiceHeadshotUrl ? 'Change Photo' : 'Upload Photo'}</span>
+                        </button>
+                        {voiceHeadshotUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerCropForImage(
+                                voiceHeadshotUrl,
+                                '1:1',
+                                'Crop Headshot',
+                                (croppedUrl) => {
+                                  setVoiceHeadshotUrl(croppedUrl);
+                                }
+                              );
+                            }}
+                            className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-amber-300 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Crop className="w-3 h-3 text-amber-400" />
+                            <span>Crop</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </label>
+                  </div>
 
-                  {voiceIsPinned && (
-                    <div className="pt-2 border-t border-white/10 space-y-1.5 animate-fadeIn">
-                      <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-amber-300">
-                        Pinned Message Title
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                        Contributor Name *
                       </label>
                       <input
+                        required
                         type="text"
-                        value={voicePinnedTitle}
-                        onChange={(e) => setVoicePinnedTitle(e.target.value)}
-                        placeholder="e.g. From the President"
-                        className="w-full px-3.5 py-2 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none text-xs font-mono-tech"
+                        value={voiceLecturerName}
+                        onChange={(e) => setVoiceLecturerName(e.target.value)}
+                        placeholder="e.g. Chiemeka Anthony Eze"
+                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
                       />
-                      <p className="font-mono-tech text-[10px] text-zinc-400">
-                        This pinned message will display first in the Final Thoughts section with the author's portrait, name, role, and a "Read more" toggle for text over about 120 words.
-                      </p>
                     </div>
-                  )}
-                </div>
 
-                <div className="flex items-center gap-3 pt-2">
-                  <button
-                    type="submit"
-                    className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-3 px-6 rounded-full transition-colors cursor-pointer"
-                  >
-                    Save Final Thought
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsAddingVoice(false);
-                      setVoiceLecturerName('');
-                      setVoiceTitle('');
-                      setVoicePartingQuote('');
-                      setVoiceHeadshotUrl('');
-                      setSelectedVoiceStudentId(null);
-                    }}
-                    className="px-4 py-2.5 rounded-full border border-white/20 text-zinc-300 hover:text-white hover:bg-white/10 font-mono-tech text-xs transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </UniversalModal>
-          )}
+                    <div>
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                        Role / Position *
+                      </label>
+                      <input
+                        required
+                        type="text"
+                        value={voiceTitle}
+                        onChange={(e) => setVoiceTitle(e.target.value)}
+                        placeholder="e.g. Department President, Class Rep, Tech Lead"
+                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
+                      />
+                    </div>
+                  </div>
 
+                  <div>
+                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                      Parting Words &amp; Wisdom *
+                    </label>
+                    <textarea
+                      required
+                      rows={3}
+                      value={voicePartingQuote}
+                      onChange={(e) => setVoicePartingQuote(e.target.value)}
+                      placeholder="Carry the discipline and brotherhood we forged here into every sphere of your life."
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none font-body"
+                    />
+                  </div>
+
+                  {/* Pin as Featured Message (e.g. From the President) */}
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                    <label className="flex items-center gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={voiceIsPinned}
+                        onChange={(e) => setVoiceIsPinned(e.target.checked)}
+                        className="w-4 h-4 rounded border-zinc-600 text-amber-500 focus:ring-amber-400"
+                      />
+                      <div className="flex items-center gap-1.5 font-mono-tech text-xs text-white font-semibold">
+                        <Pin className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Pin this message to the top</span>
+                      </div>
+                    </label>
+
+                    {voiceIsPinned && (
+                      <div className="pt-2 border-t border-white/10 space-y-1.5 animate-fadeIn">
+                        <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-amber-300">
+                          Pinned Message Title
+                        </label>
+                        <input
+                          type="text"
+                          value={voicePinnedTitle}
+                          onChange={(e) => setVoicePinnedTitle(e.target.value)}
+                          placeholder="e.g. From the President"
+                          className="w-full px-3.5 py-2 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none text-xs font-mono-tech"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddingVoice(false);
+                        setVoiceLecturerName('');
+                        setVoiceTitle('');
+                        setVoicePartingQuote('');
+                        setVoiceHeadshotUrl('');
+                        setSelectedVoiceStudentId('');
+                      }}
+                      className="px-4 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-xs tracking-wider uppercase font-bold py-2.5 px-6 rounded-full transition-colors cursor-pointer shadow"
+                    >
+                      Save Voice
+                    </button>
+                  </div>
+                </form>
+              </UniversalModal>
+            )}
+
+            {/* COMPACT VOICES CARDS LIST (MATCHES SCREENSHOT 2 — CLICK CARD TO VIEW FULL MESSAGE & EDIT) */}
             <div className="space-y-3">
               {currentSet.voices.length === 0 ? (
-                <div className="p-8 text-center rounded-2xl bg-white/[0.02] border border-white/5 space-y-1">
+                <div className="p-8 text-center rounded-2xl bg-[#0e1117] border border-white/[0.08] space-y-1">
                   <p className="font-syne font-semibold text-xs text-zinc-300">
-                    No final thoughts added yet
+                    No voices added yet
                   </p>
                   <p className="font-mono-tech text-[11px] text-zinc-500">
-                    Add parting words, farewell messages, and advice from departmental lecturers and student leaders.
+                    Add parting words, farewell messages, and advice from class leaders.
                   </p>
                 </div>
               ) : (
                 currentSet.voices.map((voice) => (
-                  <div 
-                    key={voice.id} 
-                    className={`p-5 rounded-2xl border flex items-start justify-between gap-4 transition-all ${
-                      voice.isPinned 
-                        ? 'bg-gradient-to-r from-amber-500/10 via-[#0c0d14] to-[#0c0d14] border-amber-500/40 shadow-lg shadow-amber-500/5' 
-                        : 'bg-[#0c0d14] border-white/10'
+                  <div
+                    key={voice.id}
+                    onClick={() => handleOpenEditVoiceModal(voice)}
+                    className={`p-4 rounded-2xl border flex items-start gap-3.5 transition-all cursor-pointer shadow-sm ${
+                      voice.isPinned
+                        ? 'bg-gradient-to-r from-amber-500/10 via-[#0e1117] to-[#0e1117] border-amber-500/40'
+                        : 'bg-[#0e1117] border-white/[0.08] hover:border-white/20'
                     }`}
                   >
-                    <div className="flex items-start gap-4 min-w-0">
-                      <img
-                        src={voice.headshotUrl}
-                        alt={voice.lecturerName}
-                        referrerPolicy="no-referrer"
-                        className={`w-12 h-12 rounded-full object-cover border filter grayscale shrink-0 ${
-                          voice.isPinned ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-white/20'
-                        }`}
-                      />
-                      <div className="min-w-0 space-y-1">
+                    <img
+                      src={voice.headshotUrl}
+                      alt={voice.lecturerName}
+                      referrerPolicy="no-referrer"
+                      className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover border shrink-0 bg-black ${
+                        voice.isPinned ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-white/15'
+                      }`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="font-syne font-bold text-sm sm:text-base text-white leading-snug">
+                          {voice.lecturerName}
+                        </h4>
                         {voice.isPinned && (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-[10px] font-mono-tech font-bold uppercase tracking-wider">
-                            <Pin className="w-3 h-3 text-amber-400" />
-                            <span>Pinned: {voice.pinnedTitle || 'From the President'}</span>
-                          </div>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-[9px] font-mono-tech font-bold uppercase tracking-wider">
+                            <Pin className="w-2.5 h-2.5 text-amber-400" />
+                            <span>{voice.pinnedTitle || 'Pinned'}</span>
+                          </span>
                         )}
-                        <h4 className="font-syne font-bold text-sm text-white truncate">{voice.lecturerName}</h4>
-                        <p className="font-mono-tech text-xs text-amber-300">{voice.title}</p>
-                        <p className="font-body text-xs text-zinc-300 italic mt-1.5 leading-relaxed">"{voice.partingQuote}"</p>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleTogglePinVoice(voice.id)}
-                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-mono-tech flex items-center gap-1.5 transition-colors cursor-pointer ${
-                          voice.isPinned
-                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
-                            : 'bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white'
-                        }`}
-                        title={voice.isPinned ? 'Unpin message' : 'Pin message as From the President (shows first)'}
-                      >
-                        {voice.isPinned ? <PinOff className="w-3 h-3 text-amber-400" /> : <Pin className="w-3 h-3 text-zinc-400" />}
-                        <span>{voice.isPinned ? 'Unpin' : 'Pin'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditVoiceModal(voice)}
-                        className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white text-[11px] font-mono-tech flex items-center gap-1.5 transition-colors cursor-pointer"
-                        title="Edit final thought details"
-                      >
-                        <Edit3 className="w-3 h-3 text-emerald-400" />
-                        <span>Edit</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteVoice(voice.id)}
-                        className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
-                        title="Delete thought"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <p className="font-mono-tech text-xs text-zinc-400 mt-0.5 leading-snug">
+                        {voice.title}
+                      </p>
+                      <p className="font-serif italic text-xs sm:text-sm text-zinc-300 mt-2 line-clamp-3 leading-relaxed">
+                        "{voice.partingQuote}"
+                      </p>
                     </div>
                   </div>
                 ))
@@ -6629,22 +6994,22 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         )}
 
         {/* =========================================================================
-            TAB 5: OUR STORY EDITOR
+            TAB 5: OUR STORY EDITOR (MATCHES SCREENSHOT 3)
             ========================================================================= */}
         {activeTab === 'story' && (
-          <div className="p-8 rounded-3xl bg-[#0c0d14] border border-white/15 space-y-5 text-xs font-body">
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+          <div className="p-5 sm:p-6 rounded-3xl bg-[#0e1117] border border-white/[0.08] space-y-4 text-xs font-body shadow-lg">
+            <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-syne font-bold text-lg text-white">
-                  Our Set Story Narrative
+                <h3 className="font-serif text-lg sm:text-xl text-white">
+                  Our Class Story
                 </h3>
-                <p className="font-body text-xs text-zinc-400 mt-0.5">
-                  Chronicle the collective journey, matriculation memories, and final year triumphs of your class.
+                <p className="font-body text-xs text-zinc-400 mt-1">
+                  Share the story, milestones, and unforgettable journey of your graduating class.
                 </p>
               </div>
 
               {storySaved && (
-                <span className="text-emerald-400 font-mono-tech text-xs flex items-center gap-1.5">
+                <span className="text-emerald-400 font-mono-tech text-xs flex items-center gap-1.5 shrink-0">
                   <Check className="w-3.5 h-3.5" /> Saved
                 </span>
               )}
@@ -6654,14 +7019,14 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               rows={8}
               value={storyText}
               onChange={(e) => setStoryText(e.target.value)}
-              className="w-full px-5 py-4 rounded-2xl bg-[#08090e] border border-white/10 text-white font-body text-sm leading-relaxed focus:border-white/30 focus:outline-none"
+              className="w-full px-4 py-4 rounded-2xl bg-[#08090e] border border-white/10 text-white font-serif text-sm sm:text-base leading-relaxed focus:border-white/30 focus:outline-none"
             />
 
             <button
               onClick={handleSaveStory}
-              className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-3 px-6 rounded-full transition-colors cursor-pointer"
+              className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-xs tracking-wider uppercase font-semibold py-3 px-6 rounded-2xl transition-colors cursor-pointer shadow-md shadow-blue-600/20"
             >
-              Update Our Story
+              UPDATE OUR STORY
             </button>
           </div>
         )}
@@ -6753,18 +7118,18 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       <ProfilePocketPickerModal
         isOpen={isVoicePickerOpen}
         onClose={() => setIsVoicePickerOpen(false)}
-        title="Select Student Leader"
-        subtitle="Only approved executive and student leaders appear in this list"
+        title="Select Class Leader"
+        subtitle="Only approved executive and class leaders appear in this list"
         students={approvedStudentLeaders}
         selectedId={selectedVoiceStudentId}
         mode="leader"
         onSelect={(student) => {
           setSelectedVoiceStudentId(student.id);
           setVoiceLecturerName(student.fullName);
-          setVoiceTitle(student.position || 'Student Leader');
+          setVoiceTitle(student.position || 'Class Leader');
           if (student.photoUrl) setVoiceHeadshotUrl(student.photoUrl);
           if (student.quote) setVoicePartingQuote(student.quote);
-          setHierarchyToast(`✓ Populated student leader voice with ${student.fullName}`);
+          setHierarchyToast(`✓ Populated leader voice with ${student.fullName}`);
           setTimeout(() => setHierarchyToast(null), 2500);
         }}
       />
@@ -6924,7 +7289,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 </div>
                 <div>
                   <h3 className="font-syne font-bold text-base text-white">Edit Class Award</h3>
-                  <p className="font-mono-tech text-[11px] text-zinc-400">Update award recipient, trophy, or citation</p>
+                  <p className="font-mono-tech text-[11px] text-zinc-400">View full citation and update award details</p>
                 </div>
               </div>
               <button
@@ -7073,41 +7438,56 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               {/* Citation */}
               <div>
                 <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1">
-                  Award Citation / Reason *
+                  Full Award Citation / Reason *
                 </label>
                 <textarea
                   required
-                  rows={2}
+                  rows={3}
                   value={editingAwardModalItem.citation || ''}
                   onChange={(e) =>
                     setEditingAwardModalItem({ ...editingAwardModalItem, citation: e.target.value })
                   }
-                  className="w-full px-4 py-2 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none"
+                  className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none"
                 />
               </div>
 
               {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+              <div className="flex items-center justify-between gap-3 pt-3 border-t border-white/10">
                 <button
                   type="button"
-                  onClick={() => setEditingAwardModalItem(null)}
-                  className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase cursor-pointer"
+                  onClick={() => {
+                    const idToDelete = editingAwardModalItem.id;
+                    setEditingAwardModalItem(null);
+                    handleDeleteAward(idToDelete);
+                  }}
+                  className="px-3.5 py-2 rounded-full bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-mono-tech text-xs flex items-center gap-1.5 cursor-pointer"
                 >
-                  Cancel
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
                 </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs uppercase shadow-md cursor-pointer"
-                >
-                  Update Award
-                </button>
+
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditingAwardModalItem(null)}
+                    className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech font-bold text-xs uppercase shadow-md cursor-pointer"
+                  >
+                    Update Award
+                  </button>
+                </div>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Pop-up Window: Edit Final Thought Modal */}
+      {/* Pop-up Window: Edit Voice Modal */}
       {editingVoiceModalItem && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-[9990] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fadeIn">
           <div className="w-full max-w-lg bg-[#0c0d14] border border-white/20 rounded-3xl p-6 sm:p-7 shadow-2xl space-y-5 my-8">
@@ -7117,8 +7497,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   <Quote className="w-5 h-5 text-amber-400" />
                 </div>
                 <div>
-                  <h3 className="font-syne font-bold text-base text-white">Edit Final Thought</h3>
-                  <p className="font-mono-tech text-[11px] text-zinc-400">Update contributor message, role, or photo</p>
+                  <h3 className="font-syne font-bold text-base text-white">Edit Voice</h3>
+                  <p className="font-mono-tech text-[11px] text-zinc-400">View full message and update contributor details</p>
                 </div>
               </div>
               <button
@@ -7146,7 +7526,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   <img
                     src={editingVoiceModalItem.headshotUrl}
                     alt={editingVoiceModalItem.lecturerName}
-                    className="w-14 h-14 rounded-full object-cover border-2 border-white/30 filter grayscale shadow-md shrink-0"
+                    className="w-14 h-14 rounded-full object-cover border-2 border-white/30 shadow-md shrink-0"
                   />
                 ) : (
                   <div className="w-14 h-14 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-zinc-400 shrink-0">
@@ -7196,7 +7576,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               {/* Name */}
               <div>
                 <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1">
-                  Lecturer or Leader Name *
+                  Contributor Name *
                 </label>
                 <input
                   required
@@ -7228,16 +7608,16 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               {/* Parting Quote */}
               <div>
                 <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1">
-                  Parting Words &amp; Wisdom *
+                  Full Parting Message &amp; Wisdom *
                 </label>
                 <textarea
                   required
-                  rows={3}
+                  rows={4}
                   value={editingVoiceModalItem.partingQuote}
                   onChange={(e) =>
                     setEditingVoiceModalItem({ ...editingVoiceModalItem, partingQuote: e.target.value })
                   }
-                  className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none font-body"
+                  className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none font-body leading-relaxed"
                 />
               </div>
 
@@ -7281,28 +7661,40 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       placeholder="e.g. From the President"
                       className="w-full px-3.5 py-2 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none text-xs font-mono-tech"
                     />
-                    <p className="font-mono-tech text-[10px] text-zinc-400">
-                      This pinned message will display first in the Final Thoughts section with the author's portrait, name, role, and a "Read more" toggle for text over about 120 words.
-                    </p>
                   </div>
                 )}
               </div>
 
               {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+              <div className="flex items-center justify-between gap-3 pt-3 border-t border-white/10">
                 <button
                   type="button"
-                  onClick={() => setEditingVoiceModalItem(null)}
-                  className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase cursor-pointer"
+                  onClick={() => {
+                    const idToDelete = editingVoiceModalItem.id;
+                    setEditingVoiceModalItem(null);
+                    handleDeleteVoice(idToDelete);
+                  }}
+                  className="px-3.5 py-2 rounded-full bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-mono-tech text-xs flex items-center gap-1.5 cursor-pointer"
                 >
-                  Cancel
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
                 </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs uppercase shadow-md cursor-pointer"
-                >
-                  Update Final Thought
-                </button>
+
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditingVoiceModalItem(null)}
+                    className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech font-bold text-xs uppercase shadow-md cursor-pointer"
+                  >
+                    Update Voice
+                  </button>
+                </div>
               </div>
             </form>
           </div>

@@ -13,7 +13,8 @@ import {
   MessageSquare, 
   ExternalLink,
   Sparkles,
-  Users
+  Users,
+  QrCode
 } from 'lucide-react';
 
 interface InviteClassmatesModalProps {
@@ -34,6 +35,7 @@ export const InviteClassmatesModal: React.FC<InviteClassmatesModalProps> = ({
   const [messageText, setMessageText] = useState(defaultMessage);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedFullMessage, setCopiedFullMessage] = useState(false);
+  const [showQr, setShowQr] = useState(false);
 
   useStaticBackdropScrollLock(isOpen);
 
@@ -166,7 +168,7 @@ export const InviteClassmatesModal: React.FC<InviteClassmatesModalProps> = ({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                Invitation Message Template
+                Invitation Message Preview (Editable)
               </label>
               <button
                 type="button"
@@ -206,6 +208,16 @@ export const InviteClassmatesModal: React.FC<InviteClassmatesModalProps> = ({
                 <span>{copiedLink ? 'Copied' : 'Copy'}</span>
               </button>
 
+              <button
+                type="button"
+                onClick={() => setShowQr((prev) => !prev)}
+                className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-[#d4af37] border border-white/10 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                title="Show QR Code"
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span>QR</span>
+              </button>
+
               <a
                 href={shareableSubmitUrl}
                 target="_blank"
@@ -217,6 +229,21 @@ export const InviteClassmatesModal: React.FC<InviteClassmatesModalProps> = ({
               </a>
             </div>
           </div>
+
+          {showQr && (
+            <div className="p-4 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col items-center gap-2 animate-fadeIn">
+              <div className="p-3 bg-white rounded-2xl">
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(shareableSubmitUrl)}`}
+                  alt="Invite Classmates QR Code"
+                  className="w-36 h-36 object-contain"
+                />
+              </div>
+              <span className="font-mono-tech text-[10px] text-zinc-400">
+                Scan to open classmate invite form
+              </span>
+            </div>
+          )}
 
           {/* Quick Share Buttons */}
           <div className="space-y-2">

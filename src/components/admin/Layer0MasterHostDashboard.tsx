@@ -90,7 +90,9 @@ import {
   apiClientPermanentDeleteAlbum,
   apiClientUnpublishAlbum,
   getAuthStatus,
-  AuthStatusResponse
+  AuthStatusResponse,
+  uploadMediaToR2,
+  migrateBase64ImagesOnServer
 } from '../../utils/apiClient';
 import { useFeedback } from '../common/FeedbackSystem';
 import { DashboardProfileMenu } from '../common/DashboardProfileMenu';
@@ -307,6 +309,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   const [editMaxImagesPerAlbum, setEditMaxImagesPerAlbum] = useState(contentOverride.maxImagesPerAlbum || 400);
   const [editAlbumBgMusicUrl, setEditAlbumBgMusicUrl] = useState(contentOverride.albumBackgroundMusicUrl || '');
   const [editHeroVideoUrl, setEditHeroVideoUrl] = useState(contentOverride.heroVideoUrl || '');
+  const [editHeroPosterUrl, setEditHeroPosterUrl] = useState(contentOverride.heroPosterUrl || '');
+  const [editHeroVideoKey, setEditHeroVideoKey] = useState(contentOverride.heroVideoKey || '');
+  const [editHeroPosterKey, setEditHeroPosterKey] = useState(contentOverride.heroPosterKey || '');
+  const [isUploadingHeroMedia, setIsUploadingHeroMedia] = useState(false);
+  const [isMigratingImages, setIsMigratingImages] = useState(false);
+  const [migrationReport, setMigrationReport] = useState<{ migratedCount: number; albumsUpdated: number; failedCount: number } | null>(null);
   const [editClassAlbumTourUrl, setEditClassAlbumTourUrl] = useState(contentOverride.classAlbumCardVideoUrl || contentOverride.classAlbumTourUrl || '');
   const [editLegacyPlaqueTourUrl, setEditLegacyPlaqueTourUrl] = useState(contentOverride.legacyPlaqueCardVideoUrl || contentOverride.legacyPlaqueTourUrl || '');
   const [editAnnualReminderTourUrl, setEditAnnualReminderTourUrl] = useState(contentOverride.annualReminderTourUrl || contentOverride.annualReminderCardVideoUrl || '');
@@ -421,6 +429,9 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       setEditMaxImagesPerAlbum(contentOverride.maxImagesPerAlbum || 400);
       setEditAlbumBgMusicUrl(contentOverride.albumBackgroundMusicUrl || '');
       setEditHeroVideoUrl(contentOverride.heroVideoUrl || '');
+      setEditHeroPosterUrl(contentOverride.heroPosterUrl || '');
+      setEditHeroVideoKey(contentOverride.heroVideoKey || '');
+      setEditHeroPosterKey(contentOverride.heroPosterKey || '');
       setEditClassAlbumTourUrl(contentOverride.classAlbumCardVideoUrl || contentOverride.classAlbumTourUrl || '');
       setEditLegacyPlaqueTourUrl(contentOverride.legacyPlaqueCardVideoUrl || contentOverride.legacyPlaqueTourUrl || '');
       setEditAnnualReminderTourUrl(contentOverride.annualReminderTourUrl || contentOverride.annualReminderCardVideoUrl || '');
@@ -485,24 +496,99 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
   const handleVideoTourUpload = (file: File, target: 'hero' | 'album' | 'plaque' | 'reminder') => {
     if (!file) return;
-    if (!file.type.startsWith('video/') && !file.name.match(/\.(mp4|webm|mov|m4v)$/i)) {
-      console.warn('Invalid video file format uploaded. Only .mp4, .webm, or .mov are allowed.');
+    const isMp4OrWebm = /^video\/(mp4|webm)$/i.test(file.type) || /\.(mp4|webm)$/i.test(file.name);
+    if (!isMp4OrWebm) {
+      showError('Invalid Video Format', 'Only MP4 or WebM videos are allowed.');
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      showError('Video Too Large', 'Hero and tour videos must be 15 MB or smaller.');
       return;
     }
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const dataUrl = e.target?.result as string;
-      if (target === 'hero') {
-        setEditHeroVideoUrl(dataUrl);
-      } else if (target === 'album') {
-        setEditClassAlbumTourUrl(dataUrl);
-      } else if (target === 'plaque') {
-        setEditLegacyPlaqueTourUrl(dataUrl);
-      } else {
-        setEditAnnualReminderTourUrl(dataUrl);
+      if (!dataUrl) return;
+      setIsUploadingHeroMedia(true);
+      try {
+        const uploaded = await uploadMediaToR2(dataUrl, {
+          setId: 'site-hero',
+          category: target === 'hero' ? 'hero-video' : `${target}-video`,
+          fileName: file.name,
+        });
+        if (!uploaded.success || !uploaded.url) {
+          showError('Video Upload Failed', uploaded.error || 'Failed to upload video to R2 storage. Please retry.');
+          return;
+        }
+        if (target === 'hero') {
+          setEditHeroVideoUrl(uploaded.url);
+          if (uploaded.key) setEditHeroVideoKey(uploaded.key);
+        } else if (target === 'album') {
+          setEditClassAlbumTourUrl(uploaded.url);
+        } else if (target === 'plaque') {
+          setEditLegacyPlaqueTourUrl(uploaded.url);
+        } else {
+          setEditAnnualReminderTourUrl(uploaded.url);
+        }
+        showSuccess('Video Uploaded to R2', `Saved at ${uploaded.url}`);
+      } finally {
+        setIsUploadingHeroMedia(false);
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleHeroPosterUpload = (file: File) => {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      showError('Poster Image Too Large', 'Poster image must be 2 MB or smaller (JPEG, PNG, or WebP).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target?.result as string;
+      if (!dataUrl) return;
+      setIsUploadingHeroMedia(true);
+      try {
+        const uploaded = await uploadMediaToR2(dataUrl, {
+          setId: 'site-hero',
+          category: 'hero-poster',
+          fileName: file.name,
+        });
+        if (!uploaded.success || !uploaded.url) {
+          showError('Poster Upload Failed', uploaded.error || 'Failed to upload poster image to R2. Please retry.');
+          return;
+        }
+        setEditHeroPosterUrl(uploaded.url);
+        if (uploaded.key) setEditHeroPosterKey(uploaded.key);
+        showSuccess('Hero Poster Uploaded', `Saved at ${uploaded.url}`);
+      } finally {
+        setIsUploadingHeroMedia(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleHostMigrateImages = async () => {
+    setIsMigratingImages(true);
+    try {
+      const res = await migrateBase64ImagesOnServer({ all: true });
+      if (!res.success) {
+        showError('Image Migration Failed', res.error || 'Could not migrate base64 images to R2.');
+        return;
+      }
+      setMigrationReport({
+        migratedCount: res.migratedCount,
+        albumsUpdated: res.albumsUpdated,
+        failedCount: res.failedCount,
+      });
+      showSuccess(
+        'R2 Image Migration Complete',
+        `Migrated ${res.migratedCount} base64 image(s) across ${res.albumsUpdated} album(s) (${res.failedCount} failed).`
+      );
+    } finally {
+      setIsMigratingImages(false);
+    }
   };
 
   // Live Department Class Albums (Demo albums are strictly isolated in Album Demos, soft-deleted albums hidden)
@@ -798,6 +884,9 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       maxImagesPerAlbum: Number(editMaxImagesPerAlbum),
       albumBackgroundMusicUrl: editAlbumBgMusicUrl.trim(),
       heroVideoUrl: editHeroVideoUrl.trim(),
+      heroPosterUrl: editHeroPosterUrl.trim() || undefined,
+      heroVideoKey: editHeroVideoKey.trim() || undefined,
+      heroPosterKey: editHeroPosterKey.trim() || undefined,
       classAlbumCardVideoUrl: editClassAlbumTourUrl.trim(),
       classAlbumTourUrl: editClassAlbumTourUrl.trim(),
       legacyPlaqueCardVideoUrl: editLegacyPlaqueTourUrl.trim(),
@@ -2203,15 +2292,43 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   </p>
                 </div>
 
-                <button
-                  id="execute-reseed-btn"
-                  onClick={handleExecuteDefaultSeed}
-                  className="shrink-0 bg-white hover:bg-[#d4af37] text-black font-tech text-xs tracking-widest uppercase font-extrabold py-4 px-8 rounded-2xl flex items-center gap-2.5 transition-all shadow-2xl hover:scale-105 active:scale-95 cursor-pointer border border-white/20 self-start lg:self-center"
-                >
-                  <RefreshCw className="w-4 h-4 text-black" />
-                  <span>Execute Preloaded Seed</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-3 self-start lg:self-center">
+                  <button
+                    id="host-migrate-images-btn"
+                    type="button"
+                    disabled={isMigratingImages}
+                    onClick={handleHostMigrateImages}
+                    className="shrink-0 bg-[#d4af37]/20 hover:bg-[#d4af37] text-[#d4af37] hover:text-black font-tech text-xs tracking-widest uppercase font-extrabold py-4 px-6 rounded-2xl flex items-center gap-2.5 transition-all shadow-xl cursor-pointer border border-[#d4af37]/40 disabled:opacity-50"
+                  >
+                    <Upload className={`w-4 h-4 ${isMigratingImages ? 'animate-bounce' : ''}`} />
+                    <span>{isMigratingImages ? 'Migrating...' : 'Migrate images'}</span>
+                  </button>
+
+                  <button
+                    id="execute-reseed-btn"
+                    onClick={handleExecuteDefaultSeed}
+                    className="shrink-0 bg-white hover:bg-[#d4af37] text-black font-tech text-xs tracking-widest uppercase font-extrabold py-4 px-8 rounded-2xl flex items-center gap-2.5 transition-all shadow-2xl hover:scale-105 active:scale-95 cursor-pointer border border-white/20"
+                  >
+                    <RefreshCw className="w-4 h-4 text-black" />
+                    <span>Execute Preloaded Seed</span>
+                  </button>
+                </div>
               </div>
+
+              {migrationReport && (
+                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-mono-tech flex items-center justify-between gap-3">
+                  <span>
+                    R2 Migration Report: {migrationReport.migratedCount} base64 image(s) migrated across {migrationReport.albumsUpdated} album(s) • {migrationReport.failedCount} failed
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMigrationReport(null)}
+                    className="text-emerald-300 hover:text-white text-[10px] uppercase"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
 
               {/* Bolder summary metrics strip */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-1">
@@ -2235,9 +2352,105 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
                   <div>
                     <div className="text-[10px] font-mono-tech uppercase text-zinc-400 font-medium">Storage Architecture</div>
-                    <div className="font-syne font-bold text-sm sm:text-base text-white">100% Verified Local &amp; Cloud Sync</div>
+                    <div className="font-syne font-bold text-sm sm:text-base text-white">R2 BUCKET &amp; D1 Database</div>
                   </div>
                 </div>
+              </div>
+
+              {/* System Check Strip (True Env Vars Only) */}
+              {systemCheck && (
+                <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono-tech uppercase tracking-widest text-zinc-400 font-bold">
+                      System Environment Check (True Env Vars Only)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={runSystemCheck}
+                      disabled={isSystemChecking}
+                      className="text-[10px] font-mono-tech text-[#d4af37] hover:underline cursor-pointer"
+                    >
+                      {isSystemChecking ? 'Checking...' : 'Refresh Status'}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-[11px] font-mono-tech">
+                    {[
+                      { label: 'SESSION_SECRET', ok: systemCheck.sessionSecretSet },
+                      { label: 'PAYSTACK_SECRET_KEY', ok: Boolean(systemCheck.paystackSecretKeySet) },
+                      { label: 'PAYSTACK_PUBLIC_KEY', ok: Boolean(systemCheck.paystackPublicKeySet) },
+                      { label: 'GOOGLE_CLIENT_ID', ok: systemCheck.googleClientIdSet },
+                    ].map((item) => (
+                      <div
+                        key={item.label}
+                        className={`px-3 py-2 rounded-xl border flex items-center justify-between ${
+                          item.ok
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                            : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                        }`}
+                      >
+                        <span className="truncate">{item.label}</span>
+                        <span className="font-bold ml-2">{item.ok ? 'SET' : 'MISSING'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Host Payments Tab / Needs Review Ledger */}
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono-tech uppercase tracking-widest text-zinc-400 font-bold flex items-center gap-1.5">
+                    <DollarSign className="w-3.5 h-3.5 text-[#d4af37]" />
+                    Host Payments &amp; Webhook Review Ledger ({transactions.length})
+                  </span>
+                  <span className="text-[11px] font-mono-tech text-emerald-400 font-bold">
+                    Verified Total: ₦{totalRevenue.toLocaleString()}
+                  </span>
+                </div>
+                {transactions.length === 0 ? (
+                  <p className="text-xs text-zinc-500 font-body">No payment transactions recorded yet.</p>
+                ) : (
+                  <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                    {transactions.slice(0, 25).map((tx) => {
+                      const rawStatus = String((tx as any).status || '');
+                      const needsReview = rawStatus.toLowerCase().includes('review');
+                      return (
+                        <div
+                          key={tx.id || tx.reference}
+                          className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs ${
+                            needsReview
+                              ? 'bg-amber-500/10 border-amber-500/40 text-amber-200'
+                              : 'bg-white/[0.02] border-white/10 text-zinc-300'
+                          }`}
+                        >
+                          <div className="space-y-0.5">
+                            <div className="font-mono-tech font-bold text-white flex items-center gap-2">
+                              <span>{tx.reference}</span>
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] uppercase ${
+                                  needsReview
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    : rawStatus.toLowerCase() === 'paid'
+                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                    : 'bg-zinc-700 text-zinc-300'
+                                }`}
+                              >
+                                {needsReview ? 'paid, needs review' : rawStatus}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-zinc-400">
+                              {tx.payerEmail || tx.payerName || 'Student / Admin'} • {tx.setName || tx.setId || 'Unlinked Album'}
+                              {tx.notes ? ` — ${tx.notes}` : ''}
+                            </div>
+                          </div>
+                          <div className="font-mono-tech font-bold text-sm text-white shrink-0">
+                            ₦{Number(tx.amount || 0).toLocaleString()}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -2413,8 +2626,19 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                             const file = e.target.files?.[0];
                             if (file) {
                               const reader = new FileReader();
-                              reader.onload = (ev) => {
-                                if (ev.target?.result) setEditWebsiteLogoUrl(ev.target.result as string);
+                              reader.onload = async (ev) => {
+                                const dataUrl = ev.target?.result as string;
+                                if (!dataUrl) return;
+                                const uploaded = await uploadMediaToR2(dataUrl, {
+                                  setId: 'site-hero',
+                                  category: 'brand-logo',
+                                  fileName: file.name,
+                                });
+                                if (!uploaded.success || !uploaded.url) {
+                                  showError('Logo Upload Failed', uploaded.error || 'Could not upload logo to R2.');
+                                  return;
+                                }
+                                setEditWebsiteLogoUrl(uploaded.url);
                               };
                               reader.readAsDataURL(file);
                             }
@@ -2550,6 +2774,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                       {editHeroVideoUrl ? (
                         <video
                           src={editHeroVideoUrl}
+                          poster={editHeroPosterUrl || undefined}
                           controls
                           className="w-full h-full object-cover"
                         />
@@ -2562,26 +2787,41 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                     </div>
 
                     <div className="md:col-span-2 space-y-3">
-                      <div>
-                        <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
-                          Video URL (MP4 / WebM direct stream)
-                        </label>
-                        <input
-                          type="url"
-                          placeholder="https://commondatastorage.googleapis.com/..."
-                          value={editHeroVideoUrl}
-                          onChange={(e) => setEditHeroVideoUrl(e.target.value)}
-                          className="w-full px-3.5 py-2 rounded-lg bg-black/50 border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-amber-400/50"
-                        />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
+                            Video URL (MP4 / WebM max 15 MB)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="/media/albums/site-hero/..."
+                            value={editHeroVideoUrl}
+                            onChange={(e) => setEditHeroVideoUrl(e.target.value)}
+                            className="w-full px-3.5 py-2 rounded-lg bg-black/50 border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-amber-400/50"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
+                            Hero Poster Image URL (JPEG/PNG/WebP max 2 MB)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="/media/albums/site-hero/..."
+                            value={editHeroPosterUrl}
+                            onChange={(e) => setEditHeroPosterUrl(e.target.value)}
+                            className="w-full px-3.5 py-2 rounded-lg bg-black/50 border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-amber-400/50"
+                          />
+                        </div>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
                         <label className="px-3 py-1.5 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border border-amber-400/30 font-mono-tech text-xs flex items-center gap-1.5 cursor-pointer transition-colors">
                           <Upload className="w-3.5 h-3.5" />
-                          <span>Upload File</span>
+                          <span>{isUploadingHeroMedia ? 'Uploading to R2...' : 'Upload Hero Video (MP4/WebM ≤15MB)'}</span>
                           <input
                             type="file"
-                            accept="video/*"
+                            accept="video/mp4,video/webm"
+                            disabled={isUploadingHeroMedia}
                             className="hidden"
                             onChange={(e) => {
                               const file = e.target.files?.[0];
@@ -2590,10 +2830,28 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                           />
                         </label>
 
+                        <label className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-200 border border-white/15 font-mono-tech text-xs flex items-center gap-1.5 cursor-pointer transition-colors">
+                          <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Upload Poster</span>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            disabled={isUploadingHeroMedia}
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleHeroPosterUpload(file);
+                            }}
+                          />
+                        </label>
+
                         {editHeroVideoUrl ? (
                           <button
                             type="button"
-                            onClick={() => setEditHeroVideoUrl('')}
+                            onClick={() => {
+                              setEditHeroVideoUrl('');
+                              setEditHeroVideoKey('');
+                            }}
                             className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 text-[11px] font-mono-tech cursor-pointer ml-auto transition-colors"
                           >
                             Set to Default (Transition Images)
@@ -3193,16 +3451,25 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                               type="file"
                               accept="image/*"
                               className="hidden"
-                              onChange={(e) => {
+                                onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
                                   const reader = new FileReader();
-                                  reader.onload = (ev) => {
-                                    if (ev.target?.result) {
-                                      const nextImgs = [...editLegacyBannerImages];
-                                      nextImgs[slotIdx] = ev.target.result as string;
-                                      setEditLegacyBannerImages(nextImgs);
+                                  reader.onload = async (ev) => {
+                                    const dataUrl = ev.target?.result as string;
+                                    if (!dataUrl) return;
+                                    const uploaded = await uploadMediaToR2(dataUrl, {
+                                      setId: 'site-hero',
+                                      category: `legacy-banner-${slotIdx + 1}`,
+                                      fileName: file.name,
+                                    });
+                                    if (!uploaded.success || !uploaded.url) {
+                                      showError('Banner Upload Failed', uploaded.error || 'Could not upload banner image to R2.');
+                                      return;
                                     }
+                                    const nextImgs = [...editLegacyBannerImages];
+                                    nextImgs[slotIdx] = uploaded.url;
+                                    setEditLegacyBannerImages(nextImgs);
                                   };
                                   reader.readAsDataURL(file);
                                 }

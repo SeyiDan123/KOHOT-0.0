@@ -17,17 +17,26 @@ import {
   Linkedin,
   Facebook,
   Calendar,
-  ExternalLink
+  ExternalLink,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import { updateSocialMetaTags } from '../../utils/metaTags';
 import { SocialIconsRow } from '../common/SocialIconsRow';
 import { ImageCropModal } from '../common/ImageCropModal';
-import { isValidEmail } from '../../utils/emailValidator';
+import { isValidEmail, checkEmailTypoSuggestion } from '../../utils/emailValidator';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
 import { generateGoogleCalendarUrl, downloadIcsCalendarFile } from '../../utils/calendarHelper';
 import { getAlbumUrl } from '../../utils/urlHelper';
-import { uploadMediaToR2, submitStudentProfileOnServer } from '../../utils/apiClient';
+import { getTheme, applyTheme, toggleTheme, ThemeMode } from '../../utils/theme';
+import {
+  uploadMediaToR2,
+  submitStudentProfileOnServer,
+  fetchInviteUploadTokenFromServer,
+  fetchPublicPaymentConfig,
+} from '../../utils/apiClient';
+import { PaystackModal } from '../common/PaystackModal';
 
 interface StudentSubmissionPageProps {
   currentSet: ClassSet;
@@ -51,6 +60,9 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   const [quote, setQuote] = useState('');
   const [bio, setBio] = useState('');
   const [email, setEmail] = useState('');
+  const [confirmEmail, setConfirmEmail] = useState('');
+  const [emailTypoSuggestion, setEmailTypoSuggestion] = useState<string | null>(null);
+  const [hasConsent, setHasConsent] = useState(true);
   const [emailError, setEmailError] = useState('');
   const [instagramHandle, setInstagramHandle] = useState('');
   const [twitterHandle, setTwitterHandle] = useState('');
@@ -58,19 +70,71 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   const [facebookHandle, setFacebookHandle] = useState('');
   const [linkedinHandle, setLinkedinHandle] = useState('');
   const [photoDataUrl, setPhotoDataUrl] = useState('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [inviteToken, setInviteToken] = useState('');
+  const [studentFeeNgn, setStudentFeeNgn] = useState<number>(500);
   const [compressionInfo, setCompressionInfo] = useState<CompressionResult | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [showRemindOptions, setShowRemindOptions] = useState(false);
   const [submittedStudent, setSubmittedStudent] = useState<StudentProfile | null>(null);
+  const [activeSubmissionId, setActiveSubmissionId] = useState<string>('');
+  const [activeStatusToken, setActiveStatusToken] = useState<string>('');
+  const [submissionPaymentStatus, setSubmissionPaymentStatus] = useState<string>('unpaid');
+  const [submissionApprovalStatus, setSubmissionApprovalStatus] = useState<string>('pending');
+  const [isPaystackOpen, setIsPaystackOpen] = useState(false);
+  const [isSubmittingServer, setIsSubmittingServer] = useState(false);
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [rawPhotoToCrop, setRawPhotoToCrop] = useState('');
   const [rawPhotoUrl, setRawPhotoUrl] = useState('');
   const [cropSettings, setCropSettings] = useState<CropSettings | undefined>(undefined);
+  const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() => getTheme());
+  const isLightMode = currentTheme === 'light';
+
+  useEffect(() => {
+    const saved = getTheme();
+    setCurrentTheme(saved);
+    applyTheme(saved);
+  }, []);
+
+  useEffect(() => {
+    const handleThemeChanged = (e: any) => {
+      if (e.detail?.theme) {
+        setCurrentTheme(e.detail.theme);
+      } else {
+        setCurrentTheme(getTheme());
+      }
+    };
+    window.addEventListener('kohot_theme_changed', handleThemeChanged);
+    return () => window.removeEventListener('kohot_theme_changed', handleThemeChanged);
+  }, []);
+
+  const handleToggleInviteTheme = () => {
+    const next = toggleTheme(currentTheme);
+    setCurrentTheme(next);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Scroll to top on mount and set social meta tags with album hero thumbnail
+  const refreshSubmissionStatusFromServer = async (tokenToFetch?: string) => {
+    const token = tokenToFetch || activeStatusToken;
+    if (!token) return;
+    try {
+      const res = await fetch(`/api/submissions/status?token=${encodeURIComponent(token)}`, {
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.submission) {
+          setActiveSubmissionId(data.submission.id || activeSubmissionId);
+          setSubmissionPaymentStatus(data.submission.paymentStatus || 'unpaid');
+          setSubmissionApprovalStatus(data.submission.status || 'pending');
+        }
+      }
+    } catch {}
+  };
+
+  // Scroll to top on mount, fetch invite token & student fee from server, and check status_token
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     updateSocialMetaTags({
@@ -79,11 +143,28 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       imageUrl: currentSet.bannerImageUrl,
       url: window.location.href,
     });
-  }, [currentSet.departmentName, currentSet.graduationYear, currentSet.institutionName, currentSet.bannerImageUrl]);
+
+    fetchInviteUploadTokenFromServer(currentSet.id).then((t) => {
+      if (t) setInviteToken(t);
+    });
+    fetchPublicPaymentConfig().then((cfg) => {
+      if (cfg.studentFeeKobo > 0) {
+        setStudentFeeNgn(Math.round(cfg.studentFeeKobo / 100));
+      }
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    const statusTokenParam = params.get('status_token');
+    if (statusTokenParam) {
+      setActiveStatusToken(statusTokenParam);
+      setIsSuccess(true);
+      refreshSubmissionStatusFromServer(statusTokenParam);
+    }
+  }, [currentSet.id, currentSet.departmentName, currentSet.graduationYear, currentSet.institutionName, currentSet.bannerImageUrl]);
 
   const processSelectedFile = async (file: File) => {
+    setUploadError(null);
     try {
-      // Keep original image resized to compression limit (no larger)
       const result = await compressImageToWebP(file, 1200, 0.90);
       setRawPhotoUrl(result.dataUrl);
       setRawPhotoToCrop(result.dataUrl);
@@ -103,6 +184,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
 
   const handleApplyCrop = async (croppedDataUrl: string, newSettings?: CropSettings) => {
     setIsCompressing(true);
+    setUploadError(null);
     try {
       const fetchRes = await fetch(croppedDataUrl);
       const blob = await fetchRes.blob();
@@ -111,24 +193,30 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       const result = await compressImageToWebP(file, 800, 0.88);
       setCompressionInfo(result);
 
-      // Upload to Cloudflare R2 object storage
+      let tokenToUse = inviteToken;
+      if (!tokenToUse) {
+        tokenToUse = await fetchInviteUploadTokenFromServer(currentSet.id);
+        if (tokenToUse) setInviteToken(tokenToUse);
+      }
+
+      // Upload to Cloudflare R2 object storage (never save base64 dataUrl)
       const uploadRes = await uploadMediaToR2(result.dataUrl, {
         setId: currentSet.id,
         category: 'portrait',
         fileName: `${fullName ? fullName.replace(/\s+/g, '-').toLowerCase() : 'student'}-portrait.webp`,
+        inviteToken: tokenToUse,
       });
 
-      if (uploadRes.success && uploadRes.url) {
+      if (uploadRes.success && uploadRes.url && !uploadRes.url.startsWith('data:')) {
         setPhotoDataUrl(uploadRes.url);
       } else {
-        setPhotoDataUrl(result.dataUrl);
+        setUploadError(uploadRes.error || 'Upload to cloud storage failed. Please click to retry.');
       }
 
       if (newSettings) setCropSettings(newSettings);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Compression/upload error:', err);
-      setPhotoDataUrl(croppedDataUrl);
-      if (newSettings) setCropSettings(newSettings);
+      setUploadError(err?.message || 'Image upload failed. Please try again.');
     } finally {
       setIsCompressing(false);
       setIsCropModalOpen(false);
@@ -147,17 +235,25 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   };
 
   const validateStep1 = () => {
-    if (!photoDataUrl) {
-      alert('Please upload your official face portrait.');
+    if (!photoDataUrl || photoDataUrl.startsWith('data:')) {
+      setUploadError('Please upload your official face portrait to cloud storage.');
       return false;
     }
     if (!fullName.trim()) {
-      alert('Please enter your full official name.');
+      setEmailError('Please enter your full official name.');
       return false;
     }
-    const trimmedEmail = email.trim();
+    const trimmedEmail = email.trim().toLowerCase();
     if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
       setEmailError('Please enter a valid email address (e.g. name@domain.com).');
+      return false;
+    }
+    if (confirmEmail.trim() && confirmEmail.trim().toLowerCase() !== trimmedEmail) {
+      setEmailError('Email confirmation does not match.');
+      return false;
+    }
+    if (!hasConsent) {
+      setEmailError('Please agree to the profile & annual convocation reminder consent.');
       return false;
     }
     setEmailError('');
@@ -172,29 +268,29 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
     }
   };
 
-  const handleSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!fullName.trim() || !photoDataUrl) return;
+  const handleSubmit = async (openCheckoutAfterSubmit: boolean = false) => {
+    if (!fullName.trim() || !photoDataUrl || photoDataUrl.startsWith('data:')) return;
 
-    const trimmedEmail = email.trim();
+    const trimmedEmail = email.trim().toLowerCase();
     if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
       setEmailError('Please enter a valid email address to complete submission.');
       setCurrentStep(1);
       return;
     }
     setEmailError('');
+    setIsSubmittingServer(true);
 
     const trimmedPos = position.trim();
     const hasLeaderTitle = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
 
     const newStudent: StudentProfile = {
-      id: `std-${Date.now()}`,
+      id: activeSubmissionId || `std-${Date.now()}`,
       setId: currentSet.id,
       fullName: fullName.trim(),
       nickname: nickname.trim() || undefined,
       position: trimmedPos || 'Member',
       photoUrl: photoDataUrl,
-      rawPhotoUrl: rawPhotoUrl || rawPhotoToCrop || photoDataUrl,
+      rawPhotoUrl: photoDataUrl,
       cropSettings: cropSettings,
       originalSizeKb: compressionInfo?.originalSizeKb,
       compressedSizeKb: compressionInfo?.compressedSizeKb,
@@ -209,19 +305,45 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
         tiktok: tiktokHandle.trim() || undefined,
         facebook: facebookHandle.trim() || undefined,
       },
-      approved: false, // Awaiting verification from class album admin
+      approved: false,
       submittedAt: new Date().toISOString().split('T')[0],
       leaderOrder: hasLeaderTitle ? calculateIntuitiveHierarchyRank(trimmedPos) : undefined,
     };
 
-    // Persist to Cloudflare D1 server
-    submitStudentProfileOnServer(currentSet.id, newStudent).catch((err) => {
-      console.warn('Background server submission sync:', err);
-    });
+    try {
+      const serverRes = await submitStudentProfileOnServer(currentSet.id, newStudent, {
+        source: 'student',
+        consent: hasConsent,
+      });
 
-    onSubmitStudent(newStudent);
-    setSubmittedStudent(newStudent);
-    setIsSuccess(true);
+      const subId = serverRes.submissionId || newStudent.id;
+      setActiveSubmissionId(subId);
+      if (serverRes.statusToken) {
+        setActiveStatusToken(serverRes.statusToken);
+      }
+      if (serverRes.paymentStatus) {
+        setSubmissionPaymentStatus(serverRes.paymentStatus);
+      }
+      if (serverRes.status) {
+        setSubmissionApprovalStatus(serverRes.status);
+      }
+
+      const finalStudent = { ...newStudent, id: subId };
+      onSubmitStudent(finalStudent);
+      setSubmittedStudent(finalStudent);
+      setIsSubmittingServer(false);
+
+      if (openCheckoutAfterSubmit) {
+        setIsPaystackOpen(true);
+      } else {
+        setIsSuccess(true);
+      }
+    } catch (err) {
+      setIsSubmittingServer(false);
+      onSubmitStudent(newStudent);
+      setSubmittedStudent(newStudent);
+      setIsSuccess(true);
+    }
   };
 
   return (
@@ -253,10 +375,32 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <span className="text-xs font-mono-tech text-slate-600 dark:text-slate-400 font-semibold">
               Class of {currentSet.graduationYear}
             </span>
+            <button
+              id="invite-form-theme-toggle-btn"
+              type="button"
+              onClick={handleToggleInviteTheme}
+              role="switch"
+              aria-checked={!isLightMode}
+              aria-label={isLightMode ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
+              title={isLightMode ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 border border-slate-300 dark:border-neutral-700 text-slate-700 dark:text-amber-400 transition-all cursor-pointer shadow-xs active:scale-95"
+            >
+              {isLightMode ? (
+                <>
+                  <Sun className="w-3.5 h-3.5 text-amber-500" />
+                  <span className="font-mono-tech text-[10px] uppercase tracking-wider font-bold text-slate-700">Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="font-mono-tech text-[10px] uppercase tracking-wider font-bold text-amber-300">Dark</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
       </header>
@@ -297,19 +441,12 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       {!isSuccess && (
         <section className="border-b border-slate-200 dark:border-neutral-800 bg-slate-100/60 dark:bg-neutral-900/40 py-3 px-4 sm:px-8">
           <div className="max-w-4xl mx-auto">
-            <div className="flex items-center justify-between relative max-w-md mx-auto">
-              {/* Connecting Progress Track Line */}
-              <div className="absolute top-1/2 left-0 right-0 -translate-y-1/2 h-0.5 bg-slate-200 dark:bg-neutral-800 z-0" />
-              <div 
-                className="absolute top-1/2 left-0 -translate-y-1/2 h-0.5 bg-slate-900 dark:bg-white z-0 transition-all duration-300" 
-                style={{ width: currentStep === 1 ? '0%' : '100%' }}
-              />
-
+            <div className="flex items-center justify-between gap-3 sm:gap-4 max-w-md mx-auto">
               {/* Step 1 Node */}
               <button
                 type="button"
                 onClick={() => setCurrentStep(1)}
-                className="relative z-10 flex items-center gap-2 cursor-pointer group"
+                className="relative z-10 flex items-center gap-2 shrink-0 cursor-pointer group"
               >
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center font-mono-tech text-xs font-bold transition-all shadow-xs ${
                   currentStep === 1
@@ -325,13 +462,21 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                 </span>
               </button>
 
+              {/* Connecting Progress Track Line (strictly between Step 1 and Step 2) */}
+              <div className="flex-1 h-0.5 bg-slate-200 dark:bg-neutral-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-slate-900 dark:bg-white transition-all duration-300"
+                  style={{ width: currentStep === 1 ? '0%' : '100%' }}
+                />
+              </div>
+
               {/* Step 2 Node */}
               <button
                 type="button"
                 onClick={() => {
                   if (validateStep1()) setCurrentStep(2);
                 }}
-                className="relative z-10 flex items-center gap-2 cursor-pointer group"
+                className="relative z-10 flex items-center gap-2 shrink-0 cursor-pointer group"
               >
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center font-mono-tech text-xs font-bold transition-all shadow-xs ${
                   currentStep === 2
@@ -369,9 +514,33 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
               <p className="font-body text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
                 Your profile card has been submitted to {currentSet.classRepName} for inclusion in the official class album.
               </p>
+              <div className="pt-1 flex items-center justify-center gap-2 flex-wrap">
+                <span className="px-3 py-1 rounded-full text-[11px] font-mono-tech uppercase font-bold bg-slate-100 dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 text-slate-700 dark:text-slate-300">
+                  Review: {submissionApprovalStatus}
+                </span>
+                <span
+                  className={`px-3 py-1 rounded-full text-[11px] font-mono-tech uppercase font-bold border ${
+                    submissionPaymentStatus === 'paid'
+                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-amber-500/15 border-amber-500/30 text-amber-800 dark:text-amber-300'
+                  }`}
+                >
+                  Payment: {submissionPaymentStatus === 'paid' ? 'Paid' : `Unpaid (₦${studentFeeNgn.toLocaleString()})`}
+                </span>
+              </div>
             </div>
 
             <div className="pt-2 flex flex-col items-center gap-3 w-full max-w-xs mx-auto">
+              {submissionPaymentStatus !== 'paid' && activeSubmissionId && (
+                <button
+                  type="button"
+                  onClick={() => setIsPaystackOpen(true)}
+                  className="w-full inline-flex items-center justify-center gap-2 text-xs font-mono-tech uppercase tracking-widest text-white bg-emerald-600 hover:bg-emerald-500 py-3.5 px-6 rounded-full transition-all cursor-pointer shadow-md active:scale-95 font-bold"
+                >
+                  <span>Pay to publish (₦{studentFeeNgn.toLocaleString()})</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -520,15 +689,20 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                           </div>
                           <div>
                             <p className="font-syne font-bold text-sm text-slate-900 dark:text-white">
-                              {isCompressing ? 'Processing photo...' : 'Click to Upload Portrait or Drag & Drop'}
+                              {isCompressing ? 'Uploading photo to cloud...' : 'Click to Upload Portrait or Drag & Drop'}
                             </p>
                             <p className="font-mono-tech text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                              JPG, PNG, HEIC, WEBP supported
+                              JPG, PNG, WEBP supported (Max 2 MB)
                             </p>
                           </div>
                         </div>
                       )}
                     </div>
+                    {uploadError && (
+                      <p className="text-[11px] text-red-600 dark:text-red-400 font-mono-tech mt-1.5 flex items-center gap-1">
+                        <span>⚠</span> {uploadError}
+                      </p>
+                    )}
                   </div>
 
                   {/* Name and Nickname */}
@@ -609,29 +783,77 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                     />
                   </div>
 
-                  {/* Email Address */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-slate-300 font-bold">
-                        Email Address *
-                      </label>
-                      <span className="text-[10px] font-mono-tech text-slate-500">
-                        For annual anniversary relive emails
-                      </span>
+                  {/* Email Address & Confirmation */}
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-slate-300 font-bold">
+                            Email Address *
+                          </label>
+                        </div>
+                        <input
+                          type="email"
+                          required
+                          value={email}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEmail(val);
+                            setEmailTypoSuggestion(checkEmailTypoSuggestion(val));
+                            if (emailError) setEmailError('');
+                          }}
+                          placeholder="e.g. adebayo@alumni.edu"
+                          className={`w-full px-4 py-2.5 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none text-xs transition-colors shadow-xs ${
+                            emailError ? 'border-red-500 focus:border-red-500' : 'border-slate-300 dark:border-neutral-700 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900'
+                          }`}
+                        />
+                        {emailTypoSuggestion && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEmail(emailTypoSuggestion);
+                              setConfirmEmail(emailTypoSuggestion);
+                              setEmailTypoSuggestion(null);
+                            }}
+                            className="text-[11px] text-amber-600 dark:text-amber-400 font-mono-tech mt-1 underline cursor-pointer"
+                          >
+                            Did you mean {emailTypoSuggestion}?
+                          </button>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-slate-300 font-bold">
+                            Confirm Email *
+                          </label>
+                        </div>
+                        <input
+                          type="email"
+                          required
+                          value={confirmEmail}
+                          onChange={(e) => {
+                            setConfirmEmail(e.target.value);
+                            if (emailError) setEmailError('');
+                          }}
+                          placeholder="Re-enter email address"
+                          className="w-full px-4 py-2.5 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border border-slate-300 dark:border-neutral-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900 focus:outline-none text-xs transition-colors shadow-xs"
+                        />
+                      </div>
                     </div>
-                    <input
-                      type="email"
-                      required
-                      value={email}
-                      onChange={(e) => {
-                        setEmail(e.target.value);
-                        if (emailError) setEmailError('');
-                      }}
-                      placeholder="e.g. adebayo@alumni.edu"
-                      className={`w-full px-4 py-2.5 rounded-xl bg-[#f8f9fa] dark:bg-neutral-950 border text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none text-xs transition-colors shadow-xs ${
-                        emailError ? 'border-red-500 focus:border-red-500' : 'border-slate-300 dark:border-neutral-700 focus:border-amber-500 focus:bg-white dark:focus:bg-neutral-900'
-                      }`}
-                    />
+
+                    <label className="flex items-start gap-2.5 cursor-pointer pt-1">
+                      <input
+                        type="checkbox"
+                        checked={hasConsent}
+                        onChange={(e) => setHasConsent(e.target.checked)}
+                        className="mt-0.5 rounded border-slate-300 text-slate-900 focus:ring-amber-500"
+                      />
+                      <span className="text-xs text-slate-600 dark:text-slate-300">
+                        I agree my profile appears in the class album and I receive annual convocation reminders
+                      </span>
+                    </label>
+
                     {emailError && (
                       <p className="text-[11px] text-red-600 dark:text-red-400 font-mono-tech mt-1.5 flex items-center gap-1 animate-fadeIn">
                         <span>⚠</span> {emailError}
@@ -658,7 +880,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                         onChange={setInstagramHandle}
                         placeholder="username"
                         icon={<Instagram className="w-3 h-3 text-[#E1306C]" />}
-                        isLightMode={true}
+                        isLightMode={isLightMode}
                       />
 
                       <SocialUrlInputField
@@ -672,7 +894,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                             <path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-5.201 1.743l-.068-.102a2.895 2.895 0 0 1 2.373-4.538c.328 0 .644.055.938.156V9.43a6.33 6.33 0 0 0-.938-.07 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.756a8.196 8.196 0 0 0 4.771 1.517V6.828c-.352 0-.691-.049-1-.142z"/>
                           </svg>
                         }
-                        isLightMode={true}
+                        isLightMode={isLightMode}
                       />
 
                       <SocialUrlInputField
@@ -686,7 +908,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
                           </svg>
                         }
-                        isLightMode={true}
+                        isLightMode={isLightMode}
                       />
 
                       <SocialUrlInputField
@@ -696,7 +918,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                         onChange={setLinkedinHandle}
                         placeholder="username"
                         icon={<Linkedin className="w-3 h-3 text-[#0077b5]" />}
-                        isLightMode={true}
+                        isLightMode={isLightMode}
                       />
 
                       <div className="sm:col-span-2">
@@ -707,7 +929,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                           onChange={setFacebookHandle}
                           placeholder="username"
                           icon={<Facebook className="w-3 h-3 text-[#1877F2]" />}
-                          isLightMode={true}
+                          isLightMode={isLightMode}
                         />
                       </div>
                     </div>
@@ -822,22 +1044,50 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                   </div>
                 </div>
 
-                {/* Step 2 Actions */}
-                <div className="flex items-center gap-3 pt-2">
+                {/* Student Fee Notice (Price from settings, never slot counts) */}
+                <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 flex items-center justify-between text-xs">
+                  <span className="font-mono-tech text-slate-600 dark:text-slate-400">
+                    Student Profile Publishing Fee
+                  </span>
+                  <span className="font-syne font-bold text-sm text-emerald-600 dark:text-emerald-400">
+                    ₦{studentFeeNgn.toLocaleString()}
+                  </span>
+                </div>
+
+                {/* Step 2 Actions: Pay now at the top, Submit Anyway + short subtext underneath */}
+                <div className="space-y-3 pt-2">
+                  <button
+                    id="step2-pay-now-btn"
+                    type="button"
+                    disabled={isSubmittingServer}
+                    onClick={() => handleSubmit(true)}
+                    className="w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-syne font-bold text-sm uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 active:scale-98"
+                  >
+                    <span>Pay now (₦{studentFeeNgn.toLocaleString()})</span>
+                  </button>
+
+                  <button
+                    id="step2-submit-anyway-btn"
+                    type="button"
+                    disabled={isSubmittingServer}
+                    onClick={() => handleSubmit(false)}
+                    className="w-full py-3 px-5 rounded-2xl bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-300 dark:border-neutral-700 text-slate-900 dark:text-white transition-all cursor-pointer shadow-xs flex flex-col items-center justify-center gap-1 active:scale-98"
+                  >
+                    <span className="font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-1.5">
+                      <span>{isSubmittingServer ? 'Submitting...' : 'Submit Anyway'}</span>
+                      <Send className="w-3.5 h-3.5" />
+                    </span>
+                    <span className="font-mono-tech text-[11px] text-amber-700 dark:text-amber-400 font-medium leading-snug text-center">
+                      Only if paid to admin or sponsored — else rejected by admin.
+                    </span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => setCurrentStep(1)}
-                    className="flex-1 py-3 rounded-full bg-white dark:bg-neutral-800 border border-slate-300 dark:border-neutral-700 text-slate-700 dark:text-slate-300 hover:text-black dark:hover:text-white font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer text-center"
+                    className="w-full py-2.5 rounded-full bg-transparent hover:bg-slate-200/60 dark:hover:bg-neutral-800/60 text-slate-600 dark:text-slate-400 hover:text-black dark:hover:text-white font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer text-center"
                   >
                     &larr; Back to Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSubmit()}
-                    className="flex-1 py-3.5 rounded-full bg-slate-900 hover:bg-black dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-lg flex items-center justify-center gap-2 active:scale-95"
-                  >
-                    <span>Confirm &amp; Submit</span>
-                    <Send className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
@@ -845,6 +1095,37 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
           </>
         )}
       </main>
+
+      {/* Real Paystack Checkout Modal for Student "Pay now" and "Pay to publish" */}
+      {isPaystackOpen && (
+        <PaystackModal
+          isOpen={isPaystackOpen}
+          onClose={() => {
+            setIsPaystackOpen(false);
+            setIsSuccess(true);
+          }}
+          amountNgn={studentFeeNgn}
+          customerEmail={email.trim()}
+          customerName={fullName.trim()}
+          paymentType="student"
+          albumId={currentSet.id}
+          submissionId={activeSubmissionId}
+          metadata={{
+            universityName: currentSet.institutionName,
+            departmentName: currentSet.departmentName,
+            graduationYear: currentSet.graduationYear,
+            classSetName: currentSet.classSetName,
+          }}
+          onSuccess={async () => {
+            setSubmissionPaymentStatus('paid');
+            await refreshSubmissionStatusFromServer();
+            setTimeout(() => {
+              setIsPaystackOpen(false);
+              setIsSuccess(true);
+            }, 900);
+          }}
+        />
+      )}
 
       {/* Profile Photo Crop Modal (Square Frame) */}
       {isCropModalOpen && rawPhotoToCrop && (

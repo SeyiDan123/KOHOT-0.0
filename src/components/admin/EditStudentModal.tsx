@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StudentProfile, ClassSet } from '../../types';
 import { compressImageToWebP, CompressionResult } from '../../utils/imageCompressor';
+import { uploadMediaToR2 } from '../../utils/apiClient';
 import { ImageDropzone } from '../common/ImageDropzone';
 import { ImageCropModal } from '../common/ImageCropModal';
 import { UniversalModal } from '../common/UniversalModal';
@@ -274,9 +275,11 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
 
             <ImageDropzone
               value={photoUrl}
-              onChange={(dataUrl) => {
-                setPhotoUrl(dataUrl);
-                setRawPhotoUrl(dataUrl);
+              setId={currentSet.id}
+              category="portrait"
+              onChange={(url) => {
+                setPhotoUrl(url);
+                setRawPhotoUrl(url);
               }}
               aspectRatio="1:1"
               maxDimension={720}
@@ -490,10 +493,28 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
         imageSrc={rawPhotoToCrop}
         initialCropSettings={cropSettings}
         onClose={() => setIsCropModalOpen(false)}
-        onApplyCrop={(croppedUrl, newSettings) => {
-          setPhotoUrl(croppedUrl);
-          if (newSettings) setCropSettings(newSettings);
+        onApplyCrop={async (croppedUrl, newSettings) => {
           setIsCropModalOpen(false);
+          setIsCompressing(true);
+          try {
+            const compRes = await compressImageToWebP(croppedUrl, 720, 0.88);
+            const uploadRes = await uploadMediaToR2(compRes.dataUrl, {
+              setId: currentSet.id,
+              category: 'portrait',
+              fileName: `${fullName ? fullName.replace(/\s+/g, '-').toLowerCase() : 'student'}-portrait.webp`,
+            });
+            if (uploadRes.success && uploadRes.url && !uploadRes.url.startsWith('data:')) {
+              setPhotoUrl(uploadRes.url);
+              setRawPhotoUrl(uploadRes.url);
+              if (newSettings) setCropSettings(newSettings);
+            } else {
+              showError('Upload failed', uploadRes.error || 'Could not upload portrait to cloud storage. Please retry.');
+            }
+          } catch (err: any) {
+            showError('Upload failed', err?.message || 'Could not upload portrait. Please retry.');
+          } finally {
+            setIsCompressing(false);
+          }
         }}
         initialAspectRatio="1:1"
         isProfileSubmission={true}

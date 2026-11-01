@@ -4,9 +4,10 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 import fs from 'fs';
+import os from 'os';
 
 function createDevStorage() {
-  const storageDir = path.resolve(__dirname, '.kohot_storage');
+  const storageDir = path.resolve(os.tmpdir(), 'kohot_dev_storage');
   const mediaDir = path.resolve(storageDir, 'media');
   const dbFile = path.resolve(storageDir, 'db.json');
 
@@ -34,6 +35,7 @@ function createDevStorage() {
   const devMedia = {
     async put(key: string, data: any, options?: any) {
       const filePath = path.join(mediaDir, key);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
       let buf: Buffer;
       if (Buffer.isBuffer(data)) {
         buf = data;
@@ -47,7 +49,20 @@ function createDevStorage() {
       fs.writeFileSync(filePath, buf);
       const metaPath = path.join(mediaDir, `${key}.meta.json`);
       fs.writeFileSync(metaPath, JSON.stringify(options || {}, null, 2));
-      return { key };
+      return { key, size: buf.length, httpEtag: `"${Date.now()}-${buf.length}"` };
+    },
+
+    async delete(keys: string | string[]) {
+      const list = Array.isArray(keys) ? keys : [keys];
+      for (const k of list) {
+        if (!k) continue;
+        const filePath = path.join(mediaDir, k);
+        const metaPath = path.join(mediaDir, `${k}.meta.json`);
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+        } catch {}
+      }
     },
 
     async get(key: string, options?: any) {
@@ -73,23 +88,34 @@ function createDevStorage() {
       const totalSize = stat.size;
       let rangeResult: { offset: number; length: number } | undefined = undefined;
 
-      const rangeHeader = options?.range
-        ? typeof options.range === 'string'
-          ? options.range
-          : options.range?.get?.('range') || options.range?.range
-        : undefined;
-
-      if (rangeHeader && typeof rangeHeader === 'string' && rangeHeader.startsWith('bytes=')) {
-        const match = rangeHeader.replace('bytes=', '').split('-');
-        const start = parseInt(match[0], 10) || 0;
-        const end = match[1] ? parseInt(match[1], 10) : totalSize - 1;
-        const clampedEnd = Math.min(end, totalSize - 1);
-        const clampedStart = Math.min(start, clampedEnd);
+      if (options?.range && typeof options.range === 'object' && typeof options.range.offset === 'number') {
+        const clampedStart = Math.max(0, Math.min(options.range.offset, totalSize - 1));
+        const requestedLen = typeof options.range.length === 'number' ? options.range.length : totalSize - clampedStart;
+        const clampedEnd = Math.min(clampedStart + requestedLen - 1, totalSize - 1);
         fileBuffer = fileBuffer.subarray(clampedStart, clampedEnd + 1);
         rangeResult = {
           offset: clampedStart,
           length: fileBuffer.length,
         };
+      } else {
+        const rangeHeader = options?.range
+          ? typeof options.range === 'string'
+            ? options.range
+            : options.range?.get?.('range') || options.range?.range
+          : undefined;
+
+        if (rangeHeader && typeof rangeHeader === 'string' && rangeHeader.startsWith('bytes=')) {
+          const match = rangeHeader.replace('bytes=', '').split('-');
+          const start = parseInt(match[0], 10) || 0;
+          const end = match[1] ? parseInt(match[1], 10) : totalSize - 1;
+          const clampedEnd = Math.min(end, totalSize - 1);
+          const clampedStart = Math.min(start, clampedEnd);
+          fileBuffer = fileBuffer.subarray(clampedStart, clampedEnd + 1);
+          rangeResult = {
+            offset: clampedStart,
+            length: fileBuffer.length,
+          };
+        }
       }
 
       const ext = key.split('.').pop()?.toLowerCase();
@@ -433,7 +459,7 @@ function workerApiPlugin() {
     name: 'worker-api',
     configureServer(server: any) {
       server.middlewares.use(async (req: any, res: any, next: any) => {
-        if (req.url && req.url.startsWith('/api/')) {
+        if (req.url && (req.url.startsWith('/api/') || req.url.startsWith('/media/'))) {
           try {
             const workerModule = await server.ssrLoadModule('./worker/index.ts');
             const worker = workerModule.default;
@@ -453,12 +479,13 @@ function workerApiPlugin() {
             });
 
             const webRes = await worker.fetch(webReq, {
-              GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '688826683374-i08rgemf0ghvdabmelefmplju2q0rauh.apps.googleusercontent.com',
-              SESSION_SECRET: process.env.SESSION_SECRET || 'dev-session-secret-kohot-2025',
+              GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '',
+              SESSION_SECRET: process.env.SESSION_SECRET || '',
               HOST_EMAIL: process.env.HOST_EMAIL || 'seyidan03@gmail.com',
               PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || '',
+              PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY || process.env.VITE_PAYSTACK_PUBLIC_KEY || '',
               RESEND_API_KEY: process.env.RESEND_API_KEY || '',
-              MEDIA: devMedia,
+              BUCKET: devMedia,
               DB: devDb,
             });
 

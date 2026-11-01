@@ -13,6 +13,9 @@ export const STANDARD_PRICE = 50000; // Flat 50,000 NGN
 export interface AuthStatusResponse {
   googleClientIdSet: boolean;
   sessionSecretSet: boolean;
+  paystackSecretKeySet?: boolean;
+  paystackPublicKeySet?: boolean;
+  r2BucketSet?: boolean;
   hostEmailSet: boolean;
   databaseReachable: boolean;
   tablesPresent: boolean;
@@ -193,6 +196,9 @@ export async function getAuthStatus(): Promise<AuthStatusResponse> {
   return {
     googleClientIdSet: false,
     sessionSecretSet: false,
+    paystackSecretKeySet: false,
+    paystackPublicKeySet: false,
+    r2BucketSet: false,
     hostEmailSet: false,
     databaseReachable: false,
     tablesPresent: false,
@@ -259,48 +265,129 @@ export async function requestGoogleSignupToken(
 }
 
 /**
- * Verify Paystack Payment via Worker /api/verify-payment
+ * GET /api/config - Public payment & fee configuration
  */
-export async function verifyPaystackPaymentOnServer(params: {
-  reference: string;
-  institutionId: string;
-  departmentId: string;
-  graduationYear: number;
-  applicantEmail: string;
-  applicantName: string;
-  applicantPhone: string;
-  classSetName: string;
-  estimatedGraduates?: number;
-  signupToken?: string;
-}): Promise<VerifyPaymentResponse> {
+export async function fetchPublicPaymentConfig(): Promise<{
+  paystackPublicKey: string;
+  mode: 'live' | 'test' | 'unconfigured';
+  studentFeeKobo: number;
+  slotFeeKobo: number;
+}> {
   try {
-    const res = await fetch('/api/verify-payment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-
+    const res = await fetch('/api/config', { credentials: 'include' });
     if (res.ok) {
       const data = await res.json();
       return {
-        success: true,
-        status: data.status || 'success',
-        reference: params.reference,
-      };
-    } else {
-      const err = await res.json().catch(() => ({}));
-      return {
-        success: false,
-        error: err.error || 'verification_failed',
-        message: err.message || 'Payment verification failed',
+        paystackPublicKey: (data.paystackPublicKey || '').trim(),
+        mode: data.mode || 'unconfigured',
+        studentFeeKobo: Number(data.studentFeeKobo) || 50000,
+        slotFeeKobo: Number(data.slotFeeKobo) || 50000,
       };
     }
-  } catch {
-    // Client-side fallback if running in dev without backend proxy
+  } catch {}
+  return {
+    paystackPublicKey: '',
+    mode: 'unconfigured',
+    studentFeeKobo: 50000,
+    slotFeeKobo: 50000,
+  };
+}
+
+/**
+ * POST /api/payments/init - Initialize real Paystack transaction on server
+ */
+export async function initPaystackPaymentOnServer(payload: {
+  type: 'student' | 'slots';
+  albumId: string;
+  submissionId?: string;
+  quantity?: number;
+  sponsorName?: string;
+  email?: string;
+  payerName?: string;
+}): Promise<{
+  success: boolean;
+  reference?: string;
+  amountKobo?: number;
+  email?: string;
+  publicKey?: string;
+  metadata?: Record<string, any>;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/payments/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || 'payment_init_failed',
+        message: data.message || data.error || 'Could not initialize payment.',
+      };
+    }
     return {
       success: true,
-      status: 'success',
-      reference: params.reference,
+      reference: data.reference,
+      amountKobo: Number(data.amountKobo),
+      email: data.email,
+      publicKey: data.publicKey,
+      metadata: data.metadata,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: 'network_error',
+      message: err?.message || 'Network error while initializing payment.',
+    };
+  }
+}
+
+/**
+ * POST /api/payments/verify - Verify Paystack transaction with Paystack API on server
+ */
+export async function verifyPaystackPaymentReferenceOnServer(
+  reference: string
+): Promise<{
+  success: boolean;
+  status?: string;
+  reference?: string;
+  type?: string;
+  albumId?: string;
+  submissionId?: string;
+  quantity?: number;
+  alreadyApplied?: boolean;
+  needsReview?: boolean;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/payments/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ reference }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || 'verification_failed',
+        message: data.message || data.error || 'Payment verification failed.',
+      };
+    }
+    return {
+      success: true,
+      ...data,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: 'network_error',
+      message: err?.message || 'Network error while verifying payment.',
     };
   }
 }
@@ -628,8 +715,24 @@ export async function apiClientDeleteAward(albumId: string, awardId: string): Pr
 }
 
 /**
+ * GET /api/albums/:id/invite-token - Obtain short-lived signed upload token for public invite submissions
+ */
+export async function fetchInviteUploadTokenFromServer(albumId: string): Promise<string> {
+  try {
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/invite-token`, {
+      credentials: 'include',
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return data.inviteToken || '';
+    }
+  } catch {}
+  return '';
+}
+
+/**
  * Upload compressed media to Cloudflare R2 object storage (/api/media/upload)
- * Falls back gracefully to the compressed dataUrl in local/preview environments.
+ * Never falls back to saving inline base64 data URLs.
  */
 export async function uploadMediaToR2(
   dataUrl: string,
@@ -637,6 +740,7 @@ export async function uploadMediaToR2(
     setId?: string;
     category?: string;
     fileName?: string;
+    inviteToken?: string;
   }
 ): Promise<{
   success: boolean;
@@ -645,35 +749,135 @@ export async function uploadMediaToR2(
   error?: string;
 }> {
   try {
-    const res = await fetch('/api/media/upload', {
+    let token = '';
+    try {
+      token = localStorage.getItem('kohot_session_token') || '';
+    } catch {}
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const targetSetId = options?.setId || 'general';
+    const targetCategory = options?.category || 'general';
+    const targetFileName = options?.fileName || `media-${Date.now()}.webp`;
+
+    let effectiveInviteToken = options?.inviteToken || '';
+    if (!effectiveInviteToken && targetSetId !== 'site-hero' && targetCategory !== 'hero-video') {
+      effectiveInviteToken = await fetchInviteUploadTokenFromServer(targetSetId);
+    }
+
+    let res = await fetch('/api/media/upload', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
+      credentials: 'include',
       body: JSON.stringify({
         dataUrl,
-        setId: options?.setId || 'general',
-        category: options?.category || 'general',
-        fileName: options?.fileName || `media-${Date.now()}.webp`,
+        setId: targetSetId,
+        category: targetCategory,
+        fileName: targetFileName,
+        inviteToken: effectiveInviteToken || undefined,
       }),
     });
 
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (data.success && data.url) {
-        return {
-          success: true,
-          url: data.url,
-          key: data.key,
-        };
+    // If invite token was stale/expired, refresh once and retry
+    if (res.status === 401 && targetSetId !== 'site-hero' && targetCategory !== 'hero-video') {
+      const freshInviteToken = await fetchInviteUploadTokenFromServer(targetSetId);
+      if (freshInviteToken && freshInviteToken !== effectiveInviteToken) {
+        res = await fetch('/api/media/upload', {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify({
+            dataUrl,
+            setId: targetSetId,
+            category: targetCategory,
+            fileName: targetFileName,
+            inviteToken: freshInviteToken,
+          }),
+        });
       }
     }
-  } catch {
-    // Fallback to inline compressed WebP dataUrl when R2 endpoint is unavailable
-  }
 
-  return {
-    success: true,
-    url: dataUrl,
-  };
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success && data.url) {
+      return {
+        success: true,
+        url: data.url,
+        key: data.key,
+      };
+    }
+
+    return {
+      success: false,
+      error: data.message || data.error || 'Upload to storage failed. Please retry.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error while uploading media. Please retry.',
+    };
+  }
+}
+
+/**
+ * POST /api/media/migrate-base64 - Migrate any inline base64 images in albums to R2
+ */
+export async function migrateBase64ImagesOnServer(payload: {
+  albumId?: string;
+  all?: boolean;
+}): Promise<{
+  success: boolean;
+  migratedCount: number;
+  failedCount: number;
+  albumsUpdated: number;
+  album?: any;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    let token = '';
+    try {
+      token = localStorage.getItem('kohot_session_token') || '';
+    } catch {}
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch('/api/media/migrate-base64', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        migratedCount: 0,
+        failedCount: 0,
+        albumsUpdated: 0,
+        error: data.error || 'migration_failed',
+        message: data.message || data.error || 'Image migration failed.',
+      };
+    }
+    return {
+      success: true,
+      migratedCount: Number(data.migratedCount) || 0,
+      failedCount: Number(data.failedCount) || 0,
+      albumsUpdated: Number(data.albumsUpdated) || 0,
+      album: data.album,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      migratedCount: 0,
+      failedCount: 0,
+      albumsUpdated: 0,
+      error: 'network_error',
+      message: err?.message || 'Network error during image migration.',
+    };
+  }
 }
 
 /**

@@ -76,6 +76,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
   };
 
   const handleApplyCrop = async (croppedDataUrl: string) => {
+    setErrorMessage(null);
     try {
       setIsProcessing(true);
       // Immediately compress to optimal resolution
@@ -88,15 +89,14 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
         category: category || (aspectRatio === 'portrait' ? 'portrait' : 'candid'),
       });
 
-      if (uploadRes.success && uploadRes.url) {
+      if (uploadRes.success && uploadRes.url && !uploadRes.url.startsWith('data:')) {
         onChange(uploadRes.url);
       } else {
-        // Fallback to compressed WebP data URL if upload unreached
-        onChange(compRes.dataUrl);
+        setErrorMessage(uploadRes.error || 'Upload to cloud storage failed. Please click to retry.');
       }
-    } catch (err) {
-      console.error('Cropped image processing fallback', err);
-      onChange(croppedDataUrl);
+    } catch (err: any) {
+      console.error('Cropped image upload error:', err);
+      setErrorMessage(err?.message || 'Image upload failed. Please try again.');
     } finally {
       setIsProcessing(false);
     }
