@@ -835,7 +835,7 @@ function getCohortSeedsByYear(year: number): StudentSeed[] {
 
 function getSecondPortraitOfSamePerson(photoUrl: string): string {
   const baseUrl = photoUrl.split('?')[0];
-  return `${baseUrl}?w=720&h=720&auto=format&fit=crop&crop=faces,top&fp-z=1.42&sat=10&con=8&q=88`;
+  return `${baseUrl}?w=600&auto=format&fit=crop&q=80`;
 }
 
 function generateStudentsForSet(setId: string, year: number): StudentProfile[] {
@@ -852,6 +852,61 @@ function generateStudentsForSet(setId: string, year: number): StudentProfile[] {
     rawPhotoUrl: seed.photoUrl,
     secondaryPhotoUrl: getSecondPortraitOfSamePerson(seed.photoUrl),
     rawSecondaryPhotoUrl: getSecondPortraitOfSamePerson(seed.photoUrl),
+    studentAwards:
+      idx === 0
+        ? [
+            {
+              id: `aw-${setId}-${idx}-1`,
+              category: 'Outstanding Class Statesman Award',
+              citation: 'For selfless leadership and uniting the entire graduating class.',
+              trophyType: 'crown',
+            },
+            {
+              id: `aw-${setId}-${idx}-2`,
+              category: 'Dean’s Service & Excellence Medal',
+              citation: 'Recognized for five years of unwavering dedication to the Faculty of Law.',
+              trophyType: 'gold',
+            },
+          ]
+        : idx === 1
+        ? [
+            {
+              id: `aw-${setId}-${idx}-1`,
+              category: 'Executive Leadership & Visionary Award',
+              citation: 'For transformative presidency and academic distinction.',
+              trophyType: 'crown',
+            },
+            {
+              id: `aw-${setId}-${idx}-2`,
+              category: 'Constitutional Scholar of the Year',
+              citation: 'Awarded for top honours in Public & Constitutional Law.',
+              trophyType: 'crystal',
+            },
+          ]
+        : idx === 2
+        ? [
+            {
+              id: `aw-${setId}-${idx}-1`,
+              category: 'Best Moot & Appellate Advocate',
+              citation: 'Undefeated lead counsel in national inter-faculty moot competitions.',
+              trophyType: 'gold',
+            },
+            {
+              id: `aw-${setId}-${idx}-2`,
+              category: 'Order of the Silk Advocate Shield',
+              citation: 'Honoring mastery of oral advocacy and courtroom ethics.',
+              trophyType: 'shield',
+            },
+          ]
+        : idx % 4 === 0
+        ? [
+            {
+              id: `aw-${setId}-${idx}-1`,
+              category: 'Faculty Honour Roll & Merit Laureate',
+              citation: 'For consistent academic excellence and collegial spirit.',
+            },
+          ]
+        : undefined,
     originalSizeKb: 3400 + idx * 60,
     compressedSizeKb: 75 + idx * 2,
     quote: seed.quote,

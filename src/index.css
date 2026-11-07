@@ -247,6 +247,62 @@
   animation: glazeSweep 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
+/* AI Image Generation Style Moving Black Wave Loader */
+@keyframes aiBlackWaveFlow {
+  0% {
+    background-position: 200% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
+}
+
+@keyframes aiBlackWaveRibbon {
+  0% {
+    transform: translateX(-130%) skewX(-18deg);
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(230%) skewX(-18deg);
+    opacity: 0.4;
+  }
+}
+
+.kohot-ai-wave-loader {
+  background-color: #07080c;
+  background-image: linear-gradient(
+    112deg,
+    #050608 0%,
+    #0c0e15 20%,
+    #1c202e 36%,
+    #07080c 50%,
+    #202536 64%,
+    #0c0e15 80%,
+    #050608 100%
+  );
+  background-size: 260% 100%;
+  animation: aiBlackWaveFlow 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.kohot-ai-wave-loader::after {
+  content: '';
+  position: absolute;
+  inset: -20%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.82) 30%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(0, 0, 0, 0.85) 70%,
+    transparent 100%
+  );
+  animation: aiBlackWaveRibbon 1.65s ease-in-out infinite;
+  pointer-events: none;
+}
+
 /* Slow-motion text and card reveals */
 @keyframes slowMotionReveal {
   0% {

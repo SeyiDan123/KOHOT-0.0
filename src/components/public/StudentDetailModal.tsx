@@ -19,7 +19,11 @@ import {
   getStoryCardPreview,
   getDisplayRoleLabel,
 } from '../../utils/storyFormatting';
-import { getAwardVisualConfig } from '../../utils/awardVisuals';
+import {
+  getAwardVisualConfig,
+  getDistinctAwardVisualsForList,
+  getStudentCombinedAwards,
+} from '../../utils/awardVisuals';
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 import { getTheme } from '../../utils/theme';
 
@@ -93,6 +97,19 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
   const [showAwardDetails, setShowAwardDetails] = useState(false);
   const [isSecondaryPhotoActive, setIsSecondaryPhotoActive] = useState(false);
 
+  // Eagerly preload both primary and secondary portrait URLs for instant display
+  useEffect(() => {
+    if (!student) return;
+    const urls = [student.photoUrl, student.rawPhotoUrl, student.secondaryPhotoUrl].filter(
+      (u): u is string => Boolean(u && u.trim())
+    );
+    urls.forEach((url) => {
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = url;
+    });
+  }, [student?.id, student?.photoUrl, student?.rawPhotoUrl, student?.secondaryPhotoUrl]);
+
   // Reset zoom, pan & scroll position on student change
   useEffect(() => {
     setZoomScale(1);
@@ -107,20 +124,16 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
     }
   }, [student?.id]);
 
-  // Match awards belonging to this student
-  const studentAwards = useMemo(() => {
-    if (!student || !awards || awards.length === 0) return [];
-    const normName = (student.fullName || '').trim().toLowerCase();
-    const normNick = (student.nickname || '').trim().toLowerCase();
-    return awards.filter((a) => {
-      const wName = (a.winnerName || '').trim().toLowerCase();
-      const wNick = (a.winnerNickname || '').trim().toLowerCase();
-      if (normName && wName === normName) return true;
-      if (normNick && wNick && wNick === normNick) return true;
-      if (student.photoUrl && a.winnerAvatar && a.winnerAvatar === student.photoUrl) return true;
-      return false;
-    });
-  }, [student, awards]);
+  // Combine profile-level awards + matching set awards, with guaranteed distinct icons
+  const studentAwards = useMemo(
+    () => getStudentCombinedAwards(student, awards),
+    [student, awards]
+  );
+
+  const distinctAwardVisuals = useMemo(
+    () => getDistinctAwardVisualsForList(studentAwards, effectiveIsLight),
+    [studentAwards, effectiveIsLight]
+  );
 
   // Keyboard navigation (ArrowLeft, ArrowRight, Escape)
   useEffect(() => {
@@ -407,13 +420,16 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
               className="absolute bottom-4 right-14 sm:bottom-5 sm:right-16 md:bottom-6 md:right-8 z-20 w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 aspect-square rounded-2xl border-2 border-white dark:border-zinc-800 shadow-[0_12px_32px_rgba(0,0,0,0.65)] ring-1 ring-black/20 overflow-hidden bg-zinc-900 cursor-pointer transition-transform hover:scale-105 active:scale-95 group"
               title="Tap to switch between first and second photo"
             >
-              <img
+              <GlazedImage
                 src={
                   isSecondaryPhotoActive
                     ? student.photoUrl || student.rawPhotoUrl || ''
                     : student.secondaryPhotoUrl
                 }
                 alt={`${student.fullName} second portrait`}
+                priority
+                showMonogram={false}
+                containerClassName="w-full h-full"
                 className="w-full h-full object-cover object-center transition-transform duration-300 group-hover:scale-105"
               />
             </button>
@@ -512,7 +528,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
               })()}
             </div>
 
-            {/* 4. Role and Award Badge (with icon badges + tap instruction + one-line card underneath) */}
+            {/* 4. Role and Award Badge (with distinct icon badges + tap instruction + one-line card underneath) */}
             {(displayRole || studentAwards.length > 0) && (
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
@@ -543,8 +559,10 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
                       title="Tap to view class award details"
                     >
                       <div className="flex items-center -space-x-1">
-                        {studentAwards.map((award) => {
-                          const visual = getAwardVisualConfig(award.trophyType, effectiveIsLight);
+                        {studentAwards.map((award, idx) => {
+                          const visual =
+                            distinctAwardVisuals[idx] ||
+                            getAwardVisualConfig(award.trophyType, effectiveIsLight);
                           const AwardIcon = visual.icon;
                           return (
                             <span
@@ -574,8 +592,10 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
                 {/* One-line card(s) under the Role & Award icon row */}
                 {studentAwards.length > 0 && showAwardDetails && (
                   <div className="space-y-1.5 animate-fadeIn">
-                    {studentAwards.map((award) => {
-                      const visual = getAwardVisualConfig(award.trophyType, effectiveIsLight);
+                    {studentAwards.map((award, idx) => {
+                      const visual =
+                        distinctAwardVisuals[idx] ||
+                        getAwardVisualConfig(award.trophyType, effectiveIsLight);
                       const AwardIcon = visual.icon;
                       return (
                         <div

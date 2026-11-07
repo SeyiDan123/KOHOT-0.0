@@ -12,6 +12,7 @@ import { AlbumAdminHelpModal, AlbumDisputeModal } from '../admin/AlbumAdminHelpM
 import { HelpModal } from './HelpModal';
 import { AlbumAdminSwitcher } from '../common/AlbumAdminSwitcher';
 import { DashboardProfileMenu } from '../common/DashboardProfileMenu';
+import { GlazedImage } from '../common/GlazedImage';
 import { 
   Building, 
   GraduationCap, 
@@ -819,16 +820,12 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                           <div className="flex flex-col md:flex-row items-stretch">
                             {/* Thumbnail Banner */}
                             <div className="relative h-44 sm:h-48 md:h-auto md:w-72 lg:w-80 shrink-0 overflow-hidden bg-slate-100">
-                              <img
+                              <GlazedImage
                                 src={set.bannerImageUrl || set.legacyGroupImageUrl}
                                 alt={set.classSetName}
-                                loading="lazy"
-                                referrerPolicy="no-referrer"
+                                showMonogram={false}
+                                containerClassName="w-full h-full"
                                 className="w-full h-full object-cover group-hover/card:scale-105 transition-transform duration-500"
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).src =
-                                    'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1600&auto=format&fit=crop&q=85';
-                                }}
                               />
                               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent md:bg-gradient-to-r md:from-transparent md:to-black/20" />
 

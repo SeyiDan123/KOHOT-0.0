@@ -110,6 +110,12 @@ export interface StudentProfile {
   source?: 'student' | 'admin';
   consentAt?: string;
   isAdminProfile?: boolean;
+  studentAwards?: Array<{
+    id: string;
+    category: string;
+    citation?: string;
+    trophyType?: string;
+  }>;
 }
 
 export interface MemoryEventImage {

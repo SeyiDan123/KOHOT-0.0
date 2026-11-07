@@ -19,6 +19,9 @@ import {
   History,
   ChevronDown,
   ChevronUp,
+  Trophy,
+  Plus,
+  X,
 } from 'lucide-react';
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import {
@@ -27,7 +30,11 @@ import {
   countStoryWords,
   getDisplayRoleLabel,
 } from '../../utils/storyFormatting';
-import { getAwardVisualConfig } from '../../utils/awardVisuals';
+import {
+  getAwardVisualConfig,
+  getDistinctAwardVisualsForList,
+  getStudentCombinedAwards,
+} from '../../utils/awardVisuals';
 import { useFeedback } from '../common/FeedbackSystem';
 import { isValidEmail } from '../../utils/emailValidator';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
@@ -84,6 +91,10 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
   const [rawPhotoToCrop, setRawPhotoToCrop] = useState('');
   const [isCompressing, setIsCompressing] = useState(false);
   const [compressionInfo, setCompressionInfo] = useState<CompressionResult | null>(null);
+  const [editableAwards, setEditableAwards] = useState<
+    Array<{ id: string; category: string; citation?: string; trophyType?: string }>
+  >([]);
+  const [newAwardTitle, setNewAwardTitle] = useState('');
 
   const getInitialInstagramHandle = (s: StudentProfile | null) => {
     if (!s) return '';
@@ -126,6 +137,14 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
       setRawSecondaryPhotoUrl(student.rawSecondaryPhotoUrl || student.secondaryPhotoUrl || '');
       setSecondaryCropSettings(student.secondaryCropSettings);
       setCompressionInfo(null);
+      const combined = getStudentCombinedAwards(student, currentSet?.awards).map((a) => ({
+        id: a.id,
+        category: a.category,
+        citation: a.citation,
+        trophyType: a.trophyType,
+      }));
+      setEditableAwards(combined);
+      setNewAwardTitle('');
     }
   }, [student]);
 
@@ -243,6 +262,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
         whatsNext: whatsNext.trim().slice(0, 140) || undefined,
         messageToClassmates: messageToClassmates.trim() || undefined,
         messageToFutureSet: messageToFutureSet.trim() || undefined,
+        studentAwards: editableAwards,
         email: email.trim() || undefined,
         instagramOrTwitter: (instagramHandle.trim() || twitterHandle.trim()) || undefined,
         isClassRep:
@@ -584,6 +604,127 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
               placeholder="e.g. Social Director or Class Rep"
               className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none text-xs"
             />
+          </div>
+
+          {/* 4b. Class Awards & Honours (each award gets a unique badge icon — never repeats) */}
+          <div className="space-y-2.5 p-3.5 rounded-2xl bg-slate-50/80 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-800 dark:text-zinc-200 font-bold flex items-center gap-1.5">
+                  <Trophy className="w-3.5 h-3.5 text-amber-500" />
+                  <span>
+                    Class Awards &amp; Honours{' '}
+                    <span className="text-slate-500 dark:text-zinc-500 lowercase font-normal">
+                      (optional)
+                    </span>
+                  </span>
+                </label>
+                <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                  Add or update class awards for this profile. Each award displays a distinct icon badge.
+                </p>
+              </div>
+              {editableAwards.length > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-mono-tech text-[10px] font-bold shrink-0">
+                  {editableAwards.length} {editableAwards.length === 1 ? 'award' : 'awards'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newAwardTitle}
+                onChange={(e) => setNewAwardTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const trimmed = newAwardTitle.trim();
+                    if (!trimmed) return;
+                    if (
+                      !editableAwards.some(
+                        (a) => a.category.trim().toLowerCase() === trimmed.toLowerCase()
+                      )
+                    ) {
+                      setEditableAwards((prev) => [
+                        ...prev,
+                        { id: `st-awd-${Date.now()}-${prev.length}`, category: trimmed },
+                      ]);
+                    }
+                    setNewAwardTitle('');
+                  }
+                }}
+                placeholder="e.g. Best Dressed, Most Influential..."
+                className="flex-1 px-3.5 py-2 rounded-xl bg-white dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const trimmed = newAwardTitle.trim();
+                  if (!trimmed) return;
+                  if (
+                    !editableAwards.some(
+                      (a) => a.category.trim().toLowerCase() === trimmed.toLowerCase()
+                    )
+                  ) {
+                    setEditableAwards((prev) => [
+                      ...prev,
+                      { id: `st-awd-${Date.now()}-${prev.length}`, category: trimmed },
+                    ]);
+                  }
+                  setNewAwardTitle('');
+                }}
+                className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono-tech text-[11px] uppercase tracking-wider font-bold flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add</span>
+              </button>
+            </div>
+
+            {editableAwards.length > 0 && (() => {
+              const distinctModalVisuals = getDistinctAwardVisualsForList(editableAwards, false);
+              return (
+                <div className="space-y-1.5 pt-1">
+                  {editableAwards.map((award, idx) => {
+                    const visual =
+                      distinctModalVisuals[idx] ||
+                      getAwardVisualConfig(award.trophyType, false);
+                    const AwardIcon = visual.icon;
+                    return (
+                      <div
+                        key={award.id}
+                        className="px-3 py-2 rounded-xl bg-white dark:bg-[#08090e] border border-amber-300/60 dark:border-amber-500/30 flex items-center justify-between gap-2"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            className={`w-6 h-6 flex items-center justify-center shrink-0 ${visual.shapeClass}`}
+                            title={visual.label}
+                          >
+                            <AwardIcon
+                              className={`w-3.5 h-3.5 ${visual.iconColor} ${
+                                visual.type === 'crystal' ? '-rotate-45' : ''
+                              }`}
+                            />
+                          </span>
+                          <span className="font-syne font-bold text-xs text-slate-900 dark:text-white truncate">
+                            {award.category}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditableAwards((prev) => prev.filter((a) => a.id !== award.id))
+                          }
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer shrink-0"
+                          title="Remove award"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           {/* 5. Parting Quote (140 characters) */}

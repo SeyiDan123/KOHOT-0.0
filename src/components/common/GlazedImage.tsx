@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 
 interface GlazedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   src: string;
@@ -17,48 +17,54 @@ export const GlazedImage: React.FC<GlazedImageProps> = ({
   containerClassName = '',
   aspectRatio,
   priority = false,
-  showMonogram = true,
   ...props
 }) => {
   const [hasError, setHasError] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
-  // Reset error state when src changes
-  useEffect(() => {
+  // Synchronously check if already cached in browser so cached images appear in 0ms
+  useLayoutEffect(() => {
     setHasError(false);
+    const el = imgRef.current;
+    if (el && el.complete && el.naturalWidth > 0) {
+      setIsLoaded(true);
+    } else {
+      setIsLoaded(false);
+    }
   }, [src]);
 
-  const initials = alt
-    ? alt
-        .split(' ')
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((p) => p[0]?.toUpperCase())
-        .join('')
-    : '';
+  useEffect(() => {
+    const el = imgRef.current;
+    if (el && el.complete && el.naturalWidth > 0) {
+      setIsLoaded(true);
+    }
+  }, [src]);
 
   return (
     <div
-      className={`relative overflow-hidden bg-[#0c0d13] select-none ${
+      className={`relative overflow-hidden bg-[#08090d] select-none ${
         aspectRatio ? aspectRatio : ''
       } ${containerClassName}`}
     >
-      {/* Fallback Display if image missing or fails */}
+      {/* AI-Style Moving Black Wave Loader while image is loading */}
+      {!hasError && Boolean(src) && !isLoaded && (
+        <div
+          aria-hidden="true"
+          className="kohot-ai-wave-loader absolute inset-0 z-10 pointer-events-none"
+        />
+      )}
+
+      {/* Default Error / Missing Image Fallback: Official KoHot Logo */}
       {hasError || !src ? (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-3 bg-gradient-to-br from-[#12141f] via-[#0c0d14] to-[#181a26] text-zinc-400 border border-white/5">
-          {showMonogram && initials ? (
-            <div className="w-12 h-12 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center mb-1 shadow-inner">
-              <span className="font-syne font-bold text-base text-white tracking-wider">
-                {initials}
-              </span>
-            </div>
-          ) : (
-            <div className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center mb-1">
-              <div className="w-2.5 h-2.5 bg-white/40 rotate-45 transform" />
-            </div>
-          )}
-          <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 text-center line-clamp-1 max-w-[90%]">
-            {alt || 'Photo'}
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-3 bg-gradient-to-br from-[#0e1017] via-[#090a0f] to-[#141722] text-zinc-300 border border-white/5">
+          <div className="w-11 h-11 rounded-2xl bg-[#141620] border border-[#d4af37]/45 shadow-[0_0_20px_rgba(212,175,55,0.15)] flex items-center justify-center mb-1.5">
+            <span className="font-syne font-extrabold text-base text-[#d4af37] tracking-tight">
+              K
+            </span>
+          </div>
+          <span className="font-syne font-extrabold text-[11px] tracking-wider text-white/90">
+            KoHot
           </span>
         </div>
       ) : (
@@ -66,15 +72,24 @@ export const GlazedImage: React.FC<GlazedImageProps> = ({
           ref={imgRef}
           src={src}
           alt={alt}
-          loading="eager"
-          decoding="sync"
+          loading={priority ? 'eager' : props.loading || 'eager'}
+          decoding={priority ? 'sync' : 'async'}
+          fetchPriority={priority ? 'high' : undefined}
           referrerPolicy="no-referrer"
-          onError={() => setHasError(true)}
-          className={`w-full h-full object-cover ${className}`}
+          onLoad={(e) => {
+            setIsLoaded(true);
+            props.onLoad?.(e);
+          }}
+          onError={(e) => {
+            setHasError(true);
+            props.onError?.(e);
+          }}
+          className={`w-full h-full object-cover transition-opacity duration-200 ${
+            isLoaded ? 'opacity-100' : 'opacity-0'
+          } ${className}`}
           {...props}
         />
       )}
     </div>
   );
 };
-

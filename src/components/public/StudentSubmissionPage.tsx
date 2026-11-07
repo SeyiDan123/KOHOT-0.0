@@ -27,7 +27,9 @@ import {
   Trophy,
   Mail,
   Search,
-  Edit3
+  Edit3,
+  Plus,
+  X
 } from 'lucide-react';
 import { isLeaderProfile, calculateIntuitiveHierarchyRank } from '../../utils/leadershipHierarchy';
 import {
@@ -36,9 +38,14 @@ import {
   countStoryWords,
   getStoryCardPreview
 } from '../../utils/storyFormatting';
-import { getAwardVisualConfig } from '../../utils/awardVisuals';
+import {
+  getAwardVisualConfig,
+  getDistinctAwardVisualsForList,
+  getStudentCombinedAwards,
+} from '../../utils/awardVisuals';
 import { updateSocialMetaTags } from '../../utils/metaTags';
 import { SocialIconsRow } from '../common/SocialIconsRow';
+import { GlazedImage } from '../common/GlazedImage';
 import { ImageCropModal } from '../common/ImageCropModal';
 import { isValidEmail, checkEmailTypoSuggestion } from '../../utils/emailValidator';
 import { SocialUrlInputField } from '../common/SocialUrlInputField';
@@ -83,6 +90,10 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   const [isMoreAboutMeExpanded, setIsMoreAboutMeExpanded] = useState(false);
   const [isFinalWordsExpanded, setIsFinalWordsExpanded] = useState(false);
   const [isAwardsRevealed, setIsAwardsRevealed] = useState(false);
+  const [studentAwards, setStudentAwards] = useState<
+    Array<{ id: string; category: string; citation?: string; trophyType?: string }>
+  >([]);
+  const [newAwardTitle, setNewAwardTitle] = useState('');
   const [favouriteCampusMemory, setFavouriteCampusMemory] = useState('');
   const [funFact, setFunFact] = useState('');
   const [whatsNext, setWhatsNext] = useState('');
@@ -202,6 +213,14 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
     setSecondaryPhotoDataUrl(student.secondaryPhotoUrl || '');
     setRawSecondaryPhotoUrl(student.rawSecondaryPhotoUrl || student.secondaryPhotoUrl || '');
     setSecondaryCropSettings(student.secondaryCropSettings);
+    const combinedAwards = getStudentCombinedAwards(student, currentSet.awards).map((a) => ({
+      id: a.id,
+      category: a.category,
+      citation: a.citation,
+      trophyType: a.trophyType,
+    }));
+    setStudentAwards(combinedAwards);
+    setNewAwardTitle('');
     setUploadError(null);
     setEmailError('');
   };
@@ -222,6 +241,8 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
     setMessageToClassmates('');
     setMessageToFutureSet('');
     setIsFinalWordsExpanded(false);
+    setStudentAwards([]);
+    setNewAwardTitle('');
     setEmail('');
     setConfirmEmail('');
     setInstagramHandle('');
@@ -505,6 +526,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       whatsNext: whatsNext.trim() ? whatsNext.trim().slice(0, 140) : undefined,
       messageToClassmates: messageToClassmates.trim() || undefined,
       messageToFutureSet: messageToFutureSet.trim() || undefined,
+      studentAwards: studentAwards.length > 0 ? studentAwards : undefined,
       email: trimmedEmail,
       instagramOrTwitter: (instagramHandle.trim() || twitterHandle.trim()) || undefined,
       socials: {
@@ -1267,6 +1289,125 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                     </div>
                   </div>
 
+                  {/* Class Awards & Honours Input (with distinct award icons — never uses the same icon twice) */}
+                  <div className="space-y-2.5 p-3.5 rounded-2xl border border-slate-200 dark:border-neutral-800 bg-slate-50/70 dark:bg-neutral-950/60">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-800 dark:text-slate-200 font-bold flex items-center gap-1.5">
+                          <Trophy className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Class Awards &amp; Honours <span className="text-slate-500 lowercase font-normal">(optional)</span></span>
+                        </label>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          Add any class awards, superlatives, or honours you received. Each award gets a unique badge icon on your profile.
+                        </p>
+                      </div>
+                      {studentAwards.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-300 font-mono-tech text-[10px] font-bold shrink-0">
+                          {studentAwards.length} {studentAwards.length === 1 ? 'award' : 'awards'}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="invite-award-input"
+                        type="text"
+                        value={newAwardTitle}
+                        onChange={(e) => setNewAwardTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const trimmed = newAwardTitle.trim();
+                            if (!trimmed) return;
+                            if (
+                              !studentAwards.some(
+                                (a) => a.category.trim().toLowerCase() === trimmed.toLowerCase()
+                              )
+                            ) {
+                              setStudentAwards((prev) => [
+                                ...prev,
+                                { id: `st-awd-${Date.now()}-${prev.length}`, category: trimmed },
+                              ]);
+                            }
+                            setNewAwardTitle('');
+                          }
+                        }}
+                        placeholder="e.g. Best Dressed, Most Influential, Academic Excellence..."
+                        className="flex-1 px-3.5 py-2.5 rounded-xl bg-white dark:bg-neutral-900 border border-slate-300 dark:border-neutral-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-amber-500 focus:outline-none text-xs"
+                      />
+                      <button
+                        id="invite-add-award-btn"
+                        type="button"
+                        onClick={() => {
+                          const trimmed = newAwardTitle.trim();
+                          if (!trimmed) return;
+                          if (
+                            !studentAwards.some(
+                              (a) => a.category.trim().toLowerCase() === trimmed.toLowerCase()
+                            )
+                          ) {
+                            setStudentAwards((prev) => [
+                              ...prev,
+                              { id: `st-awd-${Date.now()}-${prev.length}`, category: trimmed },
+                            ]);
+                          }
+                          setNewAwardTitle('');
+                        }}
+                        className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono-tech text-[11px] uppercase tracking-wider font-bold flex items-center gap-1 transition-colors cursor-pointer shrink-0 shadow-xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add Award</span>
+                      </button>
+                    </div>
+
+                    {/* Displayed Added Awards with Distinct Non-Repeating Icons */}
+                    {studentAwards.length > 0 && (() => {
+                      const distinctVisuals = getDistinctAwardVisualsForList(studentAwards, isLightMode);
+                      return (
+                        <div className="space-y-1.5 pt-1">
+                          {studentAwards.map((award, idx) => {
+                            const visual =
+                              distinctVisuals[idx] ||
+                              getAwardVisualConfig(award.trophyType, isLightMode);
+                            const AwardIcon = visual.icon;
+                            return (
+                              <div
+                                key={award.id}
+                                className="px-3 py-2 rounded-xl bg-white dark:bg-neutral-900 border border-amber-300/70 dark:border-amber-500/30 flex items-center justify-between gap-2"
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <span
+                                    className={`w-6 h-6 flex items-center justify-center shrink-0 ${visual.shapeClass}`}
+                                    title={visual.label}
+                                  >
+                                    <AwardIcon
+                                      className={`w-3.5 h-3.5 ${visual.iconColor} ${
+                                        visual.type === 'crystal' ? '-rotate-45' : ''
+                                      }`}
+                                    />
+                                  </span>
+                                  <span className="font-syne font-bold text-xs text-slate-900 dark:text-white truncate">
+                                    {award.category}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setStudentAwards((prev) => prev.filter((a) => a.id !== award.id))
+                                  }
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer shrink-0"
+                                  title="Remove award"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
                   {/* Parting Quote (max 140 characters) */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
@@ -1765,9 +1906,12 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                   {/* Photo with exact 1:1 aspect ratio */}
                   <div className="relative w-full aspect-square bg-slate-100 dark:bg-neutral-950 overflow-hidden">
                     {photoDataUrl ? (
-                      <img
+                      <GlazedImage
                         src={photoDataUrl}
                         alt={fullName}
+                        priority
+                        showMonogram={false}
+                        containerClassName="w-full h-full"
                         className="w-full h-full object-cover filter contrast-[1.04]"
                       />
                     ) : (
@@ -1787,9 +1931,12 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                     {/* Smaller Square Second Image at Lower Right of First Image (Full View Preview) */}
                     {secondaryPhotoDataUrl && (
                       <div className="absolute bottom-3 right-3 z-20 w-20 h-20 rounded-xl overflow-hidden border-2 border-white/90 shadow-2xl bg-zinc-900">
-                        <img
+                        <GlazedImage
                           src={secondaryPhotoDataUrl}
                           alt={`${fullName} second portrait`}
+                          priority
+                          showMonogram={false}
+                          containerClassName="w-full h-full"
                           className="w-full h-full object-cover"
                         />
                       </div>
@@ -1831,13 +1978,94 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                           )}
                         </div>
                       )}
-                      {position && (
-                        <div className="mt-2">
-                          <span className="inline-block px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 font-mono-tech text-[10px] uppercase tracking-wider text-slate-700 dark:text-slate-300 font-bold">
-                            {position}
-                          </span>
-                        </div>
-                      )}
+                      {(position || studentAwards.length > 0) && (() => {
+                        const distinctPreviewVisuals = getDistinctAwardVisualsForList(
+                          studentAwards,
+                          isLightMode
+                        );
+                        return (
+                          <div className="mt-2.5 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {position && (
+                                <span className="inline-block px-2.5 py-1 rounded-full bg-slate-100 dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 font-mono-tech text-[10px] uppercase tracking-wider text-slate-700 dark:text-slate-300 font-bold">
+                                  {position}
+                                </span>
+                              )}
+
+                              {studentAwards.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setIsAwardsRevealed((prev) => !prev)}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border bg-amber-50 dark:bg-amber-500/15 border-amber-300 dark:border-amber-500/40 text-amber-900 dark:text-amber-300 transition-all cursor-pointer"
+                                >
+                                  <div className="flex items-center -space-x-1">
+                                    {studentAwards.map((award, idx) => {
+                                      const visual =
+                                        distinctPreviewVisuals[idx] ||
+                                        getAwardVisualConfig(award.trophyType, isLightMode);
+                                      const AwardIcon = visual.icon;
+                                      return (
+                                        <span
+                                          key={award.id}
+                                          className={`w-4 h-4 flex items-center justify-center ${visual.shapeClass}`}
+                                        >
+                                          <AwardIcon
+                                            className={`w-2.5 h-2.5 ${visual.iconColor} ${
+                                              visual.type === 'crystal' ? '-rotate-45' : ''
+                                            }`}
+                                          />
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                  <span className="font-mono-tech text-[10px] uppercase tracking-wider font-bold">
+                                    {isAwardsRevealed
+                                      ? 'Hide award'
+                                      : studentAwards.length === 1
+                                      ? 'Tap to view award won'
+                                      : `Tap to view ${studentAwards.length} awards won`}
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+
+                            {studentAwards.length > 0 && isAwardsRevealed && (
+                              <div className="space-y-1.5 animate-fadeIn">
+                                {studentAwards.map((award, idx) => {
+                                  const visual =
+                                    distinctPreviewVisuals[idx] ||
+                                    getAwardVisualConfig(award.trophyType, isLightMode);
+                                  const AwardIcon = visual.icon;
+                                  return (
+                                    <div
+                                      key={award.id}
+                                      className="px-3 py-2 rounded-xl border bg-amber-50/70 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 flex items-center justify-between gap-2 text-xs"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span
+                                          className={`w-5 h-5 flex items-center justify-center shrink-0 ${visual.shapeClass}`}
+                                        >
+                                          <AwardIcon
+                                            className={`w-3 h-3 ${visual.iconColor} ${
+                                              visual.type === 'crystal' ? '-rotate-45' : ''
+                                            }`}
+                                          />
+                                        </span>
+                                        <span className="font-syne font-bold truncate text-slate-900 dark:text-white">
+                                          {award.category}
+                                        </span>
+                                      </div>
+                                      <span className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-400 shrink-0">
+                                        Class Award
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {quote.trim() && (

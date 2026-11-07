@@ -231,12 +231,12 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   const [activeTab, setActiveTab] = useState<'graduates' | 'memories' | 'awards'>(() => {
     try {
       const previewTab = sessionStorage.getItem('kohot_album_preview_tab');
-      if (previewTab && ['graduates', 'memories', 'awards'].includes(previewTab)) {
-        return previewTab as 'graduates' | 'memories' | 'awards';
+      if (previewTab && ['graduates', 'memories'].includes(previewTab)) {
+        return previewTab as 'graduates' | 'memories';
       }
       const savedAlbumTab = sessionStorage.getItem('kohot_album_active_tab');
-      if (savedAlbumTab && ['graduates', 'memories', 'awards'].includes(savedAlbumTab)) {
-        return savedAlbumTab as 'graduates' | 'memories' | 'awards';
+      if (savedAlbumTab && ['graduates', 'memories'].includes(savedAlbumTab)) {
+        return savedAlbumTab as 'graduates' | 'memories';
       }
     } catch (e) {}
     return 'graduates';
@@ -250,7 +250,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     const reverseMap: Record<string, string> = {
       graduates: 'students',
       memories: 'memories',
-      awards: 'awards',
     };
     return reverseMap[tab] || 'students';
   };
@@ -260,10 +259,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     if (isPlaqueMode) {
       if (activeTab === 'graduates' && !showGraduates) {
         if (showMemories) setActiveTab('memories');
-        else if (showAwards) setActiveTab('awards');
       }
     }
-  }, [isPlaqueMode, showGraduates, showMemories, showAwards, activeTab]);
+  }, [isPlaqueMode, showGraduates, showMemories, activeTab]);
 
   const [cohortFilter, setCohortFilter] = useState<'all' | 'leaders' | 'members'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -598,6 +596,18 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
     return list;
   }, [approvedStudents, cohortFilter, searchQuery]);
+
+  // Preload secondaryPhotoUrl for students in the background so full profile view displays the mini second image immediately
+  useEffect(() => {
+    if (!filteredStudents || filteredStudents.length === 0) return;
+    filteredStudents.forEach((s) => {
+      if (s.secondaryPhotoUrl?.trim()) {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = s.secondaryPhotoUrl.trim();
+      }
+    });
+  }, [filteredStudents]);
 
   // Current student index in the filtered list (for lightbox Next/Prev)
   const currentStudentIndex = useMemo(() => {
@@ -1080,28 +1090,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               >
                 <Camera className="w-3.5 h-3.5" />
                 <span>Memories</span>
-              </button>
-            )}
-
-            {showAwards && (
-              <button
-                id="tab-btn-awards"
-                onClick={(e) => {
-                  handleTabChange('awards');
-                  e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                }}
-                className={`px-4 py-2 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'awards'
-                    ? isLightMode
-                      ? 'bg-zinc-950 text-white font-bold shadow-md active-clip ring-1 ring-black'
-                      : 'bg-white text-black font-bold shadow-md active-clip'
-                    : isLightMode
-                      ? 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
-                      : 'text-zinc-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Trophy className="w-3.5 h-3.5" />
-                <span>Awards</span>
               </button>
             )}
           </div>
@@ -1680,119 +1668,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           </section>
         );
       })()}
-
-      {/* =========================================================================
-          TAB 3: AWARDS & RECOGNITION (DYNAMIC SHAPES & COLORS ACCORDING TO TROPHY TYPE)
-          ========================================================================= */}
-      {activeTab === 'awards' && (
-        <section 
-          id="awards-recognition-section"
-          className="w-full max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14 animate-slide-up-fade"
-        >
-          <div className="mb-8 text-center max-w-xl mx-auto flex flex-col items-center">
-            <h2 className={`font-syne font-bold text-2xl sm:text-3xl tracking-tight ${
-              isLightMode ? 'text-zinc-900' : 'text-white'
-            }`}>
-              AWARDS &amp; DISTINCTIONS
-            </h2>
-            <p className={`font-body text-xs sm:text-sm mt-1 ${
-              isLightMode ? 'text-zinc-600' : 'text-zinc-400'
-            }`}>
-              Celebrating the people who made this class unforgettable.
-            </p>
-          </div>
-
-          {(!currentSet.awards || currentSet.awards.length === 0) ? (
-            <div className={`text-center py-16 px-6 border border-dashed rounded-3xl space-y-3 ${
-              isLightMode ? 'bg-white border-zinc-200 text-zinc-900 shadow-sm' : 'border-white/10 bg-[#18181b] text-white'
-            }`}>
-              <Trophy className="w-8 h-8 text-amber-400/50 mx-auto" />
-              <p className={`font-syne text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Awards or Distinctions Published Yet</p>
-              <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                Senior superlatives, academic recognitions, and cohort accolades will appear here once finalized by the class committee.
-              </p>
-            </div>
-          ) : (
-            <div 
-              id="awards-swiper"
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6"
-            >
-              {currentSet.awards.map((award) => {
-                const visual = getAwardVisualConfig(award.trophyType, isLightMode);
-                const AwardIcon = visual.icon;
-                return (
-                  <div
-                    key={award.id}
-                    id={`award-card-${award.id}`}
-                    className={`rounded-2xl p-5 flex flex-col justify-between shadow-lg transition-all border ${
-                      isLightMode 
-                        ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400 shadow-md' 
-                        : 'bg-[#18181b] border-white/[0.08] hover:border-white/30 text-white'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center gap-3.5">
-                        {/* Dynamic Shape & Color Based on Type — Horizontally aligned with Category Name */}
-                        <div className={`w-11 h-11 ${visual.shapeClass} flex items-center justify-center shrink-0 ${visual.glowClass}`}>
-                          <AwardIcon className={`w-5 h-5 ${visual.iconColor} ${visual.type === 'crystal' ? '-rotate-45' : ''}`} />
-                        </div>
-
-                        <h3 className={`font-syne font-bold text-lg leading-snug min-w-0 flex-1 ${
-                          isLightMode ? 'text-zinc-900' : 'text-white'
-                        }`}>
-                          {award.category}
-                        </h3>
-                      </div>
-
-                      {/* Winner Profile Snippet - Bold Image Preview styled to award type */}
-                      <div className={`flex items-center gap-3.5 mt-4 pt-3.5 border-t ${
-                        isLightMode ? 'border-zinc-200' : 'border-white/[0.08]'
-                      }`}>
-                        <div className={`w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden shrink-0 ${visual.borderClass} ${visual.glowClass} bg-zinc-900`}>
-                          <GlazedImage
-                            src={award.winnerAvatar}
-                            alt={award.winnerName}
-                            showMonogram={false}
-                            className="w-full h-full object-cover"
-                            containerClassName="w-full h-full"
-                          />
-                        </div>
-                        <div className="min-w-0">
-                          <h4 className={`font-syne font-bold text-base sm:text-lg truncate ${
-                            isLightMode ? 'text-zinc-900' : 'text-white'
-                          }`}>
-                            {award.winnerName}
-                          </h4>
-                          {award.winnerNickname && (
-                            <p className={`font-mono-tech text-xs font-semibold truncate mt-0.5 ${
-                              isLightMode ? 'text-[#b89728]' : 'text-[#d4af37]'
-                            }`}>
-                              “{award.winnerNickname}”
-                            </p>
-                          )}
-                          <span className={`inline-block mt-1 font-mono-tech text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                            isLightMode 
-                              ? 'text-zinc-700 bg-zinc-100 border-zinc-300 font-semibold' 
-                              : 'text-zinc-400 bg-white/5 border-white/10'
-                          }`}>
-                            Award Laureate
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <p className={`font-body text-xs italic mt-4 pt-3 border-t leading-relaxed ${
-                      isLightMode ? 'text-zinc-700 border-zinc-200' : 'text-zinc-300 border-white/5'
-                    }`}>
-                      “{award.citation}”
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      )}
 
 
       {/* =========================================================================

@@ -1,11 +1,13 @@
 import React from 'react';
-import { 
-  Trophy, 
-  Medal, 
-  Award, 
-  Gem, 
+import {
+  Trophy,
+  Medal,
+  Award,
+  Gem,
   Star,
-  Crown
+  Crown,
+  Sparkles,
+  Shield,
 } from 'lucide-react';
 
 export interface AwardVisualConfig {
@@ -20,6 +22,17 @@ export interface AwardVisualConfig {
   description: string;
 }
 
+export const DISTINCT_AWARD_TYPES = [
+  'gold',
+  'crown',
+  'crystal',
+  'star',
+  'silver',
+  'bronze',
+  'sparkles',
+  'shield',
+] as const;
+
 export function getAwardVisualConfig(trophyType?: string, isLightMode = false): AwardVisualConfig {
   const norm = (trophyType || 'gold').toLowerCase().trim();
 
@@ -30,11 +43,11 @@ export function getAwardVisualConfig(trophyType?: string, isLightMode = false): 
         label: 'Crystal Plaque',
         icon: Gem,
         iconColor: isLightMode ? 'text-cyan-700' : 'text-cyan-300',
-        shapeClass: isLightMode 
-          ? 'rounded-2xl rotate-45 scale-90 border-2 border-cyan-500/60 bg-cyan-100/70' 
+        shapeClass: isLightMode
+          ? 'rounded-2xl rotate-45 scale-90 border-2 border-cyan-500/60 bg-cyan-100/70'
           : 'rounded-2xl rotate-45 scale-90 border-2 border-cyan-400/60 bg-gradient-to-br from-cyan-500/25 to-blue-600/15',
-        badgeClass: isLightMode 
-          ? 'text-cyan-800 border-cyan-400 bg-cyan-50 font-bold' 
+        badgeClass: isLightMode
+          ? 'text-cyan-800 border-cyan-400 bg-cyan-50 font-bold'
           : 'text-cyan-300 border-cyan-400/35 bg-cyan-400/15',
         borderClass: 'border-cyan-400 ring-4 ring-cyan-400/20',
         glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(34,211,238,0.3)]',
@@ -46,13 +59,15 @@ export function getAwardVisualConfig(trophyType?: string, isLightMode = false): 
         label: 'Silver Distinction',
         icon: Medal,
         iconColor: isLightMode ? 'text-slate-800' : 'text-slate-100',
-        shapeClass: isLightMode 
-          ? 'rounded-xl border-2 border-slate-500/70 bg-slate-200/90' 
+        shapeClass: isLightMode
+          ? 'rounded-xl border-2 border-slate-500/70 bg-slate-200/90'
           : 'rounded-xl border-2 border-slate-300/70 bg-gradient-to-br from-slate-200/25 to-zinc-400/15',
-        badgeClass: isLightMode 
-          ? 'text-slate-900 border-slate-400 bg-slate-100 font-bold' 
+        badgeClass: isLightMode
+          ? 'text-slate-900 border-slate-400 bg-slate-100 font-bold'
           : 'text-slate-200 border-slate-300/35 bg-slate-200/15',
-        borderClass: isLightMode ? 'border-slate-500 ring-4 ring-slate-400/30' : 'border-slate-300 ring-4 ring-slate-300/20',
+        borderClass: isLightMode
+          ? 'border-slate-500 ring-4 ring-slate-400/30'
+          : 'border-slate-300 ring-4 ring-slate-300/20',
         glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(226,232,240,0.25)]',
         description: 'Sleek platinum shield for outstanding academic achievement',
       };
@@ -62,11 +77,11 @@ export function getAwardVisualConfig(trophyType?: string, isLightMode = false): 
         label: 'Bronze Laureate',
         icon: Award,
         iconColor: isLightMode ? 'text-amber-800' : 'text-amber-500',
-        shapeClass: isLightMode 
-          ? 'rounded-full border-2 border-amber-600/70 bg-amber-100/80' 
+        shapeClass: isLightMode
+          ? 'rounded-full border-2 border-amber-600/70 bg-amber-100/80'
           : 'rounded-full border-2 border-amber-600/70 bg-gradient-to-br from-amber-700/30 to-amber-950/20',
-        badgeClass: isLightMode 
-          ? 'text-amber-900 border-amber-500 bg-amber-50 font-bold' 
+        badgeClass: isLightMode
+          ? 'text-amber-900 border-amber-500 bg-amber-50 font-bold'
           : 'text-amber-400 border-amber-600/35 bg-amber-600/15',
         borderClass: 'border-amber-600 ring-4 ring-amber-600/20',
         glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(217,119,6,0.25)]',
@@ -78,11 +93,11 @@ export function getAwardVisualConfig(trophyType?: string, isLightMode = false): 
         label: 'Starlight Superlative',
         icon: Star,
         iconColor: isLightMode ? 'text-amber-700' : 'text-yellow-300',
-        shapeClass: isLightMode 
-          ? 'rounded-lg border-2 border-amber-500/70 bg-amber-100/80' 
+        shapeClass: isLightMode
+          ? 'rounded-lg border-2 border-amber-500/70 bg-amber-100/80'
           : 'rounded-lg border-2 border-yellow-400/70 bg-gradient-to-br from-yellow-500/25 to-amber-500/15',
-        badgeClass: isLightMode 
-          ? 'text-amber-900 border-amber-400 bg-amber-50 font-bold' 
+        badgeClass: isLightMode
+          ? 'text-amber-900 border-amber-400 bg-amber-50 font-bold'
           : 'text-yellow-300 border-yellow-400/35 bg-yellow-400/15',
         borderClass: 'border-yellow-400 ring-4 ring-yellow-400/20',
         glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(250,204,21,0.3)]',
@@ -94,15 +109,47 @@ export function getAwardVisualConfig(trophyType?: string, isLightMode = false): 
         label: 'Imperial Crown',
         icon: Crown,
         iconColor: isLightMode ? 'text-emerald-800' : 'text-emerald-300',
-        shapeClass: isLightMode 
-          ? 'rounded-2xl border-2 border-emerald-600/70 bg-emerald-100/80' 
+        shapeClass: isLightMode
+          ? 'rounded-2xl border-2 border-emerald-600/70 bg-emerald-100/80'
           : 'rounded-2xl border-2 border-emerald-400/70 bg-gradient-to-br from-emerald-500/25 to-teal-600/15',
-        badgeClass: isLightMode 
-          ? 'text-emerald-900 border-emerald-500 bg-emerald-50 font-bold' 
+        badgeClass: isLightMode
+          ? 'text-emerald-900 border-emerald-500 bg-emerald-50 font-bold'
           : 'text-emerald-300 border-emerald-400/35 bg-emerald-400/15',
         borderClass: 'border-emerald-400 ring-4 ring-emerald-400/20',
         glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(52,211,153,0.3)]',
         description: 'Regal crown for executive department leadership & influence',
+      };
+    case 'sparkles':
+      return {
+        type: 'sparkles',
+        label: 'Radiant Honour',
+        icon: Sparkles,
+        iconColor: isLightMode ? 'text-purple-700' : 'text-purple-300',
+        shapeClass: isLightMode
+          ? 'rounded-xl border-2 border-purple-500/70 bg-purple-100/80'
+          : 'rounded-xl border-2 border-purple-400/70 bg-gradient-to-br from-purple-500/25 to-fuchsia-600/15',
+        badgeClass: isLightMode
+          ? 'text-purple-900 border-purple-400 bg-purple-50 font-bold'
+          : 'text-purple-300 border-purple-400/35 bg-purple-400/15',
+        borderClass: 'border-purple-400 ring-4 ring-purple-400/20',
+        glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(192,132,252,0.3)]',
+        description: 'Distinguished creative & cultural excellence',
+      };
+    case 'shield':
+      return {
+        type: 'shield',
+        label: 'Crest of Honour',
+        icon: Shield,
+        iconColor: isLightMode ? 'text-rose-700' : 'text-rose-300',
+        shapeClass: isLightMode
+          ? 'rounded-xl border-2 border-rose-500/70 bg-rose-100/80'
+          : 'rounded-xl border-2 border-rose-400/70 bg-gradient-to-br from-rose-500/25 to-orange-600/15',
+        badgeClass: isLightMode
+          ? 'text-rose-900 border-rose-400 bg-rose-50 font-bold'
+          : 'text-rose-300 border-rose-400/35 bg-rose-400/15',
+        borderClass: 'border-rose-400 ring-4 ring-rose-400/20',
+        glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(251,113,133,0.3)]',
+        description: 'Guardian of departmental tradition & service',
       };
     case 'gold':
     default:
@@ -111,15 +158,156 @@ export function getAwardVisualConfig(trophyType?: string, isLightMode = false): 
         label: 'Gold Trophy',
         icon: Trophy,
         iconColor: isLightMode ? 'text-amber-700' : 'text-[#d4af37]',
-        shapeClass: isLightMode 
-          ? 'rounded-2xl border-2 border-amber-600/80 bg-amber-100/80' 
+        shapeClass: isLightMode
+          ? 'rounded-2xl border-2 border-amber-600/80 bg-amber-100/80'
           : 'rounded-2xl border-2 border-[#d4af37]/80 bg-gradient-to-br from-[#d4af37]/30 to-amber-700/15',
-        badgeClass: isLightMode 
-          ? 'text-amber-900 border-amber-500 bg-amber-50 font-bold' 
+        badgeClass: isLightMode
+          ? 'text-amber-900 border-amber-500 bg-amber-50 font-bold'
           : 'text-[#d4af37] border-[#d4af37]/40 bg-[#d4af37]/15',
         borderClass: 'border-[#d4af37] ring-4 ring-[#d4af37]/25',
         glowClass: isLightMode ? 'shadow-md' : 'shadow-[0_0_20px_rgba(212,175,55,0.35)]',
         description: 'Classic gold cup for premier superlative winners',
       };
   }
+}
+
+/**
+ * Infers a preferred award visual type from the award's title/category,
+ * and guarantees that within a list of awards, NO two awards ever use the same icon twice.
+ */
+export function inferAwardTypeFromTitle(title: string, explicitType?: string): string {
+  if (explicitType && DISTINCT_AWARD_TYPES.includes(explicitType.toLowerCase() as any)) {
+    return explicitType.toLowerCase();
+  }
+  const t = (title || '').toLowerCase();
+  if (/president|leader|rep|governor|executive|chief|statesman|influence|impact|royal|king|queen/.test(t)) {
+    return 'crown';
+  }
+  if (/tech|innovat|vision|research|genius|intellectual|orator|debate|constitutional|crystal|future/.test(t)) {
+    return 'crystal';
+  }
+  if (/dress|style|fashion|social|vibe|popular|life of|star|charisma|personality|smile|creative/.test(t)) {
+    return 'star';
+  }
+  if (/sport|athlete|captain|medal|dean|distinction|honour|honor|second|silver|merit/.test(t)) {
+    return 'silver';
+  }
+  if (/grit|resilien|service|dedicated|punctual|volunteer|comrade|friend|welfare|bronze/.test(t)) {
+    return 'bronze';
+  }
+  if (/art|culture|music|media|writer|poet|spark/.test(t)) {
+    return 'sparkles';
+  }
+  if (/defend|advocate|counsel|integrity|justice|moot|chamber|shield/.test(t)) {
+    return 'shield';
+  }
+  return 'gold';
+}
+
+export function getDistinctAwardVisualsForList(
+  awards: Array<{ category?: string; title?: string; trophyType?: string }>,
+  isLightMode = false
+): AwardVisualConfig[] {
+  const usedTypes = new Set<string>();
+
+  return awards.map((item, idx) => {
+    const rawTitle = item.category || item.title || '';
+    const preferred = inferAwardTypeFromTitle(rawTitle, item.trophyType);
+
+    let chosenType = preferred;
+    if (usedTypes.has(chosenType)) {
+      // Pick the first unused type from DISTINCT_AWARD_TYPES so we never repeat an icon
+      const fallback = DISTINCT_AWARD_TYPES.find((t) => !usedTypes.has(t));
+      chosenType = fallback || DISTINCT_AWARD_TYPES[idx % DISTINCT_AWARD_TYPES.length];
+    }
+
+    usedTypes.add(chosenType);
+    return getAwardVisualConfig(chosenType, isLightMode);
+  });
+}
+
+export interface UnifiedStudentAward {
+  id: string;
+  category: string;
+  citation?: string;
+  trophyType?: string;
+}
+
+/**
+ * Merges awards stored directly on a StudentProfile (`student.studentAwards`)
+ * with any matching awards in `setAwards` (by name, nickname, or avatar), deduplicated by title.
+ */
+export function getStudentCombinedAwards(
+  student:
+    | {
+        id?: string;
+        fullName?: string;
+        nickname?: string;
+        photoUrl?: string;
+        studentAwards?: Array<{
+          id: string;
+          category: string;
+          citation?: string;
+          trophyType?: string;
+        }>;
+      }
+    | null
+    | undefined,
+  setAwards?: Array<{
+    id: string;
+    category: string;
+    citation?: string;
+    trophyType?: string;
+    winnerName?: string;
+    winnerNickname?: string;
+    winnerAvatar?: string;
+  }>
+): UnifiedStudentAward[] {
+  if (!student) return [];
+  const result: UnifiedStudentAward[] = [];
+  const seenCategories = new Set<string>();
+
+  for (const aw of student.studentAwards || []) {
+    const cat = (aw.category || '').trim();
+    if (!cat) continue;
+    const key = cat.toLowerCase();
+    if (!seenCategories.has(key)) {
+      seenCategories.add(key);
+      result.push({
+        id: aw.id || `std-aw-${result.length}`,
+        category: cat,
+        citation: aw.citation?.trim() || undefined,
+        trophyType: aw.trophyType,
+      });
+    }
+  }
+
+  const normName = (student.fullName || '').trim().toLowerCase();
+  const normNick = (student.nickname || '').trim().toLowerCase();
+
+  for (const aw of setAwards || []) {
+    const wName = (aw.winnerName || '').trim().toLowerCase();
+    const wNick = (aw.winnerNickname || '').trim().toLowerCase();
+    const matched =
+      (normName && wName === normName) ||
+      (normNick && wNick && wNick === normNick) ||
+      Boolean(student.photoUrl && aw.winnerAvatar && aw.winnerAvatar === student.photoUrl);
+
+    if (matched) {
+      const cat = (aw.category || '').trim();
+      if (!cat) continue;
+      const key = cat.toLowerCase();
+      if (!seenCategories.has(key)) {
+        seenCategories.add(key);
+        result.push({
+          id: aw.id || `set-aw-${result.length}`,
+          category: cat,
+          citation: aw.citation?.trim() || undefined,
+          trophyType: aw.trophyType,
+        });
+      }
+    }
+  }
+
+  return result;
 }
