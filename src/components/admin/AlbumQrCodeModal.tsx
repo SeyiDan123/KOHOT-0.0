@@ -17,6 +17,7 @@ import {
   GraduationCap
 } from 'lucide-react';
 import { ClassSet } from '../../types';
+import { getAlbumUrl } from '../../utils/urlHelper';
 import { UniversalModal } from '../common/UniversalModal';
 
 interface AlbumQrCodeModalProps {
@@ -37,9 +38,7 @@ export const AlbumQrCodeModal: React.FC<AlbumQrCodeModalProps> = ({
   const plaqueRef = useRef<HTMLDivElement>(null);
 
   // Compute absolute public album link
-  const albumUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}${window.location.pathname}#album-${currentSet.id}`
-    : `https://kohot.app/#album-${currentSet.id}`;
+  const albumUrl = getAlbumUrl(currentSet);
 
   // Generate QR Code data URL whenever currentSet or isOpen changes
   useEffect(() => {

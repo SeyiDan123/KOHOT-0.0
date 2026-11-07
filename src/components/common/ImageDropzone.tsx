@@ -89,7 +89,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
         category: category || (aspectRatio === 'portrait' ? 'portrait' : 'candid'),
       });
 
-      if (uploadRes.success && uploadRes.url && !uploadRes.url.startsWith('data:')) {
+      if (uploadRes.success && uploadRes.url) {
         onChange(uploadRes.url);
       } else {
         setErrorMessage(uploadRes.error || 'Upload to cloud storage failed. Please click to retry.');
@@ -171,7 +171,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
           </label>
           <span className="text-[9px] font-mono-tech uppercase text-zinc-400 bg-white/5 px-2 py-0.5 rounded flex items-center gap-1">
             <Sliders className="w-2.5 h-2.5 text-[#d4af37]" />
-            <span>Croppable &amp; Scalable</span>
+            <span>Resizable &amp; Scalable</span>
           </span>
         </div>
       )}
@@ -218,10 +218,10 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
                   type="button"
                   onClick={handleOpenExistingCrop}
                   className="px-2.5 py-1 rounded-full bg-black/80 hover:bg-[#d4af37] text-white hover:text-black transition-colors cursor-pointer border border-white/20 text-[10px] font-mono-tech uppercase tracking-wider flex items-center gap-1 shadow"
-                  title="Crop / Adjust Positioning"
+                  title="Resize / Adjust Positioning"
                 >
                   <Sliders className="w-3 h-3" />
-                  <span>Adjust Framing</span>
+                  <span>Resize &amp; Frame</span>
                 </button>
 
                 <button
@@ -250,7 +250,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
                 {placeholderText}
               </p>
               <p className="font-mono-tech text-[10px] text-zinc-400">
-                PNG, JPG, WEBP • Croppable with zoom &amp; positioning
+                PNG, JPG, WEBP • Resizable with zoom &amp; positioning
               </p>
             </div>
           </div>
@@ -281,7 +281,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({
         onClose={() => setIsCropModalOpen(false)}
         onApplyCrop={handleApplyCrop}
         initialAspectRatio={getCropAspectRatio()}
-        title={label ? `Adjust Framing: ${label}` : 'Crop & Adjust Positioning'}
+        title={label ? `Resize & Position: ${label}` : 'Resize & Adjust Positioning'}
         helperText="Pan, zoom, or select aspect ratio to frame the image precisely."
       />
     </div>

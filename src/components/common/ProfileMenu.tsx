@@ -33,6 +33,7 @@ import { apiClientUnpublishAlbum } from '../../utils/apiClient';
 import { ClassAdminModal } from '../admin/ClassAdminModal';
 import { InviteOtherDepartmentsModal } from '../admin/InviteOtherDepartmentsModal';
 import { InviteNextClassModal } from '../admin/InviteNextClassModal';
+import { Modal, Field, Input, Button, Card } from '../ui';
 import { HelpModal } from '../public/HelpModal';
 import { UniversalModal } from './UniversalModal';
 import { ImageCropModal } from './ImageCropModal';
@@ -104,6 +105,23 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
 }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isDarkMenu, setIsDarkMenu] = useState<boolean>(() =>
+    typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : true
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncTheme = () => {
+      setIsDarkMenu(document.documentElement.classList.contains('dark'));
+    };
+    syncTheme();
+    window.addEventListener('kohot_theme_changed', syncTheme);
+    window.addEventListener('kohot-theme-change', syncTheme);
+    return () => {
+      window.removeEventListener('kohot_theme_changed', syncTheme);
+      window.removeEventListener('kohot-theme-change', syncTheme);
+    };
+  }, [isProfileOpen, isNotifOpen]);
 
   // Position state for portal dropdown
   const [menuCoords, setMenuCoords] = useState<{ top?: number; bottom?: number; left?: number; right?: number }>({});
@@ -285,7 +303,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
 
   // Outside click handler and Escape key handler
   useEffect(() => {
-    const handleDocumentClick = (e: MouseEvent) => {
+    const handleDocumentClick = (e: MouseEvent | TouchEvent) => {
       const target = e.target as Node;
       if (
         isProfileOpen &&
@@ -327,12 +345,14 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
     };
 
     document.addEventListener('mousedown', handleDocumentClick);
+    document.addEventListener('touchstart', handleDocumentClick, { passive: true });
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('popstate', handleRouteChange);
     window.addEventListener('hashchange', handleRouteChange);
 
     return () => {
       document.removeEventListener('mousedown', handleDocumentClick);
+      document.removeEventListener('touchstart', handleDocumentClick);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('popstate', handleRouteChange);
       window.removeEventListener('hashchange', handleRouteChange);
@@ -586,41 +606,53 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
         document.body
       )}
 
-      {/* 4. PORTAL-MOUNTED PROFILE DROPDOWN MENU - Sleek & Fully Displayed */}
+      {/* 4. PORTAL-MOUNTED PROFILE DROPDOWN MENU - Opaque Light/Dark Surface */}
       {isProfileOpen && typeof document !== 'undefined' && createPortal(
         <div
           ref={menuRef}
+          data-theme={isDarkMenu ? 'dark' : 'light'}
           style={{
             position: 'fixed',
             top: menuCoords.top,
             bottom: menuCoords.bottom,
             right: menuCoords.right,
-            zIndex: 50,
+            zIndex: 9999,
+            backgroundColor: isDarkMenu ? '#18181b' : '#ffffff',
+            borderColor: isDarkMenu ? '#3f3f46' : '#cbd5e1',
+            color: isDarkMenu ? '#f4f4f5' : '#0f172a',
           }}
-          className="w-[calc(100vw-24px)] sm:w-[205px] rounded-2xl bg-gradient-to-b from-[#18181b] to-[#121214] border border-white/15 shadow-2xl p-1.5 animate-fadeIn text-[#e2e4e9] flex flex-col"
+          className={`kh-theme w-[calc(100vw-24px)] sm:w-[225px] max-h-[80vh] overflow-y-auto rounded-2xl border shadow-2xl p-1.5 animate-fadeIn flex flex-col ${
+            isDarkMenu
+              ? 'bg-[#18181b] border-zinc-700 text-zinc-100'
+              : 'bg-white border-slate-300 text-slate-900'
+          }`}
         >
           {/* User Header - Compact */}
-          <div className="px-2 py-1.5 border-b border-white/10 mb-1 shrink-0">
-            <div className="font-syne font-bold text-xs text-white truncate">
+          <div className={`px-2.5 py-2 border-b mb-1 shrink-0 ${isDarkMenu ? 'border-zinc-800' : 'border-slate-200'}`}>
+            <div className={`font-syne font-bold text-xs truncate ${isDarkMenu ? 'text-white' : 'text-slate-900'}`}>
               {fullNameInput || effectiveAccountName}
             </div>
-            <div className="font-mono-tech text-[10px] text-zinc-400 truncate">
+            <div className={`font-mono-tech text-[10px] truncate ${isDarkMenu ? 'text-zinc-400' : 'text-slate-500'}`}>
               {emailInput || effectiveAccountEmail}
             </div>
             {(phoneInput || effectiveAccountPhone) && (
-              <div className="font-mono-tech text-[10px] text-zinc-400 truncate">
+              <div className={`font-mono-tech text-[10px] truncate ${isDarkMenu ? 'text-zinc-400' : 'text-slate-500'}`}>
                 {phoneInput || effectiveAccountPhone}
               </div>
             )}
-            <div className="mt-0.5 flex flex-wrap items-center gap-1">
-              <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase bg-white/10 text-white border border-white/15 font-semibold">
+            <div className="mt-1 flex flex-wrap items-center gap-1">
+              <div className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase border font-semibold ${
+                isDarkMenu
+                  ? 'bg-zinc-800 text-zinc-100 border-zinc-700'
+                  : 'bg-slate-100 text-slate-800 border-slate-200'
+              }`}>
                 <ShieldCheck className="w-2.5 h-2.5 text-[#d4af37]" />
                 <span className="truncate">{roleTitle}</span>
               </div>
               {isAdmin && currentSet && (
                 <div
                   title={`Registration Reference: ${currentSet.activationRef || 'Verified'}`}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 font-semibold"
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-mono-tech uppercase bg-[var(--kh-success-bg)] text-[var(--kh-success)] border border-emerald-500/25 font-semibold"
                 >
                   <CheckCircle2 className="w-2.5 h-2.5" />
                   <span>Verified Class Album</span>
@@ -633,7 +665,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
           <div className="space-y-0.5 pr-0.5">
             {/* Admin Management: Transfer Admin, Invite Next Class (before Invite Other Departments) */}
             {isAdmin && currentSet && (
-              <div className="p-0.5 mb-0.5 rounded-lg bg-white/[0.04] border border-white/10 space-y-0.5">
+              <div className="p-0.5 mb-0.5 rounded-lg bg-[var(--kh-surface-subtle)] border border-[var(--kh-border)] space-y-0.5">
                 {/* Transfer Admin */}
                 <button
                   id="profile-menu-transfer-admin"
@@ -643,10 +675,10 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                     setClassAdminInitialTab('transfer_admin');
                     setIsClassAdminOpen(true);
                   }}
-                  className="w-full px-2.5 py-1.5 rounded-md hover:bg-white/10 text-[11px] font-mono-tech text-amber-300 hover:text-amber-200 flex items-center gap-2 transition-colors text-left cursor-pointer active:bg-white/15"
+                  className="w-full px-2.5 py-1.5 rounded-md hover:bg-[var(--kh-surface-elevated)] text-[11px] font-mono-tech text-[var(--kh-text)] flex items-center gap-2 transition-colors text-left cursor-pointer"
                   title="Transfer administration to classmate or via link"
                 >
-                  <ArrowRightLeft className="w-3 h-3 text-amber-400 shrink-0" />
+                  <ArrowRightLeft className="w-3.5 h-3.5 text-[var(--kh-warning)] shrink-0" />
                   <span>Transfer Admin</span>
                 </button>
 
@@ -662,10 +694,10 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                       setIsInviteNextClassOpen(true);
                     }
                   }}
-                  className="w-full px-2.5 py-1.5 rounded-md hover:bg-white/10 text-[11px] font-mono-tech text-[#d4af37] hover:text-amber-200 flex items-center gap-2 transition-colors text-left cursor-pointer active:bg-white/15"
+                  className="w-full px-2.5 py-1.5 rounded-md hover:bg-[var(--kh-surface-elevated)] text-[11px] font-mono-tech text-[var(--kh-text)] flex items-center gap-2 transition-colors text-left cursor-pointer"
                   title="Invite the next graduating class representative to continue your department legacy"
                 >
-                  <UserPlus className="w-3 h-3 text-[#d4af37] shrink-0" />
+                  <UserPlus className="w-3.5 h-3.5 text-[var(--kh-gold)] shrink-0" />
                   <span className="truncate">Invite Next Class</span>
                 </button>
 
@@ -677,10 +709,10 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                     setIsProfileOpen(false);
                     setIsInviteDepartmentsOpen(true);
                   }}
-                  className="w-full px-2.5 py-1.5 rounded-md hover:bg-white/10 text-[11px] font-mono-tech text-emerald-300 hover:text-emerald-200 flex items-center gap-2 transition-colors text-left cursor-pointer active:bg-white/15"
+                  className="w-full px-2.5 py-1.5 rounded-md hover:bg-[var(--kh-surface-elevated)] text-[11px] font-mono-tech text-[var(--kh-text)] flex items-center gap-2 transition-colors text-left cursor-pointer"
                   title="Invite graduating class representatives of other departments to create their albums on the website"
                 >
-                  <Building2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                  <Building2 className="w-3.5 h-3.5 text-[var(--kh-success)] shrink-0" />
                   <span className="truncate">Invite Other Departments</span>
                 </button>
               </div>
@@ -694,9 +726,9 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 setIsProfileOpen(false);
                 setIsMyProfileModalOpen(true);
               }}
-              className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white flex items-center gap-2.5 transition-colors text-left cursor-pointer active:bg-white/15"
+              className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-surface-subtle)] text-xs font-mono-tech text-[var(--kh-text)] flex items-center gap-2.5 transition-colors text-left cursor-pointer"
             >
-              <User className="w-4 h-4 text-zinc-400" />
+              <User className="w-4 h-4 text-[var(--kh-text-muted)] shrink-0" />
               <span>My Profile</span>
             </button>
 
@@ -708,9 +740,9 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 setIsProfileOpen(false);
                 setIsSettingsModalOpen(true);
               }}
-              className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white flex items-center gap-2.5 transition-colors text-left cursor-pointer active:bg-white/15"
+              className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-surface-subtle)] text-xs font-mono-tech text-[var(--kh-text)] flex items-center gap-2.5 transition-colors text-left cursor-pointer"
             >
-              <Settings className="w-4 h-4 text-zinc-400" />
+              <Settings className="w-4 h-4 text-[var(--kh-text-muted)] shrink-0" />
               <span>Account Settings</span>
             </button>
 
@@ -722,16 +754,14 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 setIsProfileOpen(false);
                 handleTriggerInstall();
               }}
-              className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white flex items-center justify-between transition-colors text-left cursor-pointer active:bg-white/15"
+              className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-surface-subtle)] text-xs font-mono-tech text-[var(--kh-text)] flex items-center justify-between gap-2 transition-colors text-left cursor-pointer"
             >
-              <div className="flex items-center gap-2.5">
-                <Smartphone className="w-4 h-4 text-zinc-400" />
-                <span>Add to Home Screen</span>
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Smartphone className="w-4 h-4 text-[var(--kh-text-muted)] shrink-0" />
+                <span className="truncate">Add to Home Screen</span>
               </div>
               {isInstalled && (
-                <span className="text-[10px] text-emerald-400 font-mono-tech uppercase font-semibold">
-                  ✓ Added
-                </span>
+                <Check className="w-3.5 h-3.5 text-[var(--kh-success)] shrink-0" aria-label="Installed" />
               )}
             </button>
 
@@ -743,9 +773,9 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 setIsProfileOpen(false);
                 setIsHelpOpen(true);
               }}
-              className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white flex items-center gap-2.5 transition-colors text-left cursor-pointer active:bg-white/15"
+              className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-surface-subtle)] text-xs font-mono-tech text-[var(--kh-text)] flex items-center gap-2.5 transition-colors text-left cursor-pointer"
             >
-              <HelpCircle className="w-4 h-4 text-zinc-400" />
+              <HelpCircle className="w-4 h-4 text-[var(--kh-text-muted)] shrink-0" />
               <span>Help &amp; FAQ</span>
             </button>
 
@@ -757,13 +787,13 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 setIsProfileOpen(false);
                 setIsSupportOpen(true);
               }}
-              className="w-full px-3 py-2 rounded-xl hover:bg-white/10 text-xs font-mono-tech text-zinc-300 hover:text-white flex items-center gap-2.5 transition-colors text-left cursor-pointer active:bg-white/15"
+              className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-surface-subtle)] text-xs font-mono-tech text-[var(--kh-text)] flex items-center gap-2.5 transition-colors text-left cursor-pointer"
             >
-              <MessageSquare className="w-4 h-4 text-[#d4af37]" />
+              <MessageSquare className="w-4 h-4 text-[var(--kh-gold)] shrink-0" />
               <span>Contact Support</span>
             </button>
 
-            {/* Delete Album (moved completely under the profile icon list, 30-day recoverable soft delete) */}
+            {/* Request album deletion (30-day recoverable soft delete) */}
             {isAdmin && currentSet && onOpenRequestDeletion && (
               <button
                 id="profile-menu-delete-album"
@@ -772,22 +802,22 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                   setIsProfileOpen(false);
                   onOpenRequestDeletion();
                 }}
-                className="w-full px-3 py-2 rounded-xl hover:bg-red-500/15 text-xs font-mono-tech text-red-400/90 hover:text-red-300 flex items-center justify-between gap-2 transition-colors text-left cursor-pointer active:bg-red-500/20"
+                className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-danger-bg)] text-xs font-mono-tech text-[var(--kh-danger)] flex items-center justify-between gap-2 transition-colors text-left cursor-pointer"
                 title={currentSet.deletedAt ? 'Recover soft-deleted album (within 30 days)' : 'Soft-delete album (recoverable within 30 days)'}
               >
-                <div className="flex items-center gap-2.5">
-                  <Trash2 className="w-4 h-4 text-red-400 shrink-0" />
-                  <span>{currentSet.deletedAt ? 'Recover Album' : 'Delete Album'}</span>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Trash2 className="w-4 h-4 text-[var(--kh-danger)] shrink-0" />
+                  <span className="truncate">{currentSet.deletedAt ? 'Recover Album' : 'Request album deletion'}</span>
                 </div>
                 {currentSet.deletedAt && (
-                  <span className="px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[9px] font-mono-tech uppercase font-bold">
+                  <span className="px-1.5 py-0.5 rounded-full bg-[var(--kh-warning-bg)] text-[var(--kh-warning)] text-[9px] font-mono-tech uppercase font-bold shrink-0">
                     30d
                   </span>
                 )}
               </button>
             )}
 
-            <div className="my-1 border-t border-white/10" />
+            <div className="my-1 border-t border-[var(--kh-border)]" />
 
             {/* 6. Sign Out */}
             <button
@@ -797,9 +827,9 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 setIsProfileOpen(false);
                 onLogout();
               }}
-              className="w-full px-3 py-2 rounded-xl hover:bg-red-500/15 text-xs font-mono-tech text-red-400 hover:text-red-300 flex items-center gap-2.5 transition-colors text-left cursor-pointer active:bg-red-500/20"
+              className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-danger-bg)] text-xs font-mono-tech text-[var(--kh-danger)] flex items-center gap-2.5 transition-colors text-left cursor-pointer"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut className="w-4 h-4 shrink-0" />
               <span>Sign Out</span>
             </button>
           </div>
@@ -808,42 +838,64 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
       )}
 
       {/* ACCOUNT SETTINGS MODAL */}
-      <UniversalModal
+      <Modal
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
         title="Account Settings"
         subtitle="Manage your profile information and credentials"
         maxWidth="md"
+        footer={
+          <>
+            <div className="text-[var(--kh-text-muted)] text-xs">
+              {settingsSaved ? (
+                <span className="text-[var(--kh-success)] font-semibold flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5" /> Saved successfully
+                </span>
+              ) : (
+                'Syncs across all class devices'
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" onClick={() => setIsSettingsModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" form="profile-account-settings-form" variant="primary">
+                Save
+              </Button>
+            </div>
+          </>
+        }
       >
-        <form onSubmit={handleSaveSettings} className="space-y-4 text-xs font-mono-tech">
+        <form id="profile-account-settings-form" onSubmit={handleSaveSettings} className="space-y-4">
           {/* Portrait Photo Upload */}
-          <div className="flex items-center gap-4 p-3 rounded-2xl bg-white/[0.03] border border-white/10">
-            <div className="w-14 h-14 rounded-full bg-white/10 border-2 border-[#d4af37]/40 flex items-center justify-center font-bold text-lg text-white overflow-hidden shadow-md shrink-0">
+          <Card variant="muted" className="flex items-center gap-4 p-3.5">
+            <div className="w-14 h-14 rounded-full bg-[var(--kh-surface)] border-2 border-[var(--kh-accent)] flex items-center justify-center font-bold text-lg text-[var(--kh-text)] overflow-hidden shadow-xs shrink-0">
               {avatarInput || effectiveAvatar ? (
                 <img src={avatarInput || effectiveAvatar} alt="Portrait" className="w-full h-full object-cover" />
               ) : (
                 <span>{fullNameInput ? fullNameInput.charAt(0).toUpperCase() : 'U'}</span>
               )}
             </div>
-            <div className="flex-1 space-y-1">
-              <span className="font-syne font-bold text-xs text-white block">Account Portrait</span>
-              <p className="font-mono-tech text-[10px] text-zinc-400">Upload and crop portrait photo for your account profile</p>
+            <div className="flex-1 space-y-1.5">
+              <span className="font-semibold text-xs text-[var(--kh-text)] block">Account Portrait</span>
+              <p className="text-xs text-[var(--kh-text-muted)]">Upload and resize portrait photo for your account profile</p>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => settingsPhotoInputRef.current?.click()}
-                  className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer w-fit"
                 >
-                  <Upload className="w-3 h-3 text-[#d4af37]" />
+                  <Upload className="w-3.5 h-3.5 text-[var(--kh-accent-text)]" />
                   <span>{avatarInput || effectiveAvatar ? 'Change Portrait' : 'Upload Portrait'}</span>
-                </button>
+                </Button>
                 {(avatarInput || effectiveAvatar) && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       const imgToCrop = avatarInput || effectiveAvatar;
                       if (triggerCropForImage) {
-                        triggerCropForImage(imgToCrop, '1:1', 'Crop Account Portrait', (cropped) => {
+                        triggerCropForImage(imgToCrop, '1:1', 'Resize Account Portrait', (cropped) => {
                           setAvatarInput(cropped);
                         });
                       } else {
@@ -851,11 +903,10 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                         setInternalCropOpen(true);
                       }
                     }}
-                    className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-amber-300 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
                   >
-                    <Crop className="w-3 h-3 text-amber-400" />
-                    <span>Crop</span>
-                  </button>
+                    <Crop className="w-3.5 h-3.5 text-[var(--kh-accent-text)]" />
+                    <span>Resize</span>
+                  </Button>
                 )}
               </div>
             </div>
@@ -871,7 +922,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                   reader.onload = (ev) => {
                     const dataUrl = ev.target?.result as string;
                     if (triggerCropForImage) {
-                      triggerCropForImage(dataUrl, '1:1', 'Crop Account Portrait', (cropped) => {
+                      triggerCropForImage(dataUrl, '1:1', 'Resize Account Portrait', (cropped) => {
                         setAvatarInput(cropped);
                       });
                     } else {
@@ -883,121 +934,79 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 }
               }}
             />
-          </div>
+          </Card>
 
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-              Full Legal Name
-            </label>
-            <input
+          <Field label="Full Legal Name">
+            <Input
               type="text"
               value={fullNameInput}
               onChange={(e) => setFullNameInput(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white focus:border-white/30 focus:outline-none"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-              Email Address
-            </label>
-            <input
+          <Field label="Email Address">
+            <Input
               type="email"
               value={emailInput}
               onChange={(e) => setEmailInput(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white focus:border-white/30 focus:outline-none"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-              WhatsApp / Mobile Phone
-            </label>
-            <input
+          <Field label="WhatsApp / Mobile Phone">
+            <Input
               type="tel"
               value={phoneInput}
               onChange={(e) => setPhoneInput(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white focus:border-white/30 focus:outline-none"
             />
-          </div>
-
-          <div className="pt-2 flex items-center justify-between">
-            <div className="text-zinc-500 text-[11px]">
-              {settingsSaved ? (
-                <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" /> Saved successfully
-                </span>
-              ) : (
-                'Syncs across all class devices'
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsSettingsModalOpen(false)}
-                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 rounded-xl bg-white text-black font-syne font-bold hover:bg-zinc-200 transition-colors cursor-pointer"
-              >
-                Save
-              </button>
-            </div>
-          </div>
+          </Field>
         </form>
-      </UniversalModal>
+      </Modal>
 
       {/* ADD TO HOME SCREEN MANUAL INSTRUCTIONS MODAL */}
-      <UniversalModal
+      <Modal
         isOpen={isInstallModalOpen}
         onClose={() => setIsInstallModalOpen(false)}
         title="Add KoHot to Home Screen"
         subtitle="Instant offline access with zero app store download"
         maxWidth="md"
+        footer={
+          <div className="w-full flex justify-end">
+            <Button variant="primary" onClick={() => setIsInstallModalOpen(false)}>
+              Got It
+            </Button>
+          </div>
+        }
       >
         <div className="space-y-4">
-          <p className="font-body text-xs text-zinc-300 leading-relaxed">
+          <p className="text-xs sm:text-sm text-[var(--kh-text-muted)] leading-relaxed">
             Install KoHot on your phone or tablet for fast, full-screen access to your class album, directory, and legacy wall.
           </p>
 
-          <div className="space-y-3 font-mono-tech text-xs">
-            <div className="p-3.5 rounded-2xl bg-[#08090e] border border-white/10 space-y-1.5">
-              <span className="font-bold uppercase text-[11px] block text-[#d4af37]">
+          <div className="space-y-3 text-xs">
+            <Card variant="muted" className="p-3.5 space-y-1.5">
+              <span className="font-semibold uppercase text-xs block text-[var(--kh-accent-text)]">
                 iPhone &amp; iPad (Safari)
               </span>
-              <ol className="list-decimal list-inside space-y-1 text-zinc-400 text-[11px]">
+              <ol className="list-decimal list-inside space-y-1 text-[var(--kh-text-muted)] text-xs">
                 <li>Tap the <strong>Share</strong> icon (square with arrow) at the bottom of Safari.</li>
                 <li>Scroll down and select <strong>Add to Home Screen</strong>.</li>
                 <li>Tap <strong>Add</strong> in the top-right corner to finish.</li>
               </ol>
-            </div>
+            </Card>
 
-            <div className="p-3.5 rounded-2xl bg-[#08090e] border border-white/10 space-y-1.5">
-              <span className="font-bold uppercase text-[11px] block text-[#d4af37]">
+            <Card variant="muted" className="p-3.5 space-y-1.5">
+              <span className="font-semibold uppercase text-xs block text-[var(--kh-accent-text)]">
                 Android (Chrome)
               </span>
-              <ol className="list-decimal list-inside space-y-1 text-zinc-400 text-[11px]">
+              <ol className="list-decimal list-inside space-y-1 text-[var(--kh-text-muted)] text-xs">
                 <li>Tap the <strong>three dots (⋮)</strong> menu in Chrome.</li>
                 <li>Select <strong>Add to Home screen</strong> or <strong>Install App</strong>.</li>
                 <li>Confirm to install KoHot directly on your device.</li>
               </ol>
-            </div>
-          </div>
-
-          <div className="pt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => setIsInstallModalOpen(false)}
-              className="px-6 py-2.5 rounded-full bg-white text-black font-syne font-bold text-xs uppercase tracking-wider hover:bg-zinc-200 transition-colors cursor-pointer"
-            >
-              Got It
-            </button>
+            </Card>
           </div>
         </div>
-      </UniversalModal>
+      </Modal>
 
       {/* CLASS ADMIN MODAL (AUTHORITY FUNCTIONS ONLY: My Class Profile, Transfer Admin, Admin History) */}
       {isAdmin && currentSet && (
@@ -1030,16 +1039,23 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
 
       {/* MY PROFILE MODAL: ONLY DISPLAYS PHOTO, NAME, ROLE, EMAIL, AND WHATSAPP/MOBILE PHONE */}
       {isMyProfileModalOpen && (
-        <UniversalModal
+        <Modal
           isOpen={isMyProfileModalOpen}
           onClose={() => setIsMyProfileModalOpen(false)}
           title="My Profile"
           subtitle="Account Profile Details"
           maxWidth="sm"
+          footer={
+            <div className="w-full flex justify-end">
+              <Button variant="primary" onClick={() => setIsMyProfileModalOpen(false)}>
+                Close
+              </Button>
+            </div>
+          }
         >
-          <div className="space-y-4 text-xs font-mono-tech">
-            <div className="flex flex-col items-center text-center p-5 rounded-2xl bg-white/[0.03] border border-white/10 gap-3">
-              <div className="w-20 h-20 rounded-full bg-white/10 border-2 border-[#d4af37]/40 flex items-center justify-center font-bold text-2xl text-white overflow-hidden shadow-lg shrink-0">
+          <div className="space-y-4 text-xs">
+            <Card variant="muted" className="flex flex-col items-center text-center p-5 gap-3">
+              <div className="w-20 h-20 rounded-full bg-[var(--kh-surface)] border-2 border-[var(--kh-accent)] flex items-center justify-center font-bold text-2xl text-[var(--kh-text)] overflow-hidden shadow-md shrink-0">
                 {effectiveAvatar ? (
                   <img src={effectiveAvatar} alt={fullNameInput || effectiveAccountName} className="w-full h-full object-cover" />
                 ) : (
@@ -1047,45 +1063,35 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                 )}
               </div>
               <div className="min-w-0">
-                <div className="font-syne font-bold text-lg text-white">
+                <div className="font-semibold text-base text-[var(--kh-text)]">
                   {fullNameInput || effectiveAccountName || 'User'}
                 </div>
-                <div className="text-zinc-400 text-xs mt-0.5">
+                <div className="text-[var(--kh-text-muted)] text-xs mt-0.5">
                   {emailInput || effectiveAccountEmail || 'Not configured'}
                 </div>
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-mono-tech uppercase bg-[#d4af37]/15 text-[#d4af37] border border-[#d4af37]/30 font-semibold mt-2">
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#d4af37]" />
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-mono-tech uppercase bg-[var(--kh-warn-bg)] text-[var(--kh-warn-text)] border border-[var(--kh-warn-border)] font-semibold mt-2">
+                  <ShieldCheck className="w-3.5 h-3.5" />
                   <span>{roleTitle}</span>
                 </div>
               </div>
-            </div>
+            </Card>
 
-            <div className="p-4 rounded-2xl bg-[#08090e] border border-white/10 space-y-2.5">
-              <div className="flex justify-between items-center py-1 border-b border-white/5">
-                <span className="text-zinc-400">Role</span>
-                <span className="text-white font-medium">{roleTitle}</span>
+            <Card variant="muted" className="p-4 space-y-2.5">
+              <div className="flex justify-between items-center py-1 border-b border-[var(--kh-border)]">
+                <span className="text-[var(--kh-text-muted)]">Role</span>
+                <span className="text-[var(--kh-text)] font-medium">{roleTitle}</span>
               </div>
-              <div className="flex justify-between items-center py-1 border-b border-white/5">
-                <span className="text-zinc-400">Email</span>
-                <span className="text-white select-all">{emailInput || effectiveAccountEmail || 'Not configured'}</span>
+              <div className="flex justify-between items-center py-1 border-b border-[var(--kh-border)]">
+                <span className="text-[var(--kh-text-muted)]">Email</span>
+                <span className="text-[var(--kh-text)] select-all">{emailInput || effectiveAccountEmail || 'Not configured'}</span>
               </div>
               <div className="flex justify-between items-center py-1">
-                <span className="text-zinc-400">WhatsApp / Mobile Phone</span>
-                <span className="text-white select-all">{phoneInput || effectiveAccountPhone || 'Not configured'}</span>
+                <span className="text-[var(--kh-text-muted)]">WhatsApp / Mobile Phone</span>
+                <span className="text-[var(--kh-text)] select-all">{phoneInput || effectiveAccountPhone || 'Not configured'}</span>
               </div>
-            </div>
-
-            <div className="pt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setIsMyProfileModalOpen(false)}
-                className="px-5 py-2.5 rounded-xl bg-white text-black font-syne font-bold text-xs hover:bg-zinc-200 transition-colors cursor-pointer shadow"
-              >
-                Close
-              </button>
-            </div>
+            </Card>
           </div>
-        </UniversalModal>
+        </Modal>
       )}
 
       {/* Internal Portrait Crop Modal */}
@@ -1095,7 +1101,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
           onClose={() => setInternalCropOpen(false)}
           imageSrc={internalCropImage}
           initialAspectRatio="1:1"
-          title="Crop Account Portrait"
+          title="Resize Account Portrait"
           onApplyCrop={(cropped) => {
             setAvatarInput(cropped);
             setInternalCropOpen(false);

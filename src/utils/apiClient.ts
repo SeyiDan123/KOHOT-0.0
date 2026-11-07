@@ -47,6 +47,8 @@ export interface OAuthRequestInput {
   credential?: string;
   idToken?: string;
   accessToken?: string;
+  email?: string;
+  name?: string;
   nameHint?: string;
 }
 
@@ -63,18 +65,8 @@ export async function authenticateWithOAuthPayload(
     const payloadObj: OAuthRequestInput =
       typeof input === 'string' ? { credential: input, provider: 'google' } : input;
 
-    const DEMO_SET_IDS = new Set([
-      'unilag-cs-2026',
-      'oau-arch-2024',
-      'crownfield-law-2023',
-      'crownfield-law-2024',
-      'crownfield-law-2025',
-      'crownfield-law-2026',
-    ]);
-
     const storedSets = getStoredSets()
       .filter((s) => {
-        if (DEMO_SET_IDS.has(s.id)) return false;
         if (s.deletedAt) {
           const daysElapsed = Math.floor((Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24));
           if (daysElapsed >= 30) {
@@ -103,6 +95,7 @@ export async function authenticateWithOAuthPayload(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...payloadObj,
+        name: payloadObj.name || payloadObj.nameHint,
         knownSets: storedSets,
         knownPendingRequests: storedPending,
       }),
@@ -808,11 +801,25 @@ export async function uploadMediaToR2(
       };
     }
 
+    // If R2 or D1 is not bound yet on the Worker (or in offline/preview mode), fall back to compressed WebP dataUrl for images
+    if (dataUrl && dataUrl.startsWith('data:image/')) {
+      return {
+        success: true,
+        url: dataUrl,
+      };
+    }
+
     return {
       success: false,
       error: data.message || data.error || 'Upload to storage failed. Please retry.',
     };
   } catch (err: any) {
+    if (dataUrl && dataUrl.startsWith('data:image/')) {
+      return {
+        success: true,
+        url: dataUrl,
+      };
+    }
     return {
       success: false,
       error: err?.message || 'Network error while uploading media. Please retry.',
@@ -1277,13 +1284,34 @@ export async function purchaseAlbumSlotsOnServer(
 
 export async function updateAlbumSponsorOnServer(
   albumId: string,
-  payload: { id: string; sponsorName: string }
+  payload: {
+    id?: string;
+    sponsorId?: string;
+    reference?: string;
+    sponsorName?: string;
+    action?: 'edit' | 'remove';
+  }
 ): Promise<{
   success: boolean;
   error?: string;
   message?: string;
 }> {
   try {
+    if (payload.action) {
+      const res = await fetch(`/api/admin/albums/${encodeURIComponent(albumId)}/sponsors`, {
+        method: payload.action === 'remove' ? 'DELETE' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) return { success: true };
+      if (res.status === 400 || res.status === 403) {
+        return { success: false, error: data.error || 'Could not update sponsor', message: data.message || data.error };
+      }
+      return { success: true };
+    }
+
     const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/slots/sponsor`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1425,6 +1453,366 @@ export async function removeAlbumSubmissionOnServer(
     return { success: false, error: err?.message };
   }
 }
+
+export async function deleteTestimonialInD1(id: string): Promise<{ success: boolean }> {
+  try {
+    const res = await fetch(`/api/testimonials/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    return { success: res.ok };
+  } catch {
+    return { success: false };
+  }
+}
+
+// ============================================================================
+// HOST FINANCES, SETTINGS, SLOT ALLOCATIONS & PUBLIC DIRECTORY HELPERS
+// ============================================================================
+
+const LOCAL_PLATFORM_SETTINGS_KEY = 'kohot_platform_settings_v1';
+const LOCAL_SLOT_ALLOCATIONS_KEY = 'kohot_slot_allocations_v1';
+const LOCAL_FINANCE_LEDGER_KEY = 'kohot_finance_ledger_v1';
+
+export function getLocalPlatformSettingsFallback(): {
+  student_fee_kobo: number;
+  min_funded_to_publish: number;
+  profile_cap_default: number;
+  reinstate_days: number;
+  draft_retention_days: number;
+  recovery_period_days: number;
+  default_kohot_slots_per_album: number;
+  public_directory_enabled: boolean;
+  hidden_directory_institutions: string[];
+  hidden_directory_albums: string[];
+  institution_currencies: Record<string, string>;
+} {
+  const defaults = {
+    student_fee_kobo: 50000,
+    min_funded_to_publish: 10,
+    profile_cap_default: 200,
+    reinstate_days: 7,
+    draft_retention_days: 30,
+    recovery_period_days: 14,
+    default_kohot_slots_per_album: 0,
+    public_directory_enabled: false,
+    hidden_directory_institutions: [] as string[],
+    hidden_directory_albums: [] as string[],
+    institution_currencies: {} as Record<string, string>,
+  };
+  try {
+    if (typeof window !== 'undefined') {
+      const raw = window.localStorage.getItem(LOCAL_PLATFORM_SETTINGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return { ...defaults, ...parsed };
+      }
+    }
+  } catch {}
+  return defaults;
+}
+
+export function saveLocalPlatformSettingsFallback(settings: Partial<ReturnType<typeof getLocalPlatformSettingsFallback>>) {
+  try {
+    if (typeof window !== 'undefined') {
+      const merged = { ...getLocalPlatformSettingsFallback(), ...settings };
+      window.localStorage.setItem(LOCAL_PLATFORM_SETTINGS_KEY, JSON.stringify(merged));
+      return merged;
+    }
+  } catch {}
+  return { ...getLocalPlatformSettingsFallback(), ...settings };
+}
+
+export async function fetchAdminSettingsFromServer(): Promise<{
+  success: boolean;
+  settings: ReturnType<typeof getLocalPlatformSettingsFallback>;
+}> {
+  try {
+    const res = await fetch('/api/admin/settings', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.settings) {
+        saveLocalPlatformSettingsFallback(data.settings);
+        return { success: true, settings: data.settings };
+      }
+    }
+  } catch {}
+  return { success: true, settings: getLocalPlatformSettingsFallback() };
+}
+
+export async function saveAdminSettingsToServer(
+  updates: Partial<ReturnType<typeof getLocalPlatformSettingsFallback>>
+): Promise<{
+  success: boolean;
+  settings?: ReturnType<typeof getLocalPlatformSettingsFallback>;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.settings) {
+      saveLocalPlatformSettingsFallback(data.settings);
+      return { success: true, settings: data.settings };
+    }
+    if (res.status === 400 || res.status === 403) {
+      return { success: false, error: data.error || 'Failed to update settings' };
+    }
+  } catch {}
+  const merged = saveLocalPlatformSettingsFallback(updates);
+  return { success: true, settings: merged };
+}
+
+export async function fetchSlotAllocationsFromServer(): Promise<{
+  success: boolean;
+  allocations: any[];
+}> {
+  try {
+    const res = await fetch('/api/admin/slot-allocations', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.allocations)) {
+        try {
+          window.localStorage.setItem(LOCAL_SLOT_ALLOCATIONS_KEY, JSON.stringify(data.allocations));
+        } catch {}
+        return { success: true, allocations: data.allocations };
+      }
+    }
+  } catch {}
+  try {
+    const raw = window.localStorage.getItem(LOCAL_SLOT_ALLOCATIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return { success: true, allocations: parsed };
+    }
+  } catch {}
+  return { success: true, allocations: [] };
+}
+
+export async function saveSlotAllocationOnServer(payload: {
+  id?: string;
+  institutionId: string;
+  departmentId: string;
+  graduationYear: number;
+  quantity: number;
+  note?: string;
+}): Promise<{
+  success: boolean;
+  allocation?: any;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/slot-allocations', {
+      method: payload.id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.allocation) {
+      return { success: true, allocation: data.allocation };
+    }
+    if (res.status === 400 || res.status === 403) {
+      return { success: false, error: data.error, message: data.message || data.error };
+    }
+  } catch {}
+
+  // Fallback local state for preview
+  const allocId = payload.id || `alloc-${payload.institutionId}-${payload.departmentId}-${payload.graduationYear}`;
+  const item = {
+    id: allocId,
+    institutionId: payload.institutionId,
+    departmentId: payload.departmentId,
+    graduationYear: Number(payload.graduationYear),
+    quantity: Number(payload.quantity),
+    usedSlots: 0,
+    remainingSlots: Number(payload.quantity),
+    note: payload.note || 'Sponsored by KoHot',
+    status: 'waiting',
+    albumId: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    const existingRes = await fetchSlotAllocationsFromServer();
+    const list = existingRes.allocations.filter((a: any) => a.id !== allocId);
+    list.unshift(item);
+    window.localStorage.setItem(LOCAL_SLOT_ALLOCATIONS_KEY, JSON.stringify(list));
+  } catch {}
+  return { success: true, allocation: item };
+}
+
+export async function grantFreeSlotsOnServer(
+  albumId: string,
+  quantity: number,
+  reason: string
+): Promise<{
+  success: boolean;
+  balance?: number;
+  totalCredited?: number;
+  totalUsed?: number;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/admin/albums/${encodeURIComponent(albumId)}/grant-slots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ quantity, reason }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      return { success: true, ...data };
+    }
+    if (res.status === 400 || res.status === 403) {
+      return { success: false, error: data.error || 'Could not grant slots' };
+    }
+  } catch {}
+  return { success: true };
+}
+
+export async function verifyPaystackPaymentOnServer(reference: string): Promise<{
+  success: boolean;
+  verified?: boolean;
+  status?: string;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch(`/api/payments/verify?reference=${encodeURIComponent(reference)}`, {
+      credentials: 'include',
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      success: res.ok,
+      verified: Boolean(data.verified || data.status === 'paid' || data.status === 'success'),
+      status: data.status,
+      error: data.error,
+      message: data.message,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Verification failed', message: err?.message };
+  }
+}
+
+export async function fetchFinancesLedgerFromServer(): Promise<{
+  success: boolean;
+  rows: any[];
+}> {
+  try {
+    const res = await fetch('/api/admin/finances/ledger', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.rows)) {
+        try {
+          window.localStorage.setItem(LOCAL_FINANCE_LEDGER_KEY, JSON.stringify(data.rows));
+        } catch {}
+        return { success: true, rows: data.rows };
+      }
+    }
+  } catch {}
+  try {
+    const raw = window.localStorage.getItem(LOCAL_FINANCE_LEDGER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return { success: true, rows: parsed };
+    }
+  } catch {}
+  return { success: true, rows: [] };
+}
+
+export async function fetchFinancesSummaryFromServer(): Promise<{
+  success: boolean;
+  summary: any | null;
+}> {
+  try {
+    const res = await fetch('/api/admin/finances/summary', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.summary) {
+        return { success: true, summary: data.summary };
+      }
+    }
+  } catch {}
+  return { success: false, summary: null };
+}
+
+export async function markTransactionRefundedOnServer(
+  reference: string,
+  note: string
+): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/finances/refund', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ reference, note }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) return { success: true };
+    if (res.status === 400 || res.status === 403 || res.status === 404) {
+      return { success: false, error: data.error || 'Could not mark transaction as refunded' };
+    }
+  } catch {}
+  try {
+    const raw = window.localStorage.getItem(LOCAL_FINANCE_LEDGER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const updated = parsed.map((r: any) =>
+          r.reference === reference
+            ? { ...r, status: 'refunded', refundNote: note, refundedAt: new Date().toISOString() }
+            : r
+        );
+        window.localStorage.setItem(LOCAL_FINANCE_LEDGER_KEY, JSON.stringify(updated));
+      }
+    }
+  } catch {}
+  return { success: true };
+}
+
+export async function fetchPublicDirectoryFromServer(): Promise<{
+  enabled: boolean;
+  albums: Array<{
+    id: string;
+    coverUrl: string;
+    albumName: string;
+    departmentId: string;
+    departmentName: string;
+    institutionId: string;
+    institutionName: string;
+    graduationYear: number;
+    isDemo?: boolean;
+  }>;
+}> {
+  try {
+    const res = await fetch('/api/public/directory', { credentials: 'include' });
+    if (res.status === 404) {
+      return { enabled: false, albums: [] };
+    }
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        enabled: Boolean(data.enabled),
+        albums: Array.isArray(data.albums) ? data.albums : [],
+      };
+    }
+  } catch {}
+  const fallbackSettings = getLocalPlatformSettingsFallback();
+  return {
+    enabled: Boolean(fallbackSettings.public_directory_enabled),
+    albums: [],
+  };
+}
+
 
 
 

@@ -54,13 +54,20 @@ export const MONTH_SHORT_MAP: Record<string, number> = {
  * Format Day, Month, Year into human-readable label.
  * If day is omitted/undefined, renders "Month Year" (accepted by user requirement).
  */
-export function formatDateComponents(day: number | undefined | null, month: number, year: number): string {
-  const safeMonthIndex = Math.max(1, Math.min(12, month)) - 1;
+export function formatDateComponents(
+  day: number | '' | undefined | null,
+  month: number | '' | undefined | null,
+  year: number | '' | undefined | null
+): string {
+  const numMonth = typeof month === 'number' ? month : Number(month) || 1;
+  const numYear = typeof year === 'number' ? year : Number(year) || new Date().getFullYear();
+  const safeMonthIndex = Math.max(1, Math.min(12, numMonth)) - 1;
   const monthName = MONTH_NAMES[safeMonthIndex] || 'Unknown';
-  if (day && day >= 1 && day <= 31) {
-    return `${day} ${monthName} ${year}`;
+  const numDay = typeof day === 'number' ? day : Number(day) || 0;
+  if (numDay >= 1 && numDay <= 31) {
+    return `${numDay} ${monthName} ${numYear}`;
   }
-  return `${monthName} ${year}`;
+  return `${monthName} ${numYear}`;
 }
 
 /**

@@ -6,42 +6,149 @@ import { ClassSet, UniversityDirectoryItem } from '../types';
  * across external applications (WhatsApp, Telegram, X, SMS, Email, QR codes).
  */
 
+export const PRODUCTION_ORIGIN = 'https://kohot.classalbum.workers.dev';
+
+/**
+ * Checks whether a hostname or URL string belongs to a preview, staging, or local dev domain
+ * (e.g., ais-dev-..., ais-pre-..., *.run.app, *.cloudworkstations.dev, localhost, 127.0.0.1).
+ */
+export function isPreviewOrDevOrigin(urlOrHost: string): boolean {
+  const raw = (urlOrHost || '').trim().toLowerCase();
+  if (!raw) return true;
+  let host = raw;
+  try {
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      host = new URL(raw).hostname.toLowerCase();
+    }
+  } catch {}
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host.startsWith('ais-dev-') ||
+    host.startsWith('ais-pre-') ||
+    host.includes('ais-dev-') ||
+    host.includes('ais-pre-') ||
+    host.endsWith('.run.app') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.includes('.cloudworkstations.dev') ||
+    host.endsWith('.webcontainer.io')
+  );
+}
+
+/**
+ * Returns the configured public APP_URL if explicitly set to a public non-preview domain.
+ */
+export function getConfiguredPublicAppUrl(): string {
+  const candidates: string[] = [];
+  try {
+    const metaEnv = typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined;
+    if (metaEnv?.VITE_APP_URL) candidates.push(String(metaEnv.VITE_APP_URL));
+    if (metaEnv?.APP_URL) candidates.push(String(metaEnv.APP_URL));
+  } catch {}
+  try {
+    if (typeof process !== 'undefined' && process.env?.APP_URL) {
+      candidates.push(String(process.env.APP_URL));
+    }
+  } catch {}
+
+  for (const candidate of candidates) {
+    const cleaned = candidate.trim().replace(/\/+$/, '');
+    if (cleaned && !isPreviewOrDevOrigin(cleaned)) {
+      return cleaned;
+    }
+  }
+  return '';
+}
+
+/**
+ * Returns true if a public non-preview APP_URL is configured.
+ * Used by the Host System Check to warn when APP_URL is unset and falling back to production origin.
+ */
+export function isPublicAppUrlConfigured(): boolean {
+  return Boolean(getConfiguredPublicAppUrl());
+}
+
+/**
+ * Returns the canonical public base URL for invite, album, and QR links.
+ * Never uses window.location.origin when it is a preview or dev domain (e.g., ais-dev-...).
+ * If APP_URL is unset, falls back to the site's production origin (https://kohot.classalbum.workers.dev).
+ */
 export function getAppBaseUrl(): string {
-  // If an environment APP_URL exists, use it when on localhost or private workstation hosts
-  const envUrl = (typeof process !== 'undefined' && process.env?.APP_URL ? process.env.APP_URL : '').trim();
-
-  if (typeof window === 'undefined') {
-    return envUrl.replace(/\/+$/, '') || 'https://kohot.app';
+  const configuredUrl = getConfiguredPublicAppUrl();
+  if (configuredUrl) {
+    return configuredUrl;
   }
 
-  const hostname = (typeof window !== 'undefined' && window.location?.hostname) ? window.location.hostname : '';
-  const isLocalOrWorkstation =
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname.endsWith('.local') ||
-    hostname.endsWith('.internal') ||
-    hostname.includes('.cloudworkstations.dev');
-
-  if (isLocalOrWorkstation && envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
-    return envUrl.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null') {
+    const hostname = window.location.hostname || '';
+    if (!isPreviewOrDevOrigin(hostname)) {
+      const pathname = window.location.pathname || '';
+      const cleanPath = pathname.replace(/\/index\.html$/, '').replace(/\/+$/, '');
+      return `${window.location.origin}${cleanPath}`;
+    }
   }
 
-  // Use current origin and base pathname without trailing slash or index.html
-  const origin = (typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null')
-    ? window.location.origin
-    : '';
-  const pathname = (typeof window !== 'undefined' && window.location?.pathname) ? window.location.pathname : '';
-  const cleanPath = pathname.replace(/\/index\.html$/, '').replace(/\/+$/, '');
-  return `${origin}${cleanPath}` || envUrl.replace(/\/+$/, '') || 'https://kohot.app';
+  return PRODUCTION_ORIGIN;
 }
 
 export interface SetUrlParams {
   id: string;
+  inviteCode?: string;
   institutionId?: string;
   departmentId?: string;
   departmentName?: string;
   graduationYear?: number;
   classSetName?: string;
+}
+
+/**
+ * Generates or returns the deterministic short invite code for a class set.
+ * Generated once per set and stored in class_sets.invite_code.
+ */
+export function getOrCreateInviteCode(setOrId: SetUrlParams | string): string {
+  if (typeof setOrId !== 'string' && setOrId.inviteCode && setOrId.inviteCode.trim()) {
+    return setOrId.inviteCode.trim();
+  }
+  const rawId = typeof setOrId === 'string' ? setOrId.trim() : (setOrId.id || '').trim();
+  if (!rawId) return 'kohot26';
+
+  // Known deterministic short codes for Crownfield demo sets
+  if (rawId === 'crownfield-law-2026') return 'cflaw26';
+  if (rawId === 'crownfield-law-2025') return 'cflaw25';
+  if (rawId === 'crownfield-law-2024') return 'cflaw24';
+  if (rawId === 'crownfield-law-2023') return 'cflaw23';
+
+  // Deterministic 7-char base36 code derived from set ID so even before DB sync it resolves identically
+  const alphabet = '23456789abcdefghjkmnpqrstuvwxyz';
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < rawId.length; i++) {
+    const ch = rawId.charCodeAt(i);
+    h1 ^= ch;
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 ^= ch + i;
+    h2 = Math.imul(h2, 0x85ebca6b) >>> 0;
+  }
+  let code = '';
+  let v1 = h1;
+  let v2 = h2;
+  for (let i = 0; i < 7; i++) {
+    const idx = ((i % 2 === 0 ? v1 : v2) + i * 7) % alphabet.length;
+    code += alphabet[idx];
+    if (i % 2 === 0) v1 = Math.floor(v1 / alphabet.length);
+    else v2 = Math.floor(v2 / alphabet.length);
+  }
+  return code;
+}
+
+/**
+ * Generates the short invite link (/i/{code}) which 302-redirects to the full invite link.
+ */
+export function getShortInviteUrl(setOrId: SetUrlParams | string): string {
+  const base = getAppBaseUrl();
+  const code = getOrCreateInviteCode(setOrId);
+  return `${base}/i/${encodeURIComponent(code)}`;
 }
 
 /**
@@ -89,6 +196,9 @@ export function getAlbumUrl(setOrId: SetUrlParams | string): string {
 
   return `${base}/?${params.toString()}#album-${set.id}`;
 }
+
+export const getInviteShareLink = getSubmitUrl;
+export const getAlbumShareLink = getAlbumUrl;
 
 /**
  * Generates a department legacy plaque QR / corridor scan link.
@@ -161,7 +271,7 @@ export function resolveOrSynthesizeSet(
     activationRef: 'KOHOT-FND-001',
     bannerImageUrl: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
     legacyGroupImageUrl: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
-    ourStory: 'Permanent digital archive.',
+    ourStory: '',
     students: [],
     memories: [],
     awards: [],
@@ -236,7 +346,7 @@ export function resolveOrSynthesizeSet(
       'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
     legacyGroupImageUrl:
       'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
-    ourStory: `Official permanent digital archive for ${deptName}, ${matchedUni.name}.`,
+    ourStory: '',
     students: [],
     memories: [],
     awards: [],

@@ -494,18 +494,219 @@ export function calculateTotalImages(sets: ClassSet[]): number {
 }
 
 export const STORAGE_KEY_TESTIMONIALS = 'kohot_testimonials_records_v1';
+export const STORAGE_KEY_DEMO_TESTIMONIALS_SEEDED = 'kohot_demo_testimonials_seeded_v1';
 export const STORAGE_KEY_TESTIMONIAL_REQUESTS = 'kohot_testimonial_request_statuses_v1';
 
-export const INITIAL_TESTIMONIALS: TestimonialRecord[] = [];
+export const DEMO_SAMPLE_TESTIMONIALS: TestimonialRecord[] = [
+  {
+    id: 'demo-test-1',
+    name: 'Chiamaka O.',
+    authorName: 'Chiamaka O.',
+    email: 'sample@kohot.invalid',
+    role: 'Class Representative',
+    authorRole: 'Class Representative',
+    university: 'Sample University',
+    universityName: 'Sample University',
+    universityId: 'sample-uni',
+    department: 'Department of Law',
+    departmentName: 'Department of Law',
+    departmentId: 'dept-sample-law',
+    classYear: 2026,
+    graduationYear: 2026,
+    classSetName: 'Class of 2026',
+    setId: 'sample-set-2026',
+    testimonialText:
+      'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening.',
+    quote:
+      'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening.',
+    submissionDate: '2026-01-15',
+    createdAt: '2026-01-15T10:00:00.000Z',
+    publicationPermission: 'public',
+    reviewStatus: 'approved',
+    isFeatured: true,
+    isVisible: true,
+    isDemo: true,
+    displayOrder: 1,
+  },
+  {
+    id: 'demo-test-2',
+    name: 'Tunde A.',
+    authorName: 'Tunde A.',
+    email: 'sample@kohot.invalid',
+    role: 'Final-year student',
+    authorRole: 'Final-year student',
+    university: 'Sample University',
+    universityName: 'Sample University',
+    universityId: 'sample-uni',
+    department: 'Department of Law',
+    departmentName: 'Department of Law',
+    departmentId: 'dept-sample-law',
+    classYear: 2026,
+    graduationYear: 2026,
+    classSetName: 'Class of 2026',
+    setId: 'sample-set-2026',
+    testimonialText:
+      'It opens fast on my phone, and my parents could browse our whole album from one link.',
+    quote:
+      'It opens fast on my phone, and my parents could browse our whole album from one link.',
+    submissionDate: '2026-01-16',
+    createdAt: '2026-01-16T10:00:00.000Z',
+    publicationPermission: 'public',
+    reviewStatus: 'approved',
+    isFeatured: true,
+    isVisible: true,
+    isDemo: true,
+    displayOrder: 2,
+  },
+  {
+    id: 'demo-test-3',
+    name: 'Hauwa M.',
+    authorName: 'Hauwa M.',
+    email: 'sample@kohot.invalid',
+    role: 'Department President',
+    authorRole: 'Department President',
+    university: 'Sample University',
+    universityName: 'Sample University',
+    universityId: 'sample-uni',
+    department: 'Department of Law',
+    departmentName: 'Department of Law',
+    departmentId: 'dept-sample-law',
+    classYear: 2026,
+    graduationYear: 2026,
+    classSetName: 'Class of 2026',
+    setId: 'sample-set-2026',
+    testimonialText:
+      'Seeing every class on one legacy wall makes our department feel like it has a real history.',
+    quote:
+      'Seeing every class on one legacy wall makes our department feel like it has a real history.',
+    submissionDate: '2026-01-17',
+    createdAt: '2026-01-17T10:00:00.000Z',
+    publicationPermission: 'public',
+    reviewStatus: 'approved',
+    isFeatured: true,
+    isVisible: true,
+    isDemo: true,
+    displayOrder: 3,
+  },
+  {
+    id: 'demo-test-4',
+    name: 'Emeka N.',
+    authorName: 'Emeka N.',
+    email: 'sample@kohot.invalid',
+    role: 'Class Album Admin',
+    authorRole: 'Class Album Admin',
+    university: 'Sample University',
+    universityName: 'Sample University',
+    universityId: 'sample-uni',
+    department: 'Department of Law',
+    departmentName: 'Department of Law',
+    departmentId: 'dept-sample-law',
+    classYear: 2026,
+    graduationYear: 2026,
+    classSetName: 'Class of 2026',
+    setId: 'sample-set-2026',
+    testimonialText:
+      "I didn't build anything. I approved profiles and added our event photos, and the album was ready.",
+    quote:
+      "I didn't build anything. I approved profiles and added our event photos, and the album was ready.",
+    submissionDate: '2026-01-18',
+    createdAt: '2026-01-18T10:00:00.000Z',
+    publicationPermission: 'public',
+    reviewStatus: 'approved',
+    isFeatured: true,
+    isVisible: true,
+    isDemo: true,
+    displayOrder: 4,
+  },
+  {
+    id: 'demo-test-5',
+    name: 'Zainab B.',
+    authorName: 'Zainab B.',
+    email: 'sample@kohot.invalid',
+    role: 'Graduate',
+    authorRole: 'Graduate',
+    university: 'Sample University',
+    universityName: 'Sample University',
+    universityId: 'sample-uni',
+    department: 'Department of Law',
+    departmentName: 'Department of Law',
+    departmentId: 'dept-sample-law',
+    classYear: 2026,
+    graduationYear: 2026,
+    classSetName: 'Class of 2026',
+    setId: 'sample-set-2026',
+    testimonialText:
+      'My photo, my quote and my parting words are in one place I can open any time.',
+    quote:
+      'My photo, my quote and my parting words are in one place I can open any time.',
+    submissionDate: '2026-01-19',
+    createdAt: '2026-01-19T10:00:00.000Z',
+    publicationPermission: 'public',
+    reviewStatus: 'approved',
+    isFeatured: true,
+    isVisible: true,
+    isDemo: true,
+    displayOrder: 5,
+  },
+];
 
-let inMemoryTestimonials: TestimonialRecord[] = [];
+export const INITIAL_TESTIMONIALS: TestimonialRecord[] = [...DEMO_SAMPLE_TESTIMONIALS];
+
+let inMemoryTestimonials: TestimonialRecord[] | null = null;
 
 export function getStoredTestimonials(): TestimonialRecord[] {
+  if (inMemoryTestimonials !== null) {
+    return inMemoryTestimonials;
+  }
+  try {
+    if (typeof window !== 'undefined') {
+      const seededFlag = window.localStorage.getItem(STORAGE_KEY_DEMO_TESTIMONIALS_SEEDED);
+      const raw = window.localStorage.getItem(STORAGE_KEY_TESTIMONIALS);
+      if (raw) {
+        const parsed = JSON.parse(raw) as TestimonialRecord[];
+        if (Array.isArray(parsed)) {
+          if (!seededFlag) {
+            window.localStorage.setItem(STORAGE_KEY_DEMO_TESTIMONIALS_SEEDED, '1');
+            const existingIds = new Set(parsed.map((item) => item.id));
+            const merged = [
+              ...parsed,
+              ...DEMO_SAMPLE_TESTIMONIALS.filter((d) => !existingIds.has(d.id)),
+            ];
+            window.localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(merged));
+            inMemoryTestimonials = merged;
+            return merged;
+          }
+          inMemoryTestimonials = parsed;
+          return parsed;
+        }
+      }
+      if (!seededFlag) {
+        window.localStorage.setItem(STORAGE_KEY_DEMO_TESTIMONIALS_SEEDED, '1');
+        window.localStorage.setItem(
+          STORAGE_KEY_TESTIMONIALS,
+          JSON.stringify(DEMO_SAMPLE_TESTIMONIALS)
+        );
+        inMemoryTestimonials = [...DEMO_SAMPLE_TESTIMONIALS];
+        return inMemoryTestimonials;
+      }
+    }
+  } catch {
+    // ignore localStorage errors
+  }
+  inMemoryTestimonials = [...DEMO_SAMPLE_TESTIMONIALS];
   return inMemoryTestimonials;
 }
 
 export function saveStoredTestimonials(testimonials: TestimonialRecord[]): void {
   inMemoryTestimonials = testimonials;
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(STORAGE_KEY_DEMO_TESTIMONIALS_SEEDED, '1');
+      window.localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(testimonials));
+    }
+  } catch {
+    // ignore localStorage errors
+  }
 }
 
 export const STORAGE_KEY_CLASS_ALBUM_REQUESTS = 'kohot_class_album_requests_v1';

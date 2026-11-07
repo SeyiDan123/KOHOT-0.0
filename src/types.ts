@@ -34,6 +34,8 @@ export interface UniversityDirectoryItem {
   motto?: string;
   institutionType?: 'university' | 'polytechnic' | 'college_of_education';
   isPriority?: boolean;
+  currency?: string; // Default 'NGN'
+  isHiddenFromDirectory?: boolean;
   departments: DepartmentItem[]; // Departments organized as direct subsets of this university
   faculties?: {
     facultyName: string;
@@ -47,14 +49,36 @@ export interface StudentProfile {
   fullName: string;
   nickname?: string;
   position?: string; // e.g. "Department President", "Class Rep", "Social Secretary", "Tech Lead"
+  roleCategory?: string;
   leaderOrder?: number; // Custom admin-assigned hierarchy order (1, 2, 3...)
   photoUrl: string; // High-fidelity WebP compressed portrait
   rawPhotoUrl?: string; // Original uncropped image preserved across edits
   cropSettings?: CropSettings;
+  secondaryPhotoUrl?: string; // Optional second portrait visible only in full profile view
+  rawSecondaryPhotoUrl?: string;
+  secondaryCropSettings?: CropSettings;
+  isProfileUpdate?: boolean; // True when a student edits their live profile and awaits admin approval
+  previousApproved?: boolean;
   originalSizeKb?: number;
   compressedSizeKb?: number;
   quote?: string;
-  bio?: string;
+  bio?: string; // Personal Story (optional)
+  myStory?: string; // My story / parting words (optional, up to 10,000 characters)
+  featuredInOurStory?: boolean; // Featured under "More from the executive" in Our Story (max 3 besides primary leader)
+  hideMyStory?: boolean; // Admin moderation toggle to hide story on public album
+  storyUpdatedAt?: string;
+  storyEditLog?: Array<{
+    id: string;
+    timestamp: string;
+    actorName: string;
+    actorRole: 'student' | 'admin';
+    summary: string;
+  }>;
+  favouriteCampusMemory?: string; // Favourite Campus Memory (optional, max 140 chars)
+  funFact?: string; // Fun Fact About Me (optional, max 140 chars)
+  whatsNext?: string; // What's Next (optional, max 140 chars)
+  messageToClassmates?: string; // A Message to My Classmates (optional)
+  messageToFutureSet?: string; // A Message to Future Set (optional)
   email?: string; // Meant for annual reminder about this album to relive the experience
   instagramOrTwitter?: string;
   socials?: {
@@ -113,6 +137,13 @@ export interface MemoryEvent {
   dateExtractedAutomatically?: boolean;
   dateExtractionSource?: string;
   isConvocationBatch?: boolean;
+  morePhotosUrl?: string; // Optional external link to full photo archive for this moment category
+}
+
+export interface DepartmentMemoryItem extends MemoryEvent {
+  date?: string;
+  imageUrl?: string;
+  category?: string;
 }
 
 export interface CohortReminderSettings {
@@ -313,6 +344,7 @@ export function getAlbumUniquenessKey(
 
 export interface ClassSet {
   id: string;
+  inviteCode?: string;
   institutionId: string;
   institutionName: string;
   institutionLogoUrl: string;
@@ -337,6 +369,16 @@ export interface ClassSet {
   bannerImageUrl: string;
   legacyGroupImageUrl: string;
   ourStory: string;
+  featuredLeaderProfileId?: string;
+  noteToNextSet?: string;
+  storyEditLog?: Array<{
+    id: string;
+    timestamp: string;
+    studentId: string;
+    studentName: string;
+    actorName: string;
+    summary: string;
+  }>;
   students: StudentProfile[];
   memories: MemoryEvent[];
   awards: AwardItem[];
@@ -386,6 +428,8 @@ export interface ClassSet {
   profileSlotBalance?: number;
   totalSlotsCredited?: number;
   totalSlotsUsed?: number;
+  isListedInDirectory?: boolean; // Listed by default when published; album admin can unlist in album Settings
+  isHiddenFromDirectory?: boolean; // Host override to hide from directory
   sponsors?: Array<{
     id: string;
     sponsorName: string;
@@ -644,7 +688,7 @@ export interface FinancialTransaction {
 }
 
 export type TestimonialPublicationPermission = 'public' | 'private';
-export type TestimonialReviewStatus = 'pending' | 'approved' | 'revision_requested' | 'archived';
+export type TestimonialReviewStatus = 'pending' | 'approved' | 'rejected' | 'revision_requested' | 'archived';
 export type TestimonialRequestStatus = 
   | 'not_requested'
   | 'request_sent'
@@ -658,32 +702,42 @@ export type TestimonialRequestStatus =
 export interface TestimonialRecord {
   id: string;
   name?: string;
+  fullName?: string;
   authorName?: string;
   email?: string;
   phone?: string;
   avatarUrl?: string;
+  photoUrl?: string;
   role?: string; // 'Class Album Admin'
   authorRole?: string;
   university?: string;
   universityName?: string;
+  institutionName?: string;
   universityId?: string;
   faculty?: string;
   department?: string;
   departmentName?: string;
   departmentId?: string;
   classYear?: number;
-  graduationYear?: number;
+  graduationYear?: number | string;
   classSetName?: string;
   setId?: string;
   classRepId?: string;
   testimonialText?: string;
+  shortQuote?: string;
   quote?: string;
+  rating?: number;
+  permissionGranted?: boolean;
   submissionDate?: string;
+  submittedAt?: string;
   createdAt?: string;
   status?: string;
   publicationPermission?: TestimonialPublicationPermission; // 'public' | 'private'
-  reviewStatus?: TestimonialReviewStatus; // 'pending' | 'approved' | 'revision_requested' | 'archived'
-  isFeatured: boolean; // Only published to homepage if true AND approved AND public
+  reviewStatus?: TestimonialReviewStatus; // 'pending' | 'approved' | 'rejected' | 'revision_requested' | 'archived'
+  isFeatured?: boolean; // Only published to homepage if true AND approved AND public
+  isVisible?: boolean; // Default true (1)
+  isDemo?: boolean; // Default false (0); carries "Sample" tag
+  displayOrder?: number;
   requestStatus?: TestimonialRequestStatus;
   requestSentAt?: string;
   internalNotes?: string;
@@ -784,6 +838,7 @@ export interface WebsiteContentOverride {
   showTestimonialsSection?: boolean; // Owner toggle to show/hide testimonials section on website
   testimonialsEyebrow?: string;
   testimonialsHeading?: string;
+  testimonialsTitle?: string;
   testimonialsSubtitle?: string;
 
   // 5. KoHot Awards Section
@@ -791,6 +846,128 @@ export interface WebsiteContentOverride {
   awardsHeading?: string;
   awardsBadge?: string;
   awardsDescription?: string;
+
+  // 6. Explore Other Departments (Public Directory Host Switch & Hidden Lists)
+  publicDirectoryEnabled?: boolean;
+  hiddenDirectoryInstitutions?: string[];
+  hiddenDirectoryAlbums?: string[];
+  institutionCurrencies?: Record<string, string>;
+}
+
+export interface PlatformSettingsConfig {
+  student_fee_kobo: number;
+  min_funded_to_publish: number;
+  profile_cap_default: number;
+  reinstate_days: number;
+  draft_retention_days: number;
+  recovery_period_days: number;
+  default_kohot_slots_per_album: number;
+  public_directory_enabled: boolean;
+  hidden_directory_institutions: string[];
+  hidden_directory_albums: string[];
+  institution_currencies: Record<string, string>;
+}
+
+export type FinanceLedgerRowType = 'student_payment' | 'slot_purchase';
+export type FinanceLedgerRowStatus =
+  | 'paid'
+  | 'pending'
+  | 'failed'
+  | 'refunded'
+  | 'refund_due'
+  | 'needs_review';
+
+export interface FinanceLedgerRow {
+  id: string;
+  type: FinanceLedgerRowType;
+  date: string;
+  institutionId: string;
+  institutionName: string;
+  departmentId: string;
+  departmentName: string;
+  classYear: number;
+  albumId: string;
+  albumName: string;
+  amountKobo: number;
+  currency: string;
+  status: FinanceLedgerRowStatus;
+  reference: string;
+  quantity: number;
+  sponsor?: string;
+  payerName?: string;
+  payerEmail?: string;
+  refundNote?: string;
+  refundedAt?: string;
+}
+
+export interface FinanceSummaryData {
+  confirmedRevenueMonthKobo: number;
+  confirmedRevenueAllTimeKobo: number;
+  studentPaymentsKobo: number;
+  studentPaymentsCount: number;
+  slotPurchasesKobo: number;
+  slotPurchasesCount: number;
+  refundsDueKobo: number;
+  refundsDueCount: number;
+  refundedKobo: number;
+  netCollectedKobo: number;
+  kohotSponsoredValueKobo: number;
+  kohotSponsoredSlotsCount: number;
+  unitFeeKobo: number;
+  needsAttention: {
+    pendingPaymentsCount: number;
+    paidNeedsReviewCount: number;
+    refundsDueCount: number;
+  };
+  timezone: string;
+}
+
+export interface SlotAllocationRecord {
+  id: string;
+  institutionId: string;
+  institutionName?: string;
+  departmentId: string;
+  departmentName?: string;
+  graduationYear: number;
+  quantity: number;
+  usedSlots?: number;
+  remainingSlots?: number;
+  note?: string;
+  status: 'waiting' | 'credited';
+  albumId?: string | null;
+  albumName?: string | null;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublicDirectoryAlbumCard {
+  id: string;
+  coverUrl: string;
+  albumName: string;
+  departmentId: string;
+  departmentName: string;
+  institutionId: string;
+  institutionName: string;
+  graduationYear: number;
+  isDemo?: boolean;
+}
+
+export interface PublicDirectoryResponse {
+  enabled: boolean;
+  institutions: Array<{
+    id: string;
+    name: string;
+    shortCode: string;
+    location: string;
+    logoUrl: string;
+    departments: Array<{
+      id: string;
+      name: string;
+      faculty: string;
+      albums: PublicDirectoryAlbumCard[];
+    }>;
+  }>;
 }
 
 // Exactly three automated email categories for normal product communications:

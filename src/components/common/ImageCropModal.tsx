@@ -369,7 +369,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
 
   if (!isOpen || !imageSrc) return null;
 
-  const resolvedTitle = title || (isProfileSubmission ? 'Position Portrait Photo' : 'Crop & Frame Photo');
+  const resolvedTitle = title || (isProfileSubmission ? 'Resize & Position Portrait' : 'Resize & Position Photo');
   const resolvedHelper = helperText || 'Move the frame across your photo to capture the area needed for the album.';
 
   const modalElement = (
@@ -584,7 +584,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
               className="px-5 py-2 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-syne font-bold text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md active:scale-95"
             >
               <Check className="w-3.5 h-3.5 text-slate-950" />
-              <span>Apply &amp; Crop</span>
+              <span>Save Resize</span>
             </button>
           </div>
         </div>

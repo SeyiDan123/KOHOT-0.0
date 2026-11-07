@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   ClassSet, 
@@ -61,12 +61,22 @@ import { FrictionlessSubmitModal } from './FrictionlessSubmitModal';
 import { KeepAlbumSheet } from './KeepAlbumSheet';
 import { DepartmentVideoModal } from './DepartmentVideoModal';
 import { AlbumDisputeModal } from '../admin/AlbumDisputeModal';
+import { PublishAlbumModal } from '../admin/PublishAlbumModal';
 import { AlbumAdminSwitcher } from '../common/AlbumAdminSwitcher';
+import { StoryReadingModal } from '../common/StoryReadingModal';
+import {
+  getAutomaticLeaderStories,
+  getCleanClassSummary,
+  getFromRoleHeading,
+  getProfileStoryText,
+  getStoryCardPreview,
+  getDisplayRoleLabel
+} from '../../utils/storyFormatting';
 import { useFeedback } from '../common/FeedbackSystem';
 import { getAlbumUrl, copyUrlToClipboard } from '../../utils/urlHelper';
 import { SocialIconsRow } from '../common/SocialIconsRow';
 import { GlazedImage } from '../common/GlazedImage';
-import { getYouTubeThumbnailUrl } from '../../utils/youtube';
+import { getYouTubeThumbnailUrl, getVideoPlatformLabel, getUniversalVideoEmbedUrl, extractYouTubeId } from '../../utils/youtube';
 import { updateSocialMetaTags, updateManifestTag } from '../../utils/metaTags';
 import { getAwardVisualConfig } from '../../utils/awardVisuals';
 import { getLuxuryThemeById, DarkLuxuryTheme, LUXURY_PAPER_TEXTURE_SVG } from '../../utils/luxuryThemes';
@@ -218,46 +228,32 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   }, [currentSet.backgroundThemeId, contentOverride?.darkLuxuryBackgrounds, liveThemeOverride]);
 
   // Navigation & Filter States - Respects album admin preview context spot
-  const [activeTab, setActiveTab] = useState<'graduates' | 'memories' | 'awards' | 'voices' | 'story' | 'videos'>(() => {
+  const [activeTab, setActiveTab] = useState<'graduates' | 'memories' | 'awards'>(() => {
     try {
       const previewTab = sessionStorage.getItem('kohot_album_preview_tab');
-      if (previewTab && ['graduates', 'memories', 'awards', 'voices', 'story', 'videos'].includes(previewTab)) {
-        return previewTab as any;
+      if (previewTab && ['graduates', 'memories', 'awards'].includes(previewTab)) {
+        return previewTab as 'graduates' | 'memories' | 'awards';
+      }
+      const savedAlbumTab = sessionStorage.getItem('kohot_album_active_tab');
+      if (savedAlbumTab && ['graduates', 'memories', 'awards'].includes(savedAlbumTab)) {
+        return savedAlbumTab as 'graduates' | 'memories' | 'awards';
       }
     } catch (e) {}
     return 'graduates';
   });
 
-  // Handle in-context preview positioning when navigating from admin dashboard
-  useEffect(() => {
-    try {
-      const previewTab = sessionStorage.getItem('kohot_album_preview_tab');
-      const targetId = sessionStorage.getItem('kohot_album_preview_target_id');
-      if (previewTab) {
-        sessionStorage.removeItem('kohot_album_preview_tab');
-        if (targetId) {
-          sessionStorage.removeItem('kohot_album_preview_target_id');
-          setTimeout(() => {
-            const el = document.getElementById(`student-card-${targetId}`) || 
-                       document.getElementById(`award-card-${targetId}`) ||
-                       document.getElementById(`voice-card-${targetId}`) ||
-                       document.getElementById(`pinned-voice-card-${targetId}`);
-            if (el) {
-              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              return;
-            }
-          }, 350);
-        } else {
-          setTimeout(() => {
-            const clipsBar = document.getElementById('album-clips-bar');
-            if (clipsBar) {
-              clipsBar.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-          }, 350);
-        }
-      }
-    } catch (e) {}
-  }, []);
+  const initialAlbumTabRef = useRef(activeTab);
+  const hasChangedTabOnAlbumRef = useRef(false);
+
+  // Map public album tab to Album Admin Dashboard tab
+  const mapAlbumTabToAdminTab = (tab: 'graduates' | 'memories' | 'awards') => {
+    const reverseMap: Record<string, string> = {
+      graduates: 'students',
+      memories: 'memories',
+      awards: 'awards',
+    };
+    return reverseMap[tab] || 'students';
+  };
 
   // Fallback to first permitted tab if current activeTab is hidden by plaque privacy
   useEffect(() => {
@@ -265,11 +261,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
       if (activeTab === 'graduates' && !showGraduates) {
         if (showMemories) setActiveTab('memories');
         else if (showAwards) setActiveTab('awards');
-        else if (showVoices) setActiveTab('voices');
-        else if (showStory) setActiveTab('story');
       }
     }
-  }, [isPlaqueMode, showGraduates, showMemories, showAwards, showVoices, showStory, activeTab]);
+  }, [isPlaqueMode, showGraduates, showMemories, showAwards, activeTab]);
 
   const [cohortFilter, setCohortFilter] = useState<'all' | 'leaders' | 'members'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -278,11 +272,33 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   const [selectedMemoryCategory, setSelectedMemoryCategory] = useState<string>('All');
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isKeepSheetOpen, setIsKeepSheetOpen] = useState(false);
+  const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
   const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState<DepartmentVideoItem | null>(null);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [isPinnedExpanded, setIsPinnedExpanded] = useState(false);
+
+  const isThreeStepsCompleted = Boolean(
+    (currentSet.convocationDate ||
+      currentSet.reminderSettings?.convocationDate ||
+      currentSet.reminderSettings?.nextReminderDate ||
+      currentSet.publishDraft?.convocationDate) &&
+      (currentSet.nextClassContact?.name?.trim() ||
+        currentSet.publishDraft?.nextClassContact?.name?.trim()) &&
+      (currentSet.nextClassContact?.phoneOrWhatsapp?.trim() ||
+        currentSet.nextClassContact?.email?.trim() ||
+        currentSet.publishDraft?.nextClassContact?.phoneOrWhatsapp?.trim() ||
+        currentSet.publishDraft?.nextClassContact?.email?.trim())
+  );
+
+  const isAlbumPublished = Boolean(
+    (currentSet.isPublished || currentSet.published) &&
+      !currentSet.isUnpublished &&
+      !currentSet.unpublished &&
+      isThreeStepsCompleted
+  );
 
   // Reset pinned voice expanded state on album switch
   useEffect(() => {
@@ -388,7 +404,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     lightboxMomentIndex !== null ||
     Boolean(selectedStudent) ||
     isVideoModalOpen ||
-    isDisputeModalOpen
+    isDisputeModalOpen ||
+    isKeepSheetOpen ||
+    isSubmitModalOpen
   );
 
   const handleLightboxNext = () => {
@@ -416,23 +434,102 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [lightboxMomentIndex, lightboxMomentsList]);
 
-  // Sub-tab state for Moments & Highlights (Moments vs Highlights side-by-side)
-  const [memoriesViewSubTab, setMemoriesViewSubTab] = useState<'moments' | 'highlights'>('moments');
+  // Sub-tab state for Moments & Highlights (Moments vs Highlights side-by-side) - synced with admin dashboard
+  const [memoriesViewSubTab, setMemoriesViewSubTab] = useState<'moments' | 'highlights'>(() => {
+    try {
+      const previewSub = sessionStorage.getItem('kohot_album_preview_subtab');
+      if (previewSub === 'moments' || previewSub === 'highlights') {
+        return previewSub;
+      }
+      const savedSub = sessionStorage.getItem('kohot_admin_dashboard_subtab');
+      if (savedSub === 'moments' || savedSub === 'highlights') {
+        return savedSub;
+      }
+    } catch (e) {}
+    return 'moments';
+  });
 
-  // If activeTab is 'videos' but no videos are present, fallback gracefully to 'graduates'
+  // Mutual context awareness: keep admin dashboard tab & subtab synced whenever user switches sections on the album
   useEffect(() => {
-    if (activeTab === 'videos' && (!currentSet.videos || currentSet.videos.length === 0)) {
-      setActiveTab('graduates');
-    }
-  }, [activeTab, currentSet.videos]);
+    try {
+      sessionStorage.setItem('kohot_album_active_tab', activeTab);
+      sessionStorage.setItem('kohot_admin_dashboard_tab', mapAlbumTabToAdminTab(activeTab));
+    } catch (e) {}
+  }, [activeTab]);
 
-  // Ensure viewing the album as a whole always starts from the hero section at the top
   useEffect(() => {
+    try {
+      sessionStorage.setItem('kohot_admin_dashboard_subtab', memoriesViewSubTab);
+    } catch (e) {}
+  }, [memoriesViewSubTab]);
+
+  // Unified instant positioning on mount: handles Preview context jump or exact scroll restoration without delay
+  useLayoutEffect(() => {
+    try {
+      const previewTab = sessionStorage.getItem('kohot_album_preview_tab');
+      const targetId = sessionStorage.getItem('kohot_album_preview_target_id');
+      sessionStorage.removeItem('kohot_album_preview_subtab');
+
+      if (previewTab) {
+        sessionStorage.removeItem('kohot_album_preview_tab');
+        if (targetId) {
+          sessionStorage.removeItem('kohot_album_preview_target_id');
+          const scrollToTarget = () => {
+            const el =
+              document.getElementById(`student-card-${targetId}`) ||
+              document.getElementById(`award-card-${targetId}`) ||
+              document.getElementById(`voice-card-${targetId}`) ||
+              document.getElementById(`pinned-voice-card-${targetId}`);
+            if (el) {
+              el.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'center' });
+              return true;
+            }
+            return false;
+          };
+          if (!scrollToTarget()) {
+            requestAnimationFrame(scrollToTarget);
+          }
+          return;
+        }
+
+        const scrollToClips = () => {
+          const clipsBar = document.getElementById('album-clips-bar');
+          if (clipsBar) {
+            const rect = clipsBar.getBoundingClientRect();
+            const targetY = Math.max(0, window.scrollY + rect.top - 62);
+            window.scrollTo({ top: targetY, left: 0, behavior: 'instant' });
+          }
+        };
+        scrollToClips();
+        requestAnimationFrame(scrollToClips);
+        return;
+      }
+
+      const savedPos = sessionStorage.getItem('kohot_album_scroll_pos');
+      if (savedPos) {
+        const pos = parseInt(savedPos, 10);
+        if (!isNaN(pos) && pos > 0) {
+          window.scrollTo({ top: pos, left: 0, behavior: 'instant' });
+          requestAnimationFrame(() => {
+            window.scrollTo({ top: pos, left: 0, behavior: 'instant' });
+          });
+          return;
+        }
+      }
+    } catch (e) {}
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   }, [currentSet.id]);
 
-  // Ensure switching between album clips (people, moments, etc.) begins instantly from clips start
-  const handleTabChange = (tab: 'graduates' | 'memories' | 'awards' | 'voices' | 'story' | 'videos') => {
+  // Ensure switching between album clips (people, memories, awards) begins instantly from clips start & marks mutual context change
+  const handleTabChange = (tab: 'graduates' | 'memories' | 'awards') => {
+    if (tab !== activeTab) {
+      hasChangedTabOnAlbumRef.current = true;
+      try {
+        sessionStorage.setItem('kohot_admin_dashboard_tab', mapAlbumTabToAdminTab(tab));
+        sessionStorage.setItem('kohot_admin_section_changed_from_album', '1');
+        sessionStorage.removeItem('kohot_admin_dashboard_scroll_pos');
+      } catch (e) {}
+    }
     setActiveTab(tab);
     // Instant transition - scroll to clips content so the clicked section appears immediately in view
     const clipsBar = document.getElementById('album-clips-bar');
@@ -455,7 +552,14 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
   // Only display verified & approved students in the public album
   const approvedStudents = useMemo(() => {
-    return (currentSet.students || []).filter((s) => s.approved !== false);
+    return (currentSet.students || []).filter(
+      (s) =>
+        s.approved !== false &&
+        s.submissionStatus !== 'removed' &&
+        s.submissionStatus !== 'declined' &&
+        s.submissionStatus !== 'pending' &&
+        s.submissionStatus !== 'changes_requested'
+    );
   }, [currentSet.students]);
 
   // Total count of leaders among approved profiles
@@ -535,20 +639,19 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     return [...list].sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
   }, [currentSet.memories, selectedMemoryCategory]);
 
-  const handleShareAlbum = async () => {
+  const handleShareAlbum = () => {
+    if (!isAlbumPublished) {
+      setIsPublishModalOpen(true);
+      return;
+    }
+    setIsCopied(false);
+    setIsShareModalOpen(true);
+  };
+
+  const handleCopyShareLink = async () => {
     const albumUrl = getAlbumUrl(currentSet);
-    if (typeof navigator !== 'undefined' && 'share' in navigator) {
-      try {
-        await navigator.share({
-          title: `${currentSet.departmentName} - Class of ${currentSet.graduationYear} Album`,
-          text: `Explore the permanent Class Album for ${currentSet.departmentName} (${currentSet.institutionName}) on KoHot!`,
-          url: albumUrl,
-        });
-      } catch (err) {
-        // Native share was dismissed or cancelled by user, ignore
-      }
-    } else {
-      await copyUrlToClipboard(albumUrl);
+    const copied = await copyUrlToClipboard(albumUrl);
+    if (copied) {
       setIsCopied(true);
       showSuccess('Album link copied to clipboard.', 'Share it with your classmates and alumni.');
       setTimeout(() => setIsCopied(false), 2500);
@@ -556,7 +659,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   };
 
   const handleAddNewStudent = (newStudent: StudentProfile) => {
-    if (isViewingOtherAlbum || !isCurrentAlbumOwner) return;
     const hasTitle = isLeaderProfile(newStudent);
     const preparedStudent: StudentProfile = {
       ...newStudent,
@@ -571,26 +673,17 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     onUpdateSet(updated);
   };
 
-  // Restore scroll position when returning from Manage Album
-  useEffect(() => {
-    try {
-      const savedPos = sessionStorage.getItem('kohot_album_scroll_pos');
-      if (savedPos) {
-        const pos = parseInt(savedPos, 10);
-        if (!isNaN(pos) && pos > 0) {
-          requestAnimationFrame(() => {
-            window.scrollTo({ top: pos, behavior: 'instant' });
-          });
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-  }, []);
-
   const handleManageAlbumWithScroll = () => {
     try {
       sessionStorage.setItem('kohot_album_scroll_pos', String(window.scrollY));
+      const mappedAdminTab = mapAlbumTabToAdminTab(activeTab);
+      const prevAdminTab = sessionStorage.getItem('kohot_admin_dashboard_tab');
+      sessionStorage.setItem('kohot_admin_dashboard_tab', mappedAdminTab);
+      sessionStorage.setItem('kohot_admin_dashboard_subtab', memoriesViewSubTab);
+      if (hasChangedTabOnAlbumRef.current || activeTab !== initialAlbumTabRef.current || (prevAdminTab && prevAdminTab !== mappedAdminTab)) {
+        sessionStorage.setItem('kohot_admin_section_changed_from_album', '1');
+        sessionStorage.removeItem('kohot_admin_dashboard_scroll_pos');
+      }
     } catch (e) {
       // ignore
     }
@@ -739,29 +832,43 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
             <button
               id="album-keep-btn"
-              onClick={() => setIsKeepSheetOpen(true)}
+              onClick={() => {
+                if (!isAlbumPublished) {
+                  setIsPublishModalOpen(true);
+                  return;
+                }
+                setIsKeepSheetOpen(true);
+              }}
               className={`px-3.5 py-1.5 sm:py-2 rounded-full border font-tech text-xs tracking-wider uppercase font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-md hover:scale-105 active:scale-95 shrink-0 ${
-                isLightMode 
-                  ? 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900' 
-                  : 'bg-white/[0.08] hover:bg-white/[0.15] border-white/20 text-white'
+                !isAlbumPublished
+                  ? isLightMode
+                    ? 'bg-zinc-100/80 border-zinc-300 text-zinc-500 hover:text-zinc-900'
+                    : 'bg-white/[0.05] border-white/15 text-zinc-400 hover:text-white'
+                  : isLightMode 
+                    ? 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900' 
+                    : 'bg-white/[0.08] hover:bg-white/[0.15] border-white/20 text-white'
               }`}
-              title="Keep this album"
+              title={isAlbumPublished ? 'Save this album' : 'Publish album to enable Save'}
             >
               <Bookmark className={`w-3.5 h-3.5 ${isLightMode ? 'text-zinc-700' : 'text-[#d4af37]'}`} />
-              <span>KEEP</span>
+              <span>Save</span>
             </button>
 
             <button
               id="album-share-btn"
               onClick={handleShareAlbum}
               className={`px-3.5 py-1.5 sm:py-2 rounded-full font-tech text-xs tracking-wider uppercase font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md hover:scale-105 active:scale-95 shrink-0 ${
-                isLightMode 
-                  ? 'bg-zinc-900 hover:bg-zinc-800 text-white' 
-                  : 'bg-white hover:bg-zinc-200 text-black'
+                !isAlbumPublished
+                  ? isLightMode
+                    ? 'bg-zinc-200 hover:bg-zinc-300 text-zinc-700 border border-zinc-300'
+                    : 'bg-white/15 hover:bg-white/25 text-zinc-200 border border-white/20'
+                  : isLightMode 
+                    ? 'bg-zinc-900 hover:bg-zinc-800 text-white' 
+                    : 'bg-white hover:bg-zinc-200 text-black'
               }`}
-              title="Share this album with classmates and alumni"
+              title={isAlbumPublished ? 'Share this album with classmates and alumni' : 'Publish album to enable Share'}
             >
-              <Share2 className={`w-3.5 h-3.5 ${isLightMode ? 'text-white' : 'text-black'}`} />
+              <Share2 className={`w-3.5 h-3.5 ${!isAlbumPublished ? 'opacity-80' : isLightMode ? 'text-white' : 'text-black'}`} />
               <span>Share</span>
             </button>
           </div>
@@ -930,12 +1037,15 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             : 'bg-[#060709]/95 border-white/[0.08] text-white'
         }`}
       >
-        <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 shrink-0">
+        <div className="max-w-5xl mx-auto flex items-center justify-center gap-4">
+          <div className="flex items-center justify-center gap-2 shrink-0 mx-auto">
             {showGraduates && (
               <button
                 id="tab-btn-people"
-                onClick={() => handleTabChange('graduates')}
+                onClick={(e) => {
+                  handleTabChange('graduates');
+                  e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                }}
                 className={`px-4 py-2 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
                   activeTab === 'graduates'
                     ? isLightMode
@@ -954,7 +1064,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             {showMemories && (
               <button
                 id="tab-btn-moments"
-                onClick={() => handleTabChange('memories')}
+                onClick={(e) => {
+                  handleTabChange('memories');
+                  e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                }}
                 className={`px-4 py-2 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
                   activeTab === 'memories'
                     ? isLightMode
@@ -966,14 +1079,17 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 }`}
               >
                 <Camera className="w-3.5 h-3.5" />
-                <span>Moments</span>
+                <span>Memories</span>
               </button>
             )}
 
             {showAwards && (
               <button
                 id="tab-btn-awards"
-                onClick={() => handleTabChange('awards')}
+                onClick={(e) => {
+                  handleTabChange('awards');
+                  e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                }}
                 className={`px-4 py-2 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
                   activeTab === 'awards'
                     ? isLightMode
@@ -986,44 +1102,6 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               >
                 <Trophy className="w-3.5 h-3.5" />
                 <span>Awards</span>
-              </button>
-            )}
-
-            {showVoices && (
-              <button
-                id="tab-btn-voices"
-                onClick={() => handleTabChange('voices')}
-                className={`px-4 py-2 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'voices'
-                    ? isLightMode
-                      ? 'bg-zinc-950 text-white font-bold shadow-md active-clip ring-1 ring-black'
-                      : 'bg-white text-black font-bold shadow-md active-clip'
-                    : isLightMode
-                      ? 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
-                      : 'text-zinc-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Quote className="w-3.5 h-3.5" />
-                <span>Final Thoughts</span>
-              </button>
-            )}
-
-            {showStory && (
-              <button
-                id="tab-btn-story"
-                onClick={() => handleTabChange('story')}
-                className={`px-4 py-2 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'story'
-                    ? isLightMode
-                      ? 'bg-zinc-950 text-white font-bold shadow-md active-clip ring-1 ring-black'
-                      : 'bg-white text-black font-bold shadow-md active-clip'
-                    : isLightMode
-                      ? 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
-                      : 'text-zinc-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>Our Story</span>
               </button>
             )}
           </div>
@@ -1065,12 +1143,15 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           >
             {/* Top Row: Category Filter Clips */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                 {/* Filter Clip 1: ALL */}
                 <button
                   id="filter-clip-all"
-                  onClick={() => setCohortFilter('all')}
-                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                  onClick={(e) => {
+                    setCohortFilter('all');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
                     cohortFilter === 'all'
                       ? isLightMode
                         ? 'bg-slate-900 text-white font-bold shadow-sm'
@@ -1094,8 +1175,11 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 {/* Filter Clip 2: LEADERS */}
                 <button
                   id="filter-clip-leaders"
-                  onClick={() => setCohortFilter('leaders')}
-                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                  onClick={(e) => {
+                    setCohortFilter('leaders');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
                     cohortFilter === 'leaders'
                       ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold shadow-sm ring-2 ring-amber-500/40'
                       : isLightMode
@@ -1157,9 +1241,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           >
             {filteredStudents.map((student, index) => {
               const isLeader = isLeaderProfile(student);
-              const rankNumber = cohortFilter === 'leaders' 
-                ? index + 1 
-                : (typeof student.leaderOrder === 'number' ? student.leaderOrder : undefined);
+              const twoLineQuote = (student.quote || student.bio || '').trim();
+              const roleTag = student.position && student.position.toLowerCase() !== 'member' ? student.position : '';
 
               return (
                 <div
@@ -1197,8 +1280,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                       <div className="absolute inset-0 bg-gradient-to-t from-[#18181b] via-[#18181b]/25 to-transparent opacity-80 group-hover/card:opacity-50 transition-opacity duration-300 pointer-events-none" />
                     )}
 
-                    {/* Position pill on photo */}
-                    {student.position && (
+                    {/* Role tag pill on photo */}
+                    {roleTag && (
                       <div className="absolute bottom-2.5 left-2.5 right-2.5 z-20">
                         <span className={`inline-block px-2.5 py-0.5 max-w-full truncate text-[10px] font-mono-tech uppercase tracking-wider backdrop-blur-sm rounded-full transition-all duration-300 ${
                           cohortFilter === 'leaders' || isLeader
@@ -1209,7 +1292,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                               ? 'text-slate-800 bg-white/90 border border-slate-300 shadow-sm'
                               : 'text-white bg-black/80 border border-white/15 group-hover/card:border-white/30'
                         }`}>
-                          {student.position}
+                          {roleTag}
                         </span>
                       </div>
                     )}
@@ -1229,7 +1312,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Student Details: Full Name, Nickname */}
+                  {/* Grid Card Body: Name, Nickname, and Two-Line Quote only */}
                   <div className={`p-3 sm:p-4 flex-1 flex flex-col justify-between relative z-20 ${
                     isLightMode ? 'bg-white' : 'bg-[#18181b]'
                   }`}>
@@ -1248,11 +1331,11 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                       )}
                     </div>
 
-                    {student.quote && (
+                    {twoLineQuote && (
                       <p className={`font-body italic text-[11px] mt-2.5 line-clamp-2 leading-relaxed transition-colors ${
                         isLightMode ? 'text-slate-600' : 'text-zinc-400 group-hover/card:text-zinc-300'
                       }`}>
-                        "{student.quote}"
+                        “{twoLineQuote.replace(/^["“”']+|["“”']+$/g, '')}”
                       </p>
                     )}
                   </div>
@@ -1303,353 +1386,300 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
       )}
 
       {/* =========================================================================
-          TAB 2: HORIZONTAL TOUCH-SWIPEABLE MEMORIES & HIGHLIGHTS SECTION
+          TAB 2: UNIFIED MEMORIES VIEW (KEPT MOUNTED FOR INSTANT ZERO-DELAY DISPLAY)
           ========================================================================= */}
-      {activeTab === 'memories' && (
-        <section 
-          id="memories-section"
-          className="w-full max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14 space-y-8 animate-slide-up-fade"
-        >
-          {/* Section Header - Centralized */}
-          <div className="text-center space-y-1">
-            <h2 className={`font-syne font-bold text-2xl sm:text-3xl tracking-tight ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>
-              MOMENTS &amp; HIGHLIGHTS
-            </h2>
-            <p className={`font-body text-xs sm:text-sm max-w-lg mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-              The days, nights and milestones that defined this class.
-            </p>
-          </div>
+      {showMemories && (() => {
+        const highlightVideos = (currentSet.videos || []).filter((v) =>
+          Boolean((v.youtubeUrl || v.videoUrl || '').trim())
+        );
+        const hasVideos = highlightVideos.length > 0;
+        const sortedMemories = [...(currentSet.memories || [])].sort(
+          (a, b) => (a.order ?? 999) - (b.order ?? 999)
+        );
+        const hasPhotoCategories = sortedMemories.length > 0;
 
-          {/* Side-by-side buttons for Moments vs Highlights - Centralized */}
-          <div className={`flex items-center justify-center gap-3 border-b pb-6 ${isLightMode ? 'border-zinc-200' : 'border-white/10'}`}>
-            <button
-              type="button"
-              id="album-subtab-moments-btn"
-              onClick={() => setMemoriesViewSubTab('moments')}
-              className={`px-5 py-2.5 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
-                memoriesViewSubTab === 'moments'
-                  ? isLightMode
-                    ? 'bg-zinc-900 text-white font-bold shadow-lg scale-105'
-                    : 'bg-white text-black font-bold shadow-lg scale-105'
-                  : isLightMode
-                    ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-600 hover:text-zinc-900 border border-zinc-200'
-                    : 'bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-              }`}
-            >
-              <Camera className="w-3.5 h-3.5" />
-              <span>Moments</span>
-            </button>
+        return (
+          <section
+            id="memories-section"
+            aria-hidden={activeTab !== 'memories'}
+            className={
+              activeTab === 'memories'
+                ? 'w-full max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14 space-y-12'
+                : 'fixed -left-[9999px] top-0 w-[1024px] h-[600px] overflow-hidden opacity-0 pointer-events-none select-none'
+            }
+          >
+            {/* Section Header - Centralized */}
+            <div className="text-center space-y-1">
+              <h2 className={`font-syne font-bold text-2xl sm:text-3xl tracking-tight ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>
+                MEMORIES
+              </h2>
+              <p className={`font-body text-xs sm:text-sm max-w-lg mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                The days, nights and milestones that defined this class.
+              </p>
+            </div>
 
-            <button
-              type="button"
-              id="album-subtab-highlights-btn"
-              onClick={() => setMemoriesViewSubTab('highlights')}
-              className={`px-5 py-2.5 rounded-full font-tech text-xs tracking-wider uppercase transition-all flex items-center gap-2 cursor-pointer ${
-                memoriesViewSubTab === 'highlights'
-                  ? isLightMode
-                    ? 'bg-zinc-900 text-white font-bold shadow-lg scale-105'
-                    : 'bg-white text-black font-bold shadow-lg scale-105'
-                  : isLightMode
-                    ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-600 hover:text-zinc-900 border border-zinc-200'
-                    : 'bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
-              }`}
-            >
-              <Play className="w-3.5 h-3.5" />
-              <span>Highlights</span>
-            </button>
-          </div>
-
-          {/* =========================================================================
-              HIGHLIGHTS (VIDEO HIGHLIGHTS SUB-VIEW)
-              ========================================================================= */}
-          {memoriesViewSubTab === 'highlights' && (
-            <div id="highlights-view-showcase" className="space-y-6 animate-fadeIn">
-              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
-                <div>
-                  <span className={`font-mono-tech text-[10px] uppercase tracking-[0.2em] font-semibold flex items-center gap-1.5 ${
-                    isLightMode ? 'text-red-600 font-bold' : 'text-red-400 font-semibold'
-                  }`}>
-                    <Play className="w-3 h-3 fill-red-500" />
-                    <span>CINEMATIC HIGHLIGHTS</span>
-                  </span>
-                  <h2 className={`font-syne font-bold text-2xl sm:text-3xl tracking-tight mt-1 ${
-                    isLightMode ? 'text-zinc-900' : 'text-white'
-                  }`}>
-                    Highlights
-                  </h2>
-                  <p className={`font-body text-xs sm:text-sm font-medium mt-1 ${
-                    isLightMode ? 'text-zinc-600' : 'text-zinc-400'
-                  }`}>
-                    Documentary clips, convocation speeches, and video retrospectives.
-                  </p>
-                </div>
-                <span className={`text-xs font-mono-tech ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                  {currentSet.videos?.length || 0} {(currentSet.videos?.length || 0) === 1 ? 'Feature Highlight' : 'Feature Highlights'}
-                </span>
+            {!hasVideos && !hasPhotoCategories && (
+              <div
+                className={`text-center py-16 px-6 border border-dashed rounded-3xl space-y-3 ${
+                  isLightMode ? 'bg-white border-zinc-200 text-zinc-900' : 'bg-[#18181b] border-white/10 text-white'
+                }`}
+              >
+                <Camera className="w-8 h-8 text-zinc-500 mx-auto" />
+                <p className={`font-syne text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Memories Captured Yet</p>
+                <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                  Highlight videos and milestone celebrations like Sign-out Day, Cultural Day, and Convocation memories will appear here.
+                </p>
               </div>
+            )}
 
-              {(!currentSet.videos || currentSet.videos.length === 0) ? (
-                <div className={`text-center py-16 px-4 rounded-3xl border space-y-3 ${
-                  isLightMode ? 'bg-white border-zinc-200 text-zinc-900 shadow-sm' : 'bg-[#18181b] border-white/10 text-white'
-                }`}>
-                  <div className={`w-12 h-12 rounded-full border flex items-center justify-center mx-auto ${
-                    isLightMode ? 'bg-zinc-100 border-zinc-200 text-zinc-600' : 'bg-white/5 border-white/10 text-zinc-400'
-                  }`}>
-                    <Play className="w-5 h-5" />
-                  </div>
-                  <h4 className={`font-syne font-bold text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Video Highlights Yet</h4>
-                  <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                    The Class Representative has not embedded any video highlights for this set yet. Check back soon for documentary footage and speeches!
-                  </p>
+            {/* 1. HIGHLIGHTS SECTION (Horizontally Swipeable, No Thumbnail, Autoplays First 10s on Repeat) */}
+            {hasVideos && (
+              <div id="highlights-view-showcase" className="space-y-4">
+                <div className={`flex items-center justify-between gap-3 border-b pb-3 ${isLightMode ? 'border-zinc-200' : 'border-white/10'}`}>
+                  <h3
+                    className={`font-syne font-bold text-xl sm:text-2xl tracking-tight ${
+                      isLightMode ? 'text-zinc-900' : 'text-white'
+                    }`}
+                  >
+                    Highlights
+                  </h3>
                 </div>
-              ) : (
-                <div className={`grid gap-8 ${currentSet.videos.length === 1 ? 'grid-cols-1 max-w-4xl mx-auto' : 'grid-cols-1 lg:grid-cols-2'}`}>
-                  {currentSet.videos.map((vid) => {
-                    const thumb = vid.thumbnailUrl || getYouTubeThumbnailUrl(vid.youtubeUrl);
+
+                {/* Horizontally Swipeable Minimal Highlights Carousel (Same Size as Moments Photo Cards) */}
+                <div
+                  className="flex items-start gap-4 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
+                >
+                  {highlightVideos.map((vid) => {
+                    const ytId = extractYouTubeId(vid.youtubeUrl);
+                    const embedInfo = getUniversalVideoEmbedUrl(vid.youtubeUrl);
+                    const streamSrc = ytId
+                      ? `https://www.youtube.com/embed/${ytId}?autoplay=1&mute=1&controls=0&showinfo=0&rel=0&loop=1&playlist=${ytId}&start=0&end=10&playsinline=1&modestbranding=1`
+                      : embedInfo.embedUrl;
+
                     return (
                       <div
                         key={vid.id}
                         id={`video-card-${vid.id}`}
-                        className={`group border rounded-3xl overflow-hidden shadow-2xl transition-all flex flex-col w-full ${
-                          isLightMode 
-                            ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400 shadow-md' 
-                            : 'bg-[#18181b] border-white/15 text-white hover:border-white/35 shadow-2xl'
+                        onClick={() => {
+                          setSelectedVideo(vid);
+                          setIsVideoModalOpen(true);
+                        }}
+                        className={`group snap-start shrink-0 w-[260px] sm:w-[300px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border cursor-pointer ${
+                          isLightMode
+                            ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400'
+                            : 'bg-[#0e1017] border-white/[0.08] text-white hover:border-white/30'
                         }`}
                       >
-                        {/* Generous 16:9 Clickable Thumbnail */}
-                        <div
-                          onClick={() => {
-                            setSelectedVideo(vid);
-                            setIsVideoModalOpen(true);
-                          }}
-                          className="relative aspect-video w-full bg-black overflow-hidden cursor-pointer"
-                        >
-                          <GlazedImage
-                            src={thumb}
-                            alt={vid.title}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 filter contrast-[1.05] animate-ken-burns"
-                            containerClassName="w-full h-full"
-                          />
-                          <div className="absolute inset-0 bg-black/35 group-hover:bg-black/15 transition-colors pointer-events-none" />
+                        {/* Strictly Square Video Container Matching Moments Photo Cards (Direct Video Stream Only, No Thumbnail) */}
+                        <div className="relative aspect-square w-full overflow-hidden bg-black">
+                          {streamSrc && (
+                            <iframe
+                              src={streamSrc}
+                              title={vid.title}
+                              loading="eager"
+                              referrerPolicy="strict-origin-when-cross-origin"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              className="absolute top-1/2 left-1/2 w-[185%] h-[185%] -translate-x-1/2 -translate-y-1/2 pointer-events-none border-0"
+                              tabIndex={-1}
+                            />
+                          )}
 
-                          {/* Center Play Button Overlay */}
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-2xl group-hover:scale-110 transition-transform group-hover:bg-red-500">
-                              <Play className="w-7 h-7 sm:w-8 sm:h-8 fill-white ml-1" />
-                            </div>
-                          </div>
+                          <div className="kohot-media-scrim absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
 
-                          {/* Video Date / Tag Badge */}
+                          {/* Date Badge */}
                           {vid.dateStr && (
-                            <div className="absolute top-4 left-4">
-                              <span className="px-3 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/20 text-xs font-mono-tech text-white uppercase tracking-wider font-semibold">
+                            <div className="absolute top-3 left-3 pointer-events-none">
+                              <span className="px-2.5 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 text-[10px] font-mono-tech text-white uppercase tracking-wider font-semibold">
                                 {vid.dateStr}
                               </span>
                             </div>
                           )}
 
-                          <div className="absolute bottom-4 right-4">
-                            <span className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md text-xs font-mono-tech text-zinc-200 flex items-center gap-1.5">
-                              <Youtube className="w-4 h-4 text-red-500" />
-                              <span>Watch Highlight</span>
-                            </span>
+                          {/* Minimal Center Play Button Overlay */}
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#ef4444]/95 text-white flex items-center justify-center shadow-2xl group-hover:scale-110 transition-transform">
+                              <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Card Content & Details */}
-                        <div className={`p-6 sm:p-7 flex-1 flex flex-col justify-between space-y-4 ${
-                          isLightMode ? 'bg-white' : 'bg-[#18181b]'
-                        }`}>
-                          <div className="space-y-2">
-                            <h3
-                              onClick={() => {
-                                setSelectedVideo(vid);
-                                setIsVideoModalOpen(true);
-                              }}
-                              className={`font-syne font-bold text-xl sm:text-2xl transition-colors cursor-pointer leading-tight ${
-                                isLightMode ? 'text-zinc-900 hover:text-red-600' : 'text-white group-hover:text-red-400'
-                              }`}
-                            >
+                          {/* Minimal Bottom Title Overlay */}
+                          <div className="absolute inset-x-3 bottom-3 pointer-events-none">
+                            <h4 className="kohot-keep-color font-syne font-bold text-xs sm:text-sm text-white leading-snug line-clamp-2 drop-shadow-md">
                               {vid.title}
-                            </h3>
-                            {vid.description && (
-                              <p className={`font-body text-xs sm:text-sm leading-relaxed line-clamp-3 ${
-                                isLightMode ? 'text-zinc-700' : 'text-zinc-400'
-                              }`}>
-                                {vid.description}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className={`pt-4 flex items-center justify-between border-t text-xs font-mono-tech ${
-                            isLightMode ? 'border-zinc-200' : 'border-white/10'
-                          }`}>
-                            <button
-                              onClick={() => {
-                                setSelectedVideo(vid);
-                                setIsVideoModalOpen(true);
-                              }}
-                              className={`px-5 py-2.5 rounded-full font-bold text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md hover:scale-105 ${
-                                isLightMode 
-                                  ? 'bg-zinc-900 text-white hover:bg-zinc-800' 
-                                  : 'bg-white text-black hover:bg-zinc-200'
-                              }`}
-                            >
-                              <Play className={`w-3.5 h-3.5 ${isLightMode ? 'fill-white' : 'fill-black'}`} />
-                              <span>Play Highlight</span>
-                            </button>
-
-                            <a
-                              href={vid.youtubeUrl.startsWith('http') ? vid.youtubeUrl : `https://www.youtube.com/watch?v=${vid.youtubeUrl}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={`flex items-center gap-1.5 transition-colors ${
-                                isLightMode ? 'text-zinc-600 hover:text-zinc-900' : 'text-zinc-400 hover:text-white'
-                              }`}
-                            >
-                              <span>Open in YouTube</span>
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
+                            </h4>
                           </div>
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* =========================================================================
-              MOMENTS (EVENT CATEGORIES / CHAPTERS SUB-VIEW)
-              ========================================================================= */}
-          {memoriesViewSubTab === 'moments' && (
-            <div id="moments-view-showcase" className="space-y-8 animate-fadeIn">
-            {/* Event Chapters without top filter clips */}
-            {(!currentSet.memories || currentSet.memories.length === 0) ? (
-              <div className={`text-center py-16 px-6 border border-dashed rounded-3xl space-y-3 ${
-                isLightMode ? 'bg-white border-zinc-200 text-zinc-900' : 'bg-[#18181b] border-white/10 text-white'
-              }`}>
-                <Camera className="w-8 h-8 text-zinc-500 mx-auto" />
-                <p className={`font-syne text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Moments Captured Yet</p>
-                <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                  Milestone celebrations like Sign-out Day, Cultural Day, and Convocation memories will be highlighted here.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-12">
-              {currentSet.memories.map((event) => (
-                <div key={event.id} id={`memory-event-${event.id}`} className="space-y-3">
-                  <div className={`border-b pb-3.5 ${
-                    isLightMode ? 'border-zinc-200' : 'border-white/10'
-                  }`}>
-                    <div className="space-y-1 text-left">
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <h3 className={`font-syne font-bold text-xl sm:text-2xl tracking-tight leading-tight ${
-                          isLightMode ? 'text-zinc-900' : 'text-white'
-                        }`}>
-                          {event.title}
-                        </h3>
-                        {event.dateStr && (
-                          <span className={`text-xs font-mono-tech px-2.5 py-0.5 rounded-full border ${
-                            isLightMode 
-                              ? 'bg-zinc-100 text-zinc-700 border-zinc-200' 
-                              : 'bg-white/5 text-zinc-400 border-white/10'
-                          }`}>
-                            {event.dateStr}
-                          </span>
-                        )}
-                      </div>
-                      {event.caption && (
-                        <p className={`font-body text-xs sm:text-sm max-w-2xl leading-relaxed ${
-                          isLightMode ? 'text-zinc-600' : 'text-zinc-300'
-                        }`}>
-                          {event.caption}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Horizontal Touch-Swipeable Carousel */}
-                  <div 
-                    id={`carousel-${event.id}`}
-                    className="flex items-start gap-4 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
-                  >
-                    {(event.images || []).map((img, imgIdx) => {
-                      const displayCaption = (img.caption && img.caption.trim().length > 0) ? img.caption.trim() : event.title;
-                      return (
-                        <div
-                          key={img.id}
-                          className={`snap-start shrink-0 w-[260px] sm:w-[300px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border ${
-                            isLightMode 
-                              ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400' 
-                              : 'bg-[#0e1017] border-white/[0.08] text-white hover:border-white/30'
-                          }`}
-                        >
-                          {/* Strictly Square Photo Container */}
-                          <div 
-                            onClick={() => {
-                              const allMoments: Array<{
-                                id: string;
-                                url: string;
-                                caption?: string;
-                                eventId: string;
-                                title: string;
-                                categoryTitle: string;
-                                categoryIndex: number;
-                                totalCategories: number;
-                                imageIndexInCategory: number;
-                                totalImagesInCategory: number;
-                                dateStr?: string;
-                              }> = [];
-
-                              (currentSet.memories || []).forEach((cat, catIdx) => {
-                                (cat.images || []).forEach((im, iIdx) => {
-                                  allMoments.push({
-                                    id: im.id,
-                                    url: im.url,
-                                    caption: (im.caption && im.caption.trim().length > 0) ? im.caption.trim() : cat.title,
-                                    eventId: cat.id,
-                                    title: cat.title,
-                                    categoryTitle: cat.title,
-                                    categoryIndex: catIdx,
-                                    totalCategories: (currentSet.memories || []).length,
-                                    imageIndexInCategory: iIdx,
-                                    totalImagesInCategory: (cat.images || []).length,
-                                    dateStr: im.dateTime || cat.dateStr || undefined,
-                                  });
-                                });
-                              });
-
-                              const targetIdx = allMoments.findIndex((m) => m.id === img.id);
-                              setLightboxMomentsList(allMoments);
-                              setLightboxMomentIndex(targetIdx >= 0 ? targetIdx : 0);
-                            }}
-                            className="relative aspect-square w-full overflow-hidden bg-black cursor-pointer group"
-                          >
-                            <GlazedImage
-                              src={img.url}
-                              alt={displayCaption}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                              containerClassName="w-full h-full"
-                            />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60 group-hover:opacity-80 transition-opacity pointer-events-none" />
-                            <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-[10px] font-mono-tech text-white/80 border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                              Click to expand
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
               </div>
             )}
-          </div>
-        )}
-        </section>
-      )}
+
+            {/* 2. MOMENTS SECTION (Photo Categories in Saved Order, No Category Filter Clips, Subtle Full-View Hint) */}
+            {hasPhotoCategories && (
+              <div id="moments-view-showcase" className="space-y-8">
+                <div className={`flex items-baseline justify-between gap-3 border-b pb-3 ${isLightMode ? 'border-zinc-200' : 'border-white/10'}`}>
+                  <h3
+                    className={`font-syne font-bold text-xl sm:text-2xl tracking-tight ${
+                      isLightMode ? 'text-zinc-900' : 'text-white'
+                    }`}
+                  >
+                    Moments
+                  </h3>
+                  <span className={`font-mono-tech text-[11px] ${isLightMode ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                    Tap any photo for full view
+                  </span>
+                </div>
+
+                <div className="space-y-12">
+                  {sortedMemories.map((event) => (
+                    <div key={event.id} id={`memory-event-${event.id}`} className="space-y-3">
+                      <div
+                        className={`border-b pb-3.5 ${
+                          isLightMode ? 'border-zinc-200' : 'border-white/10'
+                        }`}
+                      >
+                        <div className="space-y-1 text-left">
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <h4
+                              className={`font-syne font-bold text-lg sm:text-xl tracking-tight leading-tight ${
+                                isLightMode ? 'text-zinc-900' : 'text-white'
+                              }`}
+                            >
+                              {event.title}
+                            </h4>
+                            {event.dateStr && (
+                              <span
+                                className={`text-xs font-mono-tech px-2.5 py-0.5 rounded-full border ${
+                                  isLightMode
+                                    ? 'bg-zinc-100 text-zinc-700 border-zinc-200'
+                                    : 'bg-white/5 text-zinc-400 border-white/10'
+                                }`}
+                              >
+                                {event.dateStr}
+                              </span>
+                            )}
+                          </div>
+                          {event.caption && (
+                            <p
+                              className={`font-body text-xs sm:text-sm max-w-2xl leading-relaxed ${
+                                isLightMode ? 'text-zinc-600' : 'text-zinc-300'
+                              }`}
+                            >
+                              {event.caption}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Horizontal Touch-Swipeable Carousel */}
+                      <div
+                        id={`carousel-${event.id}`}
+                        className="flex items-start gap-4 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
+                      >
+                        {(event.images || []).map((img) => {
+                          const displayCaption =
+                            img.caption && img.caption.trim().length > 0 ? img.caption.trim() : event.title;
+                          return (
+                            <div
+                              key={img.id}
+                              className={`snap-start shrink-0 w-[260px] sm:w-[300px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border ${
+                                isLightMode
+                                  ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400'
+                                  : 'bg-[#0e1017] border-white/[0.08] text-white hover:border-white/30'
+                              }`}
+                            >
+                              {/* Strictly Square Photo Container */}
+                              <div
+                                onClick={() => {
+                                  const allMoments: Array<{
+                                    id: string;
+                                    url: string;
+                                    caption?: string;
+                                    eventId: string;
+                                    title: string;
+                                    categoryTitle: string;
+                                    categoryIndex: number;
+                                    totalCategories: number;
+                                    imageIndexInCategory: number;
+                                    totalImagesInCategory: number;
+                                    dateStr?: string;
+                                  }> = [];
+
+                                  sortedMemories.forEach((cat, catIdx) => {
+                                    (cat.images || []).forEach((im, iIdx) => {
+                                      allMoments.push({
+                                        id: im.id,
+                                        url: im.url,
+                                        caption:
+                                          im.caption && im.caption.trim().length > 0 ? im.caption.trim() : cat.title,
+                                        eventId: cat.id,
+                                        title: cat.title,
+                                        categoryTitle: cat.title,
+                                        categoryIndex: catIdx,
+                                        totalCategories: sortedMemories.length,
+                                        imageIndexInCategory: iIdx,
+                                        totalImagesInCategory: (cat.images || []).length,
+                                        dateStr: im.dateTime || cat.dateStr || undefined,
+                                      });
+                                    });
+                                  });
+
+                                  const targetIdx = allMoments.findIndex((m) => m.id === img.id);
+                                  setLightboxMomentsList(allMoments);
+                                  setLightboxMomentIndex(targetIdx >= 0 ? targetIdx : 0);
+                                }}
+                                className="relative aspect-square w-full overflow-hidden bg-black cursor-pointer group"
+                              >
+                                <GlazedImage
+                                  src={img.url}
+                                  alt={displayCaption}
+                                  priority={true}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                  containerClassName="w-full h-full"
+                                />
+                                <div className="kohot-media-scrim absolute inset-0 bg-gradient-to-t from-black/65 via-transparent to-transparent opacity-50 group-hover:opacity-75 transition-opacity pointer-events-none" />
+                                <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-full bg-black/55 backdrop-blur-xs text-[10px] font-mono-tech text-white/85 border border-white/15 flex items-center gap-1 pointer-events-none">
+                                  <Eye className="w-2.5 h-2.5 opacity-80" />
+                                  <span>Full view</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {event.morePhotosUrl && event.morePhotosUrl.trim().length > 0 && (
+                        <div className="pt-1 flex items-center justify-start">
+                          <a
+                            href={
+                              event.morePhotosUrl.trim().startsWith('http://') ||
+                              event.morePhotosUrl.trim().startsWith('https://')
+                                ? event.morePhotosUrl.trim()
+                                : `https://${event.morePhotosUrl.trim()}`
+                            }
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border font-mono-tech text-xs font-semibold transition-colors cursor-pointer ${
+                              isLightMode
+                                ? 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900'
+                                : 'bg-white/[0.06] hover:bg-white/[0.12] border-white/15 text-white'
+                            }`}
+                          >
+                            <span>Explore full photo archive</span>
+                            <ExternalLink className="w-3.5 h-3.5 text-[#d4af37]" />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        );
+      })()}
 
       {/* =========================================================================
           TAB 3: AWARDS & RECOGNITION (DYNAMIC SHAPES & COLORS ACCORDING TO TROPHY TYPE)
@@ -1701,18 +1731,18 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                     }`}
                   >
                     <div>
-                      <div className="flex items-center justify-between mb-4">
-                        {/* Dynamic Shape & Color Based on Type */}
+                      <div className="flex items-center gap-3.5">
+                        {/* Dynamic Shape & Color Based on Type — Horizontally aligned with Category Name */}
                         <div className={`w-11 h-11 ${visual.shapeClass} flex items-center justify-center shrink-0 ${visual.glowClass}`}>
                           <AwardIcon className={`w-5 h-5 ${visual.iconColor} ${visual.type === 'crystal' ? '-rotate-45' : ''}`} />
                         </div>
-                      </div>
 
-                      <h3 className={`font-syne font-bold text-lg leading-snug ${
-                        isLightMode ? 'text-zinc-900' : 'text-white'
-                      }`}>
-                        {award.category}
-                      </h3>
+                        <h3 className={`font-syne font-bold text-lg leading-snug min-w-0 flex-1 ${
+                          isLightMode ? 'text-zinc-900' : 'text-white'
+                        }`}>
+                          {award.category}
+                        </h3>
+                      </div>
 
                       {/* Winner Profile Snippet - Bold Image Preview styled to award type */}
                       <div className={`flex items-center gap-3.5 mt-4 pt-3.5 border-t ${
@@ -1764,445 +1794,220 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         </section>
       )}
 
-      {/* =========================================================================
-          TAB 4: VOICES & MESSAGES
-          ========================================================================= */}
-      {activeTab === 'voices' && (
-        <section 
-          id="voices-swiper-section"
-          className="w-full max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14 animate-slide-up-fade"
-        >
-          <div className="mb-8 text-center max-w-xl mx-auto flex flex-col items-center">
-            <h2 className={`font-syne font-bold text-2xl sm:text-3xl tracking-tight ${
-              isLightMode ? 'text-zinc-900' : 'text-white'
-            }`}>
-              Final Thoughts
-            </h2>
-            <p className={`font-body text-xs sm:text-sm mt-1 ${
-              isLightMode ? 'text-zinc-600' : 'text-zinc-400'
-            }`}>
-              Parting wisdom, farewell remarks, and words of encouragement from class leaders.
-            </p>
-          </div>
-
-          {(() => {
-            const voicesList = currentSet.voices || [];
-            if (voicesList.length === 0) {
-              return (
-                <div className={`text-center py-16 px-6 border border-dashed rounded-3xl space-y-3 ${
-                  isLightMode ? 'bg-white border-zinc-200 text-zinc-900 shadow-sm' : 'border-white/10 bg-[#18181b] text-white'
-                }`}>
-                  <Quote className="w-8 h-8 text-zinc-500 mx-auto" />
-                  <p className={`font-syne text-lg ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>No Final Thoughts Published Yet</p>
-                  <p className={`font-body text-xs max-w-md mx-auto ${isLightMode ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                    Parting reflections and words of guidance from class leaders will appear here.
-                  </p>
-                </div>
-              );
-            }
-
-            const pinnedVoice = voicesList.find((v) => Boolean(v.isPinned));
-            const remainingVoices = pinnedVoice 
-              ? voicesList.filter((v) => v.id !== pinnedVoice.id)
-              : voicesList;
-
-            const pinnedQuoteText = pinnedVoice ? (pinnedVoice.partingQuote || pinnedVoice.quote || '') : '';
-            const pinnedQuoteWords = pinnedQuoteText.trim().split(/\s+/).filter(Boolean);
-            const isPinnedOver120Words = pinnedQuoteWords.length > 120;
-            const displayedPinnedQuote = (!isPinnedOver120Words || isPinnedExpanded)
-              ? pinnedQuoteText
-              : pinnedQuoteWords.slice(0, 120).join(' ') + '…';
-
-            return (
-              <>
-                {/* Pinned Voice Card (e.g. "From the President") */}
-                {pinnedVoice && (
-                  <div
-                    key={pinnedVoice.id}
-                    id={`pinned-voice-card-${pinnedVoice.id}`}
-                    className={`mb-6 sm:mb-8 rounded-3xl p-6 sm:p-8 border shadow-xl relative overflow-hidden transition-all ${
-                      isLightMode
-                        ? 'bg-gradient-to-br from-amber-50/90 via-white to-amber-50/40 border-amber-300 text-zinc-900 shadow-amber-900/5 ring-1 ring-amber-400/20'
-                        : 'bg-gradient-to-br from-[#1c1917]/90 via-[#18181b] to-[#121318] border-amber-500/40 text-white shadow-black/40 ring-1 ring-amber-500/20'
-                    }`}
-                  >
-                    {/* Subtle decorative gold glow */}
-                    <div className="absolute top-0 right-0 w-72 h-72 bg-amber-500/5 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
-
-                    {/* Pinned Title Header */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-5 pb-4 border-b border-amber-500/20">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-500 dark:text-amber-400 text-xs font-mono-tech font-bold uppercase tracking-wider">
-                        <Pin className="w-3.5 h-3.5 text-amber-500 fill-amber-500/40" />
-                        <span>{pinnedVoice.pinnedTitle?.trim() || 'From the President'}</span>
-                      </div>
-                      <span className={`font-mono-tech text-[11px] ${isLightMode ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                        Featured Final Thought
-                      </span>
-                    </div>
-
-                    {/* Author & Quote Body */}
-                    <div className="flex flex-col sm:flex-row items-start gap-5 sm:gap-6">
-                      {/* Author Photo */}
-                      <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl overflow-hidden border-2 border-amber-400/60 shadow-2xl ring-4 ring-amber-400/10 shrink-0 bg-zinc-900">
-                        <GlazedImage
-                          src={pinnedVoice.headshotUrl || pinnedVoice.avatarUrl}
-                          alt={pinnedVoice.lecturerName || pinnedVoice.authorName || 'Author'}
-                          showMonogram={false}
-                          className="w-full h-full object-cover"
-                          containerClassName="w-full h-full"
-                        />
-                      </div>
-
-                      {/* Author Details & Quote */}
-                      <div className="flex-1 min-w-0">
-                        <div>
-                          <h3 className={`font-syne font-bold text-lg sm:text-xl leading-tight ${
-                            isLightMode ? 'text-zinc-900' : 'text-white'
-                          }`}>
-                            {pinnedVoice.lecturerName || pinnedVoice.authorName}
-                          </h3>
-                          <p className={`font-mono-tech text-xs sm:text-sm font-semibold mt-1 leading-snug ${
-                            isLightMode ? 'text-amber-700' : 'text-[#d4af37]'
-                          }`}>
-                            {pinnedVoice.title || pinnedVoice.role}
-                          </p>
-                        </div>
-
-                        <div className="relative pt-3 mt-1">
-                          <p className={`font-body text-sm sm:text-base italic leading-relaxed whitespace-pre-line ${
-                            isLightMode ? 'text-zinc-800' : 'text-zinc-200'
-                          }`}>
-                            “{displayedPinnedQuote}”
-                          </p>
-
-                          {isPinnedOver120Words && (
-                            <button
-                              type="button"
-                              onClick={() => setIsPinnedExpanded((prev) => !prev)}
-                              className={`inline-flex items-center gap-1.5 mt-3 font-mono-tech text-xs font-bold transition-colors cursor-pointer ${
-                                isLightMode 
-                                  ? 'text-amber-700 hover:text-amber-900' 
-                                  : 'text-[#d4af37] hover:text-amber-300'
-                              }`}
-                            >
-                              <span>{isPinnedExpanded ? 'Read less' : 'Read more'}</span>
-                              {isPinnedExpanded ? (
-                                <ChevronUp className="w-3.5 h-3.5" />
-                              ) : (
-                                <ChevronDown className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Remaining Voices Grid */}
-                {remainingVoices.length > 0 && (
-                  <div 
-                    id="voices-grid"
-                    className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6"
-                  >
-                    {remainingVoices.map((voice) => (
-                      <div
-                        key={voice.id}
-                        id={`voice-card-${voice.id}`}
-                        className={`rounded-2xl p-6 flex flex-col justify-between shadow-lg border ${
-                          isLightMode 
-                            ? 'bg-white border-zinc-200 text-zinc-900 shadow-md hover:border-zinc-400' 
-                            : 'bg-[#18181b] border-white/[0.08] text-white hover:border-white/30'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center gap-4 mb-4">
-                            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border-2 border-white/30 shadow-2xl ring-4 ring-white/10 shrink-0 bg-zinc-900">
-                              <GlazedImage
-                                src={voice.headshotUrl}
-                                alt={voice.lecturerName}
-                                showMonogram={false}
-                                className="w-full h-full object-cover"
-                                containerClassName="w-full h-full"
-                              />
-                            </div>
-                            <div className="min-w-0">
-                              <h3 className={`font-syne font-bold text-base sm:text-lg leading-tight truncate ${
-                                isLightMode ? 'text-zinc-900' : 'text-white'
-                              }`}>
-                                {voice.lecturerName}
-                              </h3>
-                              <p className={`font-mono-tech text-xs font-semibold mt-1 leading-snug ${
-                                isLightMode ? 'text-[#b89728]' : 'text-[#d4af37]'
-                              }`}>
-                                {voice.title}
-                              </p>
-                              <span className={`inline-block mt-1 font-mono-tech text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                                isLightMode 
-                                  ? 'text-zinc-700 bg-zinc-100 border-zinc-300 font-semibold' 
-                                  : 'text-zinc-400 bg-white/5 border-white/10'
-                              }`}>
-                                Leader Reflection
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="relative pt-2">
-                            <p className={`font-body text-sm sm:text-base italic leading-relaxed ${
-                              isLightMode ? 'text-zinc-800' : 'text-zinc-300'
-                            }`}>
-                              “{voice.partingQuote}”
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            );
-          })()}
-        </section>
-      )}
-
-      {/* =========================================================================
-          TAB 5: OUR STORY
-          ========================================================================= */}
-      {activeTab === 'story' && (
-        <section 
-          id="our-story-section"
-          className="w-full max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14 animate-slide-up-fade"
-        >
-          <div className="mb-8 text-center max-w-xl mx-auto flex flex-col items-center">
-            <h2 className={`font-syne font-bold text-2xl sm:text-3xl tracking-tight ${
-              isLightMode ? 'text-zinc-900' : 'text-white'
-            }`}>
-              OUR STORY
-            </h2>
-            <p className={`font-body text-xs sm:text-sm mt-1 ${
-              isLightMode ? 'text-zinc-600' : 'text-zinc-400'
-            }`}>
-              The shared journey, struggles, and triumphs that defined this cohort.
-            </p>
-          </div>
-
-          <div className={`p-8 sm:p-12 rounded-3xl border shadow-xl ${
-            isLightMode 
-              ? 'bg-white border-zinc-200 text-zinc-900 shadow-md' 
-              : 'bg-[#18181b] border-white/10 text-white'
-          }`}>
-            <div className={`space-y-6 font-body text-base sm:text-lg leading-relaxed text-left sm:text-justify max-w-3xl mx-auto ${
-              isLightMode ? 'text-zinc-800 font-normal' : 'text-zinc-300'
-            }`}>
-              {(currentSet.ourStory || '').split('\n\n').map((paragraph, idx) => (
-                <p key={idx}>
-                  {paragraph}
-                </p>
-              ))}
-            </div>
-
-            <div className="mt-12 flex items-center justify-center gap-3">
-              <div className={`w-12 h-[1px] ${isLightMode ? 'bg-zinc-300' : 'bg-white/10'}`} />
-              <span className={`font-mono-tech text-xs uppercase tracking-widest ${
-                isLightMode ? 'text-zinc-600 font-semibold' : 'text-zinc-400'
-              }`}>
-                {currentSet.classSetName} • {currentSet.graduationYear}
-              </span>
-              <div className={`w-12 h-[1px] ${isLightMode ? 'bg-zinc-300' : 'bg-white/10'}`} />
-            </div>
-          </div>
-        </section>
-      )}
 
       {/* =========================================================================
           FINAL CELEBRATORY BANNER: THIS IS OUR LEGACY.
-          Featuring album admin name, class portrait, department & set details
+          Featuring album admin name, class portrait, department & set details, and social links
           ========================================================================= */}
-      <section 
-        id="album-our-legacy-banner"
-        className="relative w-full min-h-[55vh] sm:min-h-[70vh] flex flex-col justify-center items-center overflow-hidden bg-black mt-16 select-none"
-      >
-        <div className="absolute inset-0 z-0">
-          <img
-            src={currentSet.legacyFooterUrl || 'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1600&auto=format&fit=crop'}
-            alt="This is our legacy - celebratory class portrait"
-            className="w-full h-full object-cover object-center filter brightness-[0.52] contrast-[1.08]"
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-[#060709] via-transparent to-[#060709] pointer-events-none" />
-          <div className="absolute inset-0 bg-black/40 pointer-events-none" />
-        </div>
+      {(() => {
+        const isCrownfieldDemo = currentSet.id.startsWith('crownfield-law-');
+        const rawSocials = currentSet.socials || {};
+        const yt = (rawSocials.youtube || (isCrownfieldDemo ? 'https://youtube.com/@crownfieldlaw' : '')).trim();
+        const ig = (rawSocials.instagram || (isCrownfieldDemo ? `@crownfield_law_${currentSet.graduationYear}` : '')).trim();
+        const tw = (rawSocials.twitter || (isCrownfieldDemo ? '@crownfield_law' : '')).trim();
+        const li = (rawSocials.linkedin || (isCrownfieldDemo ? 'https://linkedin.com/company/crownfield-law-alumni' : '')).trim();
+        const web = (rawSocials.website || (isCrownfieldDemo ? 'https://law.crownfield.edu.ng' : '')).trim();
 
-        {/* Content Overlay */}
-        <div className="relative z-10 w-full max-w-4xl mx-auto px-6 text-center py-16 space-y-4">
-          <p className="font-mono-tech text-xs sm:text-sm uppercase tracking-[0.25em] text-white/80 font-semibold animate-fadeIn">
-            {currentSet.institutionName} • {currentSet.departmentName} • Class of {currentSet.graduationYear}
-          </p>
+        const ytHref = yt
+          ? yt.startsWith('http')
+            ? yt
+            : yt.startsWith('youtube.com') || yt.startsWith('youtu.be')
+            ? `https://${yt}`
+            : `https://youtube.com/@${yt.replace(/^@/, '')}`
+          : '';
+        const igHref = ig
+          ? ig.startsWith('http')
+            ? ig
+            : ig.startsWith('instagram.com')
+            ? `https://${ig}`
+            : `https://instagram.com/${ig.replace(/^@/, '')}`
+          : '';
+        const twHref = tw
+          ? tw.startsWith('http')
+            ? tw
+            : tw.startsWith('x.com') || tw.startsWith('twitter.com')
+            ? `https://${tw}`
+            : `https://x.com/${tw.replace(/^@/, '')}`
+          : '';
+        const liHref = li
+          ? li.startsWith('http')
+            ? li
+            : li.startsWith('linkedin.com')
+            ? `https://${li}`
+            : `https://linkedin.com/company/${li.replace(/^@/, '')}`
+          : '';
+        const webHref = web
+          ? web.startsWith('http')
+            ? web
+            : `https://${web}`
+          : '';
 
-          <h2 
-            id="this-is-our-legacy-heading"
-            className="font-syne font-black text-3xl sm:text-5xl md:text-6xl text-white tracking-tight leading-tight drop-shadow-2xl"
-          >
-            THIS IS OUR LEGACY.
-          </h2>
-
-          <div className="space-y-2 pt-2">
-            <p className="font-syne font-bold text-base sm:text-lg text-[#d4af37] tracking-wide">
-              {currentSet.classSetName}
-            </p>
-
-            {/* Prominent Album Admin Name */}
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-white font-mono-tech text-xs tracking-wider">
-              <span className="text-[#d4af37] font-semibold">Album Admin:</span>
-              <span className="font-bold">{currentSet.classRepName || 'Class Album Committee Lead'}</span>
+        const hasAnySocial = Boolean(ytHref || igHref || twHref || liHref || webHref);
+        const renderDepartmentSocialLinks = (containerId: string) => {
+          if (!hasAnySocial) return null;
+          return (
+            <div id={containerId} className="flex items-center justify-center gap-2.5 text-zinc-300">
+              {ytHref && (
+                <a
+                  href={ytHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-red-500/20 border border-white/15 hover:border-red-500/40 flex items-center justify-center text-zinc-200 hover:text-red-400 transition-all"
+                  title="Department YouTube Channel"
+                  aria-label="Department YouTube Channel"
+                >
+                  <Youtube className="w-3.5 h-3.5" />
+                </a>
+              )}
+              {igHref && (
+                <a
+                  href={igHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-pink-500/20 border border-white/15 hover:border-pink-500/40 flex items-center justify-center text-zinc-200 hover:text-pink-400 transition-all"
+                  title="Department Instagram"
+                  aria-label="Department Instagram"
+                >
+                  <Instagram className="w-3.5 h-3.5" />
+                </a>
+              )}
+              {twHref && (
+                <a
+                  href={twHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 hover:border-white/30 flex items-center justify-center text-zinc-200 hover:text-white transition-all"
+                  title="Department X (Twitter)"
+                  aria-label="Department X (Twitter)"
+                >
+                  <Twitter className="w-3.5 h-3.5" />
+                </a>
+              )}
+              {liHref && (
+                <a
+                  href={liHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-blue-500/20 border border-white/15 hover:border-blue-500/40 flex items-center justify-center text-zinc-200 hover:text-blue-400 transition-all"
+                  title="Department LinkedIn"
+                  aria-label="Department LinkedIn"
+                >
+                  <Linkedin className="w-3.5 h-3.5" />
+                </a>
+              )}
+              {webHref && (
+                <a
+                  href={webHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-emerald-500/20 border border-white/15 hover:border-emerald-500/40 flex items-center justify-center text-zinc-200 hover:text-emerald-400 transition-all"
+                  title="Official Department Website"
+                  aria-label="Official Department Website"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                </a>
+              )}
             </div>
-          </div>
-        </div>
-      </section>
+          );
+        };
 
-        {/* Minimalist footer */}
-        <footer 
-          id="album-minimalist-footer"
-          className="relative z-10 w-full bg-[#060709] border-t border-white/[0.08] py-8 px-6 text-center text-zinc-400"
-        >
-          <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-            <span className="font-mono-tech text-xs tracking-widest text-zinc-300 lowercase">
-              kohot.app
-            </span>
+        return (
+          <>
+            <section
+              id="album-our-legacy-banner"
+              className="relative w-full min-h-[48vh] sm:min-h-[60vh] flex flex-col justify-center items-center overflow-hidden bg-black mt-14 select-none"
+            >
+              <div className="absolute inset-0 z-0">
+                <img
+                  src={
+                    currentSet.legacyGroupImageUrl ||
+                    currentSet.legacyFooterUrl ||
+                    'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1600&auto=format&fit=crop'
+                  }
+                  alt="This is our legacy - celebratory class portrait"
+                  className="w-full h-full object-cover object-center filter brightness-[0.52] contrast-[1.08]"
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-[#060709] via-transparent to-[#060709] pointer-events-none" />
+                <div className="absolute inset-0 bg-black/40 pointer-events-none" />
+              </div>
 
-            {/* Department Social & Web Links (Displayed as Icons in Footer Area) */}
-            {(() => {
-              const isCrownfieldDemo = currentSet.id.startsWith('crownfield-law-');
-              const rawSocials = currentSet.socials || {};
-              const yt = (rawSocials.youtube || (isCrownfieldDemo ? 'https://youtube.com/@crownfieldlaw' : '')).trim();
-              const ig = (rawSocials.instagram || (isCrownfieldDemo ? `@crownfield_law_${currentSet.graduationYear}` : '')).trim();
-              const tw = (rawSocials.twitter || (isCrownfieldDemo ? '@crownfield_law' : '')).trim();
-              const li = (rawSocials.linkedin || (isCrownfieldDemo ? 'https://linkedin.com/company/crownfield-law-alumni' : '')).trim();
-              const web = (rawSocials.website || (isCrownfieldDemo ? 'https://law.crownfield.edu.ng' : '')).trim();
+              {/* Content Overlay with Reduced Font Sizes & Department Social Links */}
+              <div className="relative z-10 w-full max-w-4xl mx-auto px-6 text-center py-12 space-y-3">
+                <p className="font-mono-tech text-[10px] sm:text-xs uppercase tracking-[0.22em] text-white/80 font-semibold animate-fadeIn">
+                  {currentSet.institutionName} • {currentSet.departmentName} • Class of {currentSet.graduationYear}
+                </p>
 
-              if (!yt && !ig && !tw && !li && !web) return null;
+                <h2
+                  id="this-is-our-legacy-heading"
+                  className="font-syne font-black text-2xl sm:text-4xl md:text-5xl text-white tracking-tight leading-tight drop-shadow-2xl"
+                >
+                  THIS IS OUR LEGACY.
+                </h2>
 
-              const ytHref = yt
-                ? yt.startsWith('http')
-                  ? yt
-                  : yt.startsWith('youtube.com') || yt.startsWith('youtu.be')
-                  ? `https://${yt}`
-                  : `https://youtube.com/@${yt.replace(/^@/, '')}`
-                : '';
-              const igHref = ig
-                ? ig.startsWith('http')
-                  ? ig
-                  : ig.startsWith('instagram.com')
-                  ? `https://${ig}`
-                  : `https://instagram.com/${ig.replace(/^@/, '')}`
-                : '';
-              const twHref = tw
-                ? tw.startsWith('http')
-                  ? tw
-                  : tw.startsWith('x.com') || tw.startsWith('twitter.com')
-                  ? `https://${tw}`
-                  : `https://x.com/${tw.replace(/^@/, '')}`
-                : '';
-              const liHref = li
-                ? li.startsWith('http')
-                  ? li
-                  : li.startsWith('linkedin.com')
-                  ? `https://${li}`
-                  : `https://linkedin.com/company/${li.replace(/^@/, '')}`
-                : '';
-              const webHref = web
-                ? web.startsWith('http')
-                  ? web
-                  : `https://${web}`
-                : '';
+                <div className="space-y-2 pt-1">
+                  <p className="font-syne font-bold text-xs sm:text-sm text-[#d4af37] tracking-wide">
+                    {currentSet.classSetName}
+                  </p>
 
-              return (
-                <div id="album-footer-social-icons" className="flex items-center gap-3 text-zinc-400">
-                  {ytHref && (
-                    <a
-                      href={ytHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-red-500/20 border border-white/10 hover:border-red-500/40 flex items-center justify-center text-zinc-300 hover:text-red-400 transition-all"
-                      title="Department YouTube Channel"
-                      aria-label="Department YouTube Channel"
-                    >
-                      <Youtube className="w-4 h-4" />
-                    </a>
+                  {currentSet.classSlogan && (
+                    <p className="font-body italic text-[11px] sm:text-xs text-white/75 max-w-xl mx-auto">
+                      “{currentSet.classSlogan.replace(/^["“”']+|["“”']+$/g, '')}”
+                    </p>
                   )}
-                  {igHref && (
-                    <a
-                      href={igHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-pink-500/20 border border-white/10 hover:border-pink-500/40 flex items-center justify-center text-zinc-300 hover:text-pink-400 transition-all"
-                      title="Department Instagram"
-                      aria-label="Department Instagram"
-                    >
-                      <Instagram className="w-4 h-4" />
-                    </a>
-                  )}
-                  {twHref && (
-                    <a
-                      href={twHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center text-zinc-300 hover:text-white transition-all"
-                      title="Department X (Twitter)"
-                      aria-label="Department X (Twitter)"
-                    >
-                      <Twitter className="w-4 h-4" />
-                    </a>
-                  )}
-                  {liHref && (
-                    <a
-                      href={liHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-blue-500/20 border border-white/10 hover:border-blue-500/40 flex items-center justify-center text-zinc-300 hover:text-blue-400 transition-all"
-                      title="Department LinkedIn"
-                      aria-label="Department LinkedIn"
-                    >
-                      <Linkedin className="w-4 h-4" />
-                    </a>
-                  )}
-                  {webHref && (
-                    <a
-                      href={webHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-8 h-8 rounded-full bg-white/5 hover:bg-emerald-500/20 border border-white/10 hover:border-emerald-500/40 flex items-center justify-center text-zinc-300 hover:text-emerald-400 transition-all"
-                      title="Official Department Website"
-                      aria-label="Official Department Website"
-                    >
-                      <Globe className="w-4 h-4" />
-                    </a>
+
+                  {/* Album Admin Name */}
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-white font-mono-tech text-[10px] sm:text-[11px] tracking-wider">
+                    <span className="text-[#d4af37] font-semibold">Album Admin:</span>
+                    <span className="font-bold">{currentSet.classRepName || 'Class Album Committee Lead'}</span>
+                  </div>
+
+                  {/* Department Social Icons right where department & set details appear */}
+                  {hasAnySocial && (
+                    <div className="pt-2">
+                      {renderDepartmentSocialLinks('album-legacy-banner-social-icons')}
+                    </div>
                   )}
                 </div>
-              );
-            })()}
+              </div>
+            </section>
 
-            <div className="flex items-center gap-4 font-mono-tech text-[11px] text-zinc-400">
-              <span>{currentSet.classSetName}</span>
-              <span>•</span>
-              <button
-                type="button"
-                onClick={() => setIsDisputeModalOpen(true)}
-                className="text-zinc-400 hover:text-white hover:underline transition-colors cursor-pointer"
-                title="Album Admin Help"
-              >
-                Album Admin Help
-              </button>
-              <span>•</span>
-              <button
-                id="footer-back-to-albums-btn"
-                onClick={onBackToGrid}
-                className="text-white hover:underline transition-colors cursor-pointer"
-              >
-                ← Back to All Albums
-              </button>
-            </div>
-          </div>
-        </footer>
+            {/* Minimalist footer with reduced font sizes */}
+            <footer
+              id="album-minimalist-footer"
+              className="relative z-10 w-full bg-[#060709] border-t border-white/[0.08] py-6 px-6 text-center text-zinc-400"
+            >
+              <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+                <span className="font-mono-tech text-[10px] sm:text-[11px] tracking-widest text-zinc-300 lowercase">
+                  kohot.app
+                </span>
+
+                {renderDepartmentSocialLinks('album-footer-social-icons')}
+
+                <div className="flex flex-wrap items-center justify-center gap-3 font-mono-tech text-[10px] text-zinc-400">
+                  <span>{currentSet.departmentName} • {currentSet.classSetName}</span>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsDisputeModalOpen(true)}
+                    className="text-zinc-400 hover:text-white hover:underline transition-colors cursor-pointer"
+                    title="Album Admin Help"
+                  >
+                    Album Admin Help
+                  </button>
+                  <span>•</span>
+                  <button
+                    id="footer-back-to-albums-btn"
+                    onClick={onBackToGrid}
+                    className="text-white hover:underline transition-colors cursor-pointer"
+                  >
+                    ← Back to All Albums
+                  </button>
+                </div>
+              </div>
+            </footer>
+          </>
+        );
+      })()}
 
 
       {/* PERSISTENT CONTEXTUAL CTA: INCOMING CLASS REPRESENTATIVE INVITATION */}
@@ -2236,6 +2041,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
       {/* Student Portrait Detail Modal with Pixieset Lightbox Next/Prev */}
       <StudentDetailModal
         student={selectedStudent}
+        awards={currentSet.awards}
         onClose={() => setSelectedStudent(null)}
         onNext={handleNextStudent}
         onPrevious={handlePrevStudent}
@@ -2259,6 +2065,131 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         currentSet={currentSet}
         isLightMode={isLightMode}
       />
+
+      {/* Share This Album Modal (Opens without auto-copying link) */}
+      {isShareModalOpen && (() => {
+        const albumUrl = getAlbumUrl(currentSet);
+        const shareText = `Explore the official ${currentSet.departmentName} (Class of ${currentSet.graduationYear}) Album on KoHot:\n${albumUrl}`;
+        const modalEl = (
+          <div
+            id="public-album-share-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-[10000] bg-black/75 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn select-none"
+            onClick={() => setIsShareModalOpen(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl space-y-5 select-auto ${
+                isLightMode
+                  ? 'bg-white border-slate-200 text-slate-900'
+                  : 'bg-[#18181b] border-zinc-700 text-white'
+              }`}
+            >
+              <div className={`flex items-center justify-between pb-3 border-b ${isLightMode ? 'border-slate-200' : 'border-zinc-800'}`}>
+                <div>
+                  <h3 className="font-syne font-bold text-lg">Share album</h3>
+                  <p className={`font-mono-tech text-xs ${isLightMode ? 'text-slate-500' : 'text-zinc-400'}`}>
+                    {currentSet.departmentName} · Class of {currentSet.graduationYear}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsShareModalOpen(false)}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+                    isLightMode ? 'bg-slate-100 hover:bg-slate-200 text-slate-600' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
+                  }`}
+                  aria-label="Close share dialog"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <label className={`block text-xs font-mono-tech uppercase tracking-wider ${isLightMode ? 'text-slate-500' : 'text-zinc-400'}`}>
+                  Album link
+                </label>
+                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                  isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-zinc-900 border-zinc-800'
+                }`}>
+                  <span className={`font-mono-tech text-xs truncate select-all ${isLightMode ? 'text-slate-800' : 'text-zinc-200'}`}>
+                    {albumUrl}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyShareLink}
+                    className="px-3.5 py-1.5 rounded-lg bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                  >
+                    <span>{isCopied ? 'Copied!' : 'Copy link'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className={`block text-xs font-mono-tech uppercase tracking-wider ${isLightMode ? 'text-slate-500' : 'text-zinc-400'}`}>
+                  Share via
+                </span>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <a
+                    href={`https://api.whatsapp.com/send?text=${encodeURIComponent(shareText)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`p-3 rounded-xl border font-mono-tech text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                      isLightMode
+                        ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-800'
+                        : 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-500/30 text-emerald-300'
+                    }`}
+                  >
+                    <span>WhatsApp</span>
+                  </a>
+                  <a
+                    href={`https://t.me/share/url?url=${encodeURIComponent(albumUrl)}&text=${encodeURIComponent(`Explore the ${currentSet.departmentName} Class of ${currentSet.graduationYear} Album on KoHot`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`p-3 rounded-xl border font-mono-tech text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                      isLightMode
+                        ? 'bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-800'
+                        : 'bg-sky-500/15 hover:bg-sky-500/25 border-sky-500/30 text-sky-300'
+                    }`}
+                  >
+                    <span>Telegram</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (typeof navigator !== 'undefined' && 'share' in navigator) {
+                        try {
+                          await navigator.share({
+                            title: `${currentSet.departmentName} — Class of ${currentSet.graduationYear}`,
+                            text: `Explore the official ${currentSet.departmentName} Class of ${currentSet.graduationYear} Album on KoHot!`,
+                            url: albumUrl,
+                          });
+                        } catch {
+                          // user dismissed
+                        }
+                      } else {
+                        window.open(
+                          `https://twitter.com/intent/tweet?text=${encodeURIComponent(`Explore the official ${currentSet.departmentName} Class of ${currentSet.graduationYear} Album on KoHot:`)}&url=${encodeURIComponent(albumUrl)}`,
+                          '_blank'
+                        );
+                      }
+                    }}
+                    className={`p-3 rounded-xl border font-mono-tech text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                      isLightMode
+                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
+                        : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
+                    }`}
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>More</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+        return typeof document !== 'undefined' ? createPortal(modalEl, document.body) : modalEl;
+      })()}
 
       {/* Embedded Department Video Player Modal */}
       <DepartmentVideoModal
@@ -2551,6 +2482,20 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         }
         return lightboxElement;
       })()}
+
+      {/* Publish Album Modal (triggered when Save or Share is clicked while album is in Draft) */}
+      <PublishAlbumModal
+        isOpen={isPublishModalOpen}
+        onClose={() => setIsPublishModalOpen(false)}
+        currentSet={currentSet}
+        currentUser={null}
+        onPublishSuccess={(updatedSet) => {
+          onUpdateSet(updatedSet);
+          if (updatedSet.isPublished) {
+            showSuccess('Album Published!', 'Your class album is now live. Save and Share are now active.');
+          }
+        }}
+      />
 
       {/* Album Admin Help Support Modal */}
       <AlbumDisputeModal

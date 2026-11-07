@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import { 
   UniversityDirectoryItem, 
   DepartmentItem,
@@ -16,6 +16,7 @@ import {
 import { CROWNFIELD_PUBLIC_LAW_SETS } from '../../data/crownfieldLawDemos';
 import { Layer1ClassRepDashboard } from './Layer1ClassRepDashboard';
 import { getTheme, applyTheme, toggleTheme, ThemeMode } from '../../utils/theme';
+import { isPublicAppUrlConfigured, PRODUCTION_ORIGIN } from '../../utils/urlHelper';
 import { ImageDropzone } from '../common/ImageDropzone';
 import { 
   ArrowLeft,
@@ -83,6 +84,7 @@ import { MasterNextClassHandoffsSection } from './MasterNextClassHandoffsSection
 import { MasterSupportInboxSection } from './MasterSupportInboxSection';
 import { MasterAlbumMediaSection } from './MasterAlbumMediaSection';
 import { MasterAlbumVisualsSection } from './MasterAlbumVisualsSection';
+import { MasterFinancesSection } from './MasterFinancesSection';
 import { 
   fetchHostSupportMessages,
   apiClientSoftDeleteAlbum,
@@ -142,8 +144,19 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   const [albumToDelete, setAlbumToDelete] = useState<{ set: ClassSet; isPermanent: boolean } | null>(null);
   const [typedConfirmName, setTypedConfirmName] = useState('');
   const [activeTab, setActiveTab] = useState<
-    'album_demos' | 'seeder' | 'reminders' | 'editor' | 'testimonials' | 'disputes'
-  >('album_demos');
+    'album_demos' | 'seeder' | 'finances' | 'reminders' | 'editor' | 'testimonials' | 'disputes'
+  >(() => {
+    try {
+      const rawSpot = sessionStorage.getItem('kohot_host_return_spot') || sessionStorage.getItem('kohot_host_last_state');
+      if (rawSpot) {
+        const parsed = JSON.parse(rawSpot);
+        if (parsed?.tab && ['album_demos', 'seeder', 'finances', 'reminders', 'editor', 'testimonials', 'disputes'].includes(parsed.tab)) {
+          return parsed.tab;
+        }
+      }
+    } catch {}
+    return 'album_demos';
+  });
   const [adminHelpSupportSubTab, setAdminHelpSupportSubTab] = useState<'admin_help' | 'support' | 'requests'>('admin_help');
   const [newSupportCount, setNewSupportCount] = useState<number>(0);
   const [editingDemoSetId, setEditingDemoSetId] = useState<string | null>(null);
@@ -164,9 +177,17 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   const [expandedDirectoryUnis, setExpandedDirectoryUnis] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     universities.forEach((u, i) => {
-      // First 2 pods expanded by default, others collapsible
       init[u.id] = i < 2;
     });
+    try {
+      const rawSpot = sessionStorage.getItem('kohot_host_return_spot') || sessionStorage.getItem('kohot_host_last_state');
+      if (rawSpot) {
+        const parsed = JSON.parse(rawSpot);
+        if (parsed?.uniId) {
+          init[parsed.uniId] = true;
+        }
+      }
+    } catch {}
     return init;
   });
 
@@ -200,42 +221,70 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     runSystemCheck();
   }, []);
 
-  // Context awareness and return rule (Request 2): return to exact spot clicked in institution directory
+  // Continuously persist current Host Dashboard tab and scroll position for instant context restoration
   useEffect(() => {
     try {
-      const rawSpot = sessionStorage.getItem('kohot_host_return_spot');
-      if (rawSpot) {
-        const spot = JSON.parse(rawSpot);
-        if (spot.tab) {
-          setActiveTab(spot.tab);
+      const prevRaw = sessionStorage.getItem('kohot_host_last_state');
+      const prev = prevRaw ? JSON.parse(prevRaw) : {};
+      sessionStorage.setItem(
+        'kohot_host_last_state',
+        JSON.stringify({ ...prev, tab: activeTab, scrollY: window.scrollY })
+      );
+    } catch {}
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handleHostScroll = () => {
+      try {
+        const prevRaw = sessionStorage.getItem('kohot_host_last_state');
+        const prev = prevRaw ? JSON.parse(prevRaw) : {};
+        sessionStorage.setItem(
+          'kohot_host_last_state',
+          JSON.stringify({ ...prev, tab: activeTab, scrollY: window.scrollY })
+        );
+      } catch {}
+    };
+    window.addEventListener('scroll', handleHostScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleHostScroll);
+  }, [activeTab]);
+
+  // Instant context-aware return to exact spot left from (Demo Album, Demo Dashboard, Directory, etc.)
+  useLayoutEffect(() => {
+    try {
+      const rawSpot = sessionStorage.getItem('kohot_host_return_spot') || sessionStorage.getItem('kohot_host_last_state');
+      if (!rawSpot) return;
+      const spot = JSON.parse(rawSpot);
+      sessionStorage.removeItem('kohot_host_return_spot');
+
+      const restorePosition = () => {
+        if (typeof spot.scrollY === 'number' && spot.scrollY >= 0) {
+          window.scrollTo({ top: spot.scrollY, left: 0, behavior: 'instant' });
         }
-        if (spot.uniId) {
-          setExpandedDirectoryUnis((prev) => ({ ...prev, [spot.uniId]: true }));
-        }
-        setTimeout(() => {
-          if (spot.elementId) {
-            const el = document.getElementById(spot.elementId);
-            if (el) {
-              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              if (spot.uniId) {
-                const scrollContainer = document.getElementById(`dept-scroll-${spot.uniId}`);
-                if (scrollContainer) {
-                  scrollContainer.scrollTo({ left: Math.max(0, el.offsetLeft - 40), behavior: 'smooth' });
-                }
-              }
-              el.classList.add('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
-              setTimeout(() => {
-                el.classList.remove('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
-              }, 2500);
-            } else if (typeof spot.scrollY === 'number') {
-              window.scrollTo({ top: spot.scrollY, behavior: 'smooth' });
+        if (spot.elementId) {
+          const el = document.getElementById(spot.elementId);
+          if (el) {
+            if (typeof spot.scrollY !== 'number') {
+              el.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'center' });
             }
-          } else if (typeof spot.scrollY === 'number') {
-            window.scrollTo({ top: spot.scrollY, behavior: 'smooth' });
+            if (spot.uniId) {
+              const scrollContainer = document.getElementById(`dept-scroll-${spot.uniId}`);
+              if (scrollContainer) {
+                scrollContainer.scrollTo({
+                  left: Math.max(0, el.offsetLeft - 40),
+                  behavior: 'instant' as ScrollBehavior,
+                });
+              }
+            }
+            el.classList.add('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
+            setTimeout(() => {
+              el.classList.remove('ring-2', 'ring-[#d4af37]', 'ring-offset-2', 'ring-offset-black');
+            }, 2000);
           }
-          sessionStorage.removeItem('kohot_host_return_spot');
-        }, 150);
-      }
+        }
+      };
+
+      restorePosition();
+      requestAnimationFrame(restorePosition);
     } catch {}
   }, []);
 
@@ -966,33 +1015,6 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     if (targetSet) {
       return (
         <div className="min-h-screen bg-slate-50 dark:bg-[#121214]">
-          <div className="sticky top-0 z-50 bg-[#18181b] border-b border-[#d4af37]/30 px-4 sm:px-8 py-3 flex items-center justify-between text-white shadow-xl">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                id="back-to-album-demos-btn"
-                onClick={() => setEditingDemoSetId(null)}
-                className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Back to Host Dashboard (Album Demos)</span>
-              </button>
-              <span className="text-[#d4af37] font-mono-tech text-xs hidden md:inline">
-                • Editing Demo: {targetSet.classSetName} ({targetSet.departmentName}, {targetSet.institutionName})
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setEditingDemoSetId(null);
-                onViewDepartmentAlbum(targetSet.id);
-              }}
-              className="px-3.5 py-1.5 rounded-full bg-[#d4af37] text-black font-syne font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow hover:bg-amber-400"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Preview Live Demo</span>
-            </button>
-          </div>
           <Layer1ClassRepDashboard
             currentUser={{
               id: currentUser?.id || 'owner-admin',
@@ -1075,13 +1097,21 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
       {/* Main Container */}
       <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-8 sm:pt-10 space-y-8">
-        {/* Command Navigation Tabs */}
-        <div className={`flex items-center gap-2 overflow-x-auto no-scrollbar border-b pb-4 ${
-          isLightMode ? 'border-zinc-200' : 'border-white/[0.08]'
-        }`}>
+        {/* Command Navigation Tabs (Sticky upon scroll) */}
+        <div
+          id="host-command-nav-tabs"
+          className={`sticky top-[57px] sm:top-[65px] z-30 -mx-4 px-4 sm:mx-0 sm:px-3 py-3 rounded-b-2xl backdrop-blur-xl flex items-center gap-2 overflow-x-auto no-scrollbar border-b transition-colors ${
+            isLightMode
+              ? 'bg-[#f8fafc]/95 border-zinc-200 shadow-xs'
+              : 'bg-[#121214]/95 border-white/[0.08] shadow-md'
+          }`}
+        >
           <button
             id="tab-album-demos-btn"
-            onClick={() => setActiveTab('album_demos')}
+            onClick={(e) => {
+              setActiveTab('album_demos');
+              e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'album_demos'
                 ? 'bg-[#d4af37] text-black font-bold shadow-md'
@@ -1099,7 +1129,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
           <button
             id="tab-seeder-btn"
-            onClick={() => setActiveTab('seeder')}
+            onClick={(e) => {
+              setActiveTab('seeder');
+              e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'seeder'
                 ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
@@ -1111,8 +1144,27 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           </button>
 
           <button
+            id="tab-finances-btn"
+            onClick={(e) => {
+              setActiveTab('finances');
+              e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }}
+            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+              activeTab === 'finances'
+                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
+                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+            }`}
+          >
+            <Coins className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Finances</span>
+          </button>
+
+          <button
             id="tab-reminders-btn"
-            onClick={() => setActiveTab('reminders')}
+            onClick={(e) => {
+              setActiveTab('reminders');
+              e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'reminders'
                 ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
@@ -1125,7 +1177,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
           <button
             id="tab-editor-btn"
-            onClick={() => setActiveTab('editor')}
+            onClick={(e) => {
+              setActiveTab('editor');
+              e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'editor'
                 ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
@@ -1138,7 +1193,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
           <button
             id="tab-testimonials-btn"
-            onClick={() => setActiveTab('testimonials')}
+            onClick={(e) => {
+              setActiveTab('testimonials');
+              e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'testimonials'
                 ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
@@ -1151,7 +1209,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
           <button
             id="tab-disputes-btn"
-            onClick={() => setActiveTab('disputes')}
+            onClick={(e) => {
+              setActiveTab('disputes');
+              e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }}
             className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'disputes'
                 ? 'bg-amber-400 text-black font-semibold shadow'
@@ -1169,56 +1230,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         </div>
 
         {/* =========================================================================
-            0. ALBUM DEMOS SECTION (CROWNFIELD UNIVERSITY - DEPARTMENT OF PUBLIC LAW)
-            4 Classes in Ascending Order: 2023 Trailblazers, 2024 Phoenix, 2025 Frontiers, 2026 Apex
+            0. ALBUM DEMOS SECTION (COMPACT CARDS, ALL ACTIONS PRESERVED)
             ========================================================================= */}
         {activeTab === 'album_demos' && (
-          <div id="album-demos-module" className="space-y-8 animate-fadeIn">
-            {/* Header Showcase Banner */}
-            <div className={`p-6 sm:p-8 rounded-3xl border relative overflow-hidden shadow-2xl ${
-              isLightMode 
-                ? 'bg-gradient-to-br from-white via-slate-50 to-amber-50/30 border-slate-200 text-slate-900 shadow-md' 
-                : 'bg-gradient-to-br from-[#18181b] via-[#202024] to-[#121214] border-white/15 text-white'
-            }`}>
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
-                <div className="space-y-2 max-w-3xl">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-3 py-1 rounded-full bg-[#d4af37]/20 text-[#d4af37] border border-[#d4af37]/40 text-[11px] font-mono-tech font-bold uppercase tracking-widest">
-                      Platform Demos Showcase
-                    </span>
-                    <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[11px] font-mono-tech font-semibold">
-                      4 Classes • 2026 → 2023 • 100% Populated
-                    </span>
-                  </div>
-                  <h2 className="font-syne font-bold text-xl sm:text-2xl text-white tracking-tight">
-                    Department of Public Law, Crownfield University
-                  </h2>
-                  <p className={`font-body text-xs sm:text-sm leading-relaxed ${isLightMode ? 'text-slate-600' : 'text-zinc-400'}`}>
-                    These 4 flagship albums serve as the official live demos showcased across website CTAs. Each cohort is 100% populated with 20 Nigerian graduates (balanced male/female mix, different faces, complete bios & quotes), 6 awards, rich photo memories, faculty thoughts, and valedictory documentary videos.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onViewDepartmentLegacyWall) {
-                        onViewDepartmentLegacyWall('dept-crownfield-public-law', 'crownfield');
-                      } else {
-                        onViewDepartmentAlbum('crownfield-law-2023');
-                      }
-                    }}
-                    className="px-5 py-3 rounded-full bg-[#d4af37] hover:bg-amber-400 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95"
-                  >
-                    <Layers className="w-4 h-4" />
-                    <span>View Crownfield Legacy Wall</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Crownfield University cards listed top to bottom: 2026, 2025, 2024, 2023 */}
-            <div className="flex flex-col gap-6">
+          <div id="album-demos-module" className="space-y-4 animate-fadeIn">
+            {/* Compact 2-Column Grid of Demo Album Cards: 2026, 2025, 2024, 2023 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {[
                 { year: 2026, defaultId: 'crownfield-law-2026', name: 'Apex — Class of 2026', slogan: 'At the Pinnacle of Honor', status: 'Valedictory Graduating Set' },
                 { year: 2025, defaultId: 'crownfield-law-2025', name: 'Frontiers — Class of 2025', slogan: 'Breaking Boundaries, Shaping Horizons', status: 'Judicial Reform Pioneers' },
@@ -1229,133 +1246,144 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 if (!liveSet) return null;
 
                 return (
-                  <div 
+                  <div
                     key={liveSet.id}
                     id={`demo-card-${liveSet.id}`}
-                    className={`rounded-3xl border overflow-hidden transition-all shadow-xl flex flex-col justify-between ${
-                      isLightMode 
-                        ? 'bg-white border-slate-200 text-slate-900 shadow-md hover:border-slate-300' 
+                    className={`rounded-2xl border overflow-hidden transition-all shadow-md flex flex-col justify-between ${
+                      isLightMode
+                        ? 'bg-white border-slate-200 text-slate-900 hover:border-slate-300'
                         : 'bg-[#18181b] border-white/10 text-white hover:border-white/25'
                     }`}
                   >
-                    {/* Card Top: Banner preview with Year & Slogan */}
-                    <div className="relative h-44 w-full bg-zinc-900 overflow-hidden">
-                      <img 
-                        src={liveSet.bannerImageUrl} 
+                    {/* Compact Card Top: Banner preview with Year & Slogan */}
+                    <div className="relative h-28 w-full bg-zinc-900 overflow-hidden">
+                      <img
+                        src={liveSet.bannerImageUrl}
                         alt={liveSet.classSetName}
-                        className="w-full h-full object-cover object-center filter brightness-75 hover:scale-105 transition-transform duration-700" 
+                        className="w-full h-full object-cover object-center filter brightness-75 hover:scale-105 transition-transform duration-700"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
-                      <div className="absolute top-4 left-4 right-4 flex items-center justify-between">
-                        <span className="px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-[#d4af37] border border-[#d4af37]/40 text-xs font-mono-tech font-bold">
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/45 to-transparent" />
+                      <div className="absolute top-2.5 left-3 right-3 flex items-center justify-between gap-2">
+                        <span className="px-2.5 py-0.5 rounded-full bg-black/65 backdrop-blur-md text-[#d4af37] border border-[#d4af37]/40 text-[10px] font-mono-tech font-bold">
                           Class of {liveSet.graduationYear}
                         </span>
-                        <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-white text-[11px] font-mono-tech font-semibold">
+                        <span className="px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-md text-white text-[10px] font-mono-tech font-semibold truncate">
                           {meta.status}
                         </span>
                       </div>
-                      <div className="absolute bottom-4 left-4 right-4">
-                        <h3 className="font-syne font-extrabold text-xl text-white tracking-tight drop-shadow-md">
+                      <div className="absolute bottom-2.5 left-3 right-3">
+                        <h3 className="font-syne font-bold text-base text-white tracking-tight drop-shadow-md truncate">
                           {liveSet.classSetName}
                         </h3>
-                        <p className="font-body text-xs text-white/80 italic mt-0.5 line-clamp-1">
+                        <p className="font-body text-[11px] text-white/80 italic line-clamp-1">
                           “{liveSet.classSlogan}”
                         </p>
                       </div>
                     </div>
 
-                    {/* Content Details & Stats */}
-                    <div className="p-5 sm:p-6 space-y-5 flex-1 flex flex-col justify-between">
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                          <div className={`p-2.5 rounded-xl border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-sm text-[#d4af37]">{liveSet.students?.length || 20}</p>
-                            <p className="font-mono-tech text-[10px] text-zinc-400 uppercase tracking-wider mt-0.5">Students</p>
+                    {/* Compact Content Details & Actions */}
+                    <div className="p-3.5 sm:p-4 space-y-3 flex-1 flex flex-col justify-between">
+                      <div className="space-y-2">
+                        {/* Compact 4-Metric Pill Strip */}
+                        <div className="grid grid-cols-4 gap-1.5 text-center">
+                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
+                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.students?.length || 20}</p>
+                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Students</p>
                           </div>
-                          <div className={`p-2.5 rounded-xl border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-sm text-[#d4af37]">{liveSet.awards?.length || 6}</p>
-                            <p className="font-mono-tech text-[10px] text-zinc-400 uppercase tracking-wider mt-0.5">Awards</p>
+                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
+                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.awards?.length || 6}</p>
+                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Awards</p>
                           </div>
-                          <div className={`p-2.5 rounded-xl border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-sm text-[#d4af37]">{liveSet.memories?.length || 4}</p>
-                            <p className="font-mono-tech text-[10px] text-zinc-400 uppercase tracking-wider mt-0.5">Memories</p>
+                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
+                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.memories?.length || 4}</p>
+                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Memories</p>
                           </div>
-                          <div className={`p-2.5 rounded-xl border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-sm text-[#d4af37]">{liveSet.voices?.length || 4}</p>
-                            <p className="font-mono-tech text-[10px] text-zinc-400 uppercase tracking-wider mt-0.5">Thoughts</p>
+                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
+                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.students?.filter((s) => Boolean((s.myStory || s.bio || '').trim())).length || 4}</p>
+                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Stories</p>
                           </div>
                         </div>
 
-                        <div className={`p-3 rounded-2xl border text-xs space-y-1.5 ${
+                        {/* Compact Metadata Summary Line */}
+                        <div className={`px-3 py-2 rounded-xl border text-[11px] flex flex-wrap items-center justify-between gap-x-3 gap-y-1 ${
                           isLightMode ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-white/5 border-white/10 text-zinc-300'
                         }`}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-zinc-400">Class Rep:</span>
-                            <span className="font-mono-tech font-medium">{liveSet.classRepName}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-zinc-400">Convocation:</span>
-                            <span className="font-mono-tech">{liveSet.convocationDate}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-zinc-400">Status:</span>
-                            <span className="font-mono-tech text-emerald-400 font-bold">100% Populated & Live</span>
-                          </div>
+                          <span className="truncate">
+                            <span className="text-zinc-400">Rep:</span> <span className="font-mono-tech font-medium">{liveSet.classRepName}</span>
+                          </span>
+                          <span className="font-mono-tech text-zinc-400">{liveSet.convocationDate}</span>
+                          <span className="font-mono-tech text-emerald-400 font-bold text-[10px]">Live</span>
                         </div>
                       </div>
 
-                      {/* Action Buttons: Edit Demo Album (Main), View Live Album, Legacy Wall */}
-                      <div className="space-y-2 pt-2">
+                      {/* Action Buttons Preserved: Edit Demo Album, View Album, Legacy Wall, Unpublish, Delete */}
+                      <div className="space-y-1.5 pt-1">
                         <button
                           type="button"
                           id={`edit-demo-${liveSet.id}-btn`}
                           onClick={() => {
                             setEditingDemoSetId(null);
+                            try {
+                              sessionStorage.setItem(
+                                'kohot_host_return_spot',
+                                JSON.stringify({
+                                  tab: 'album_demos',
+                                  elementId: `demo-card-${liveSet.id}`,
+                                  scrollY: window.scrollY,
+                                })
+                              );
+                            } catch {}
                             if (onEditDemoAlbum) {
                               onEditDemoAlbum(liveSet.id);
                             } else {
                               setEditingDemoSetId(liveSet.id);
                             }
                           }}
-                          className="w-full py-3 px-4 rounded-xl bg-[#d4af37] hover:bg-amber-400 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:scale-[1.02] active:scale-[0.98]"
+                          className="w-full py-2 px-3 rounded-xl bg-[#d4af37] hover:bg-amber-400 text-black font-syne font-bold text-[11px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
                         >
-                          <Edit3 className="w-4 h-4" />
+                          <Edit3 className="w-3.5 h-3.5" />
                           <span>Edit Demo Album (Album Admin Dashboard)</span>
                         </button>
 
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-4 gap-1.5">
                           <button
                             type="button"
                             onClick={() => {
                               setEditingDemoSetId(null);
                               try {
-                                sessionStorage.setItem("kohot_host_return_spot", JSON.stringify({
-                                  tab: "album_demos",
-                                  elementId: `demo-card-${liveSet.id}`,
-                                  scrollY: window.scrollY
-                                }));
+                                sessionStorage.setItem(
+                                  'kohot_host_return_spot',
+                                  JSON.stringify({
+                                    tab: 'album_demos',
+                                    elementId: `demo-card-${liveSet.id}`,
+                                    scrollY: window.scrollY,
+                                  })
+                                );
                               } catch {}
                               onViewDepartmentAlbum(liveSet.id);
                             }}
-                            className={`py-2 px-3 rounded-xl border text-xs font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                              isLightMode 
-                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300' 
+                            className={`py-1.5 px-2 rounded-lg border text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer ${
+                              isLightMode
+                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
                                 : 'bg-white/10 hover:bg-white/20 text-white border-white/15'
                             }`}
                           >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            <span>View Album</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                            <span className="truncate">View Album</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={() => {
                               try {
-                                sessionStorage.setItem("kohot_host_return_spot", JSON.stringify({
-                                  tab: "album_demos",
-                                  elementId: `demo-card-${liveSet.id}`,
-                                  scrollY: window.scrollY
-                                }));
+                                sessionStorage.setItem(
+                                  'kohot_host_return_spot',
+                                  JSON.stringify({
+                                    tab: 'album_demos',
+                                    elementId: `demo-card-${liveSet.id}`,
+                                    scrollY: window.scrollY,
+                                  })
+                                );
                               } catch {}
                               if (onViewDepartmentLegacyWall) {
                                 onViewDepartmentLegacyWall('dept-crownfield-public-law', 'crownfield');
@@ -1363,39 +1391,42 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                                 onViewDepartmentAlbum(liveSet.id);
                               }
                             }}
-                            className={`py-2 px-3 rounded-xl border text-xs font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                              isLightMode 
-                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300' 
+                            className={`py-1.5 px-2 rounded-lg border text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer ${
+                              isLightMode
+                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
                                 : 'bg-white/10 hover:bg-white/20 text-white border-white/15'
                             }`}
                           >
-                            <Layers className="w-3.5 h-3.5" />
-                            <span>Legacy Wall</span>
+                            <Layers className="w-3 h-3 shrink-0" />
+                            <span className="truncate">Legacy Wall</span>
                           </button>
-                        </div>
 
-                        {/* Safe Deleting & Visibility Controls for Host */}
-                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/10">
                           <button
                             type="button"
                             onClick={() => handleHostToggleUnpublish(liveSet.id)}
-                            className={`py-2 px-3 rounded-xl border text-[11px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                            className={`py-1.5 px-2 rounded-lg border text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer ${
                               liveSet.isUnpublished
                                 ? 'bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border-amber-400/30 font-bold'
+                                : isLightMode
+                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
                                 : 'bg-white/5 hover:bg-white/10 text-zinc-300 border-white/10'
                             }`}
                           >
-                            {liveSet.isUnpublished ? <Eye className="w-3.5 h-3.5 text-amber-400" /> : <EyeOff className="w-3.5 h-3.5 text-zinc-400" />}
-                            <span>{liveSet.isUnpublished ? 'Republish' : 'Unpublish'}</span>
+                            {liveSet.isUnpublished ? (
+                              <Eye className="w-3 h-3 text-amber-400 shrink-0" />
+                            ) : (
+                              <EyeOff className="w-3 h-3 text-zinc-400 shrink-0" />
+                            )}
+                            <span className="truncate">{liveSet.isUnpublished ? 'Republish' : 'Unpublish'}</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={() => handleStartDeleteAlbum(liveSet, false)}
-                            className="py-2 px-3 rounded-xl border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[11px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            className="py-1.5 px-2 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer"
                           >
-                            <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                            <span>Delete</span>
+                            <Trash2 className="w-3 h-3 text-red-400 shrink-0" />
+                            <span className="truncate">Delete</span>
                           </button>
                         </div>
                       </div>
@@ -1408,88 +1439,33 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         )}
 
         {/* =========================================================================
-            1. INSTITUTIONAL DIRECTORIES DIRECTORY (3 LAYERS) - SHOWN FIRST
-            Hierarchy: Layer 1 Universities -> Layer 2 Departments -> Layer 3 Sets
+            1. INSTITUTIONS DIRECTORY SPREADSHEET (WITH EXPANDABLE UNIVERSITY & DEPARTMENT ROWS)
             ========================================================================= */}
         {activeTab === 'seeder' && (
-          <div id="seeder-module" className="space-y-8">
-            {/* 3-Layer Institutional Directory Manager */}
-            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-white/10 gap-4">
-                <div>
-                  <div className="flex items-center gap-2.5">
-                    <Building2 className="w-5 h-5 text-[#d4af37]" />
-                    <h3 className="font-syne font-bold text-lg text-white">
-                      Institutions Directory ({universities.length})
-                    </h3>
+          <div id="seeder-module" className="space-y-5">
+            <div className="p-4 sm:p-5 rounded-2xl bg-[#18181b] border border-white/12 space-y-4">
+              {/* Compact Top Header & Controls (Album Admin Dashboard Style) */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3.5 border-b border-white/[0.08]">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-[#d4af37]/15 border border-[#d4af37]/30 flex items-center justify-center text-[#d4af37] shrink-0">
+                    <Building2 className="w-4 h-4" />
                   </div>
-                  <p className="font-body text-xs text-zinc-400 mt-1 max-w-2xl leading-relaxed">
-                    <span className="text-white font-semibold">Institution → Department → Class</span> structure. Governed exclusively by the Master Host.
-                  </p>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-syne font-bold text-base sm:text-lg text-white">
+                        Institutions Directory ({universities.length})
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/10 font-mono-tech text-[10px] text-zinc-300 uppercase">
+                        Spreadsheet
+                      </span>
+                    </div>
+                    <p className="font-body text-xs text-zinc-400 truncate">
+                      Click any institution row to manage departments, legacy walls, and plaques.
+                    </p>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2.5 shrink-0">
-                  <button
-                    id="open-add-uni-btn"
-                    onClick={() => setIsAddUniOpen(!isAddUniOpen)}
-                    className="px-4 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-tech text-xs tracking-wider uppercase font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-black" />
-                    <span>{isAddUniOpen ? 'Close Form' : '+ Add New Institution'}</span>
-                  </button>
-
-                  <span className="text-xs font-mono-tech text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-full flex items-center gap-1.5 hidden md:inline-flex">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Master Host Exclusive</span>
-                  </span>
-                </div>
-              </div>
-
-
-              {seedingSuccessMsg && (
-                <div className="p-4 rounded-2xl bg-white/[0.04] border border-emerald-500/30 text-emerald-400 text-xs font-mono-tech flex items-center gap-2.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>{seedingSuccessMsg}</span>
-                </div>
-              )}
-
-              {/* Search Bar & University Filter - Quick finding of University or Department */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={directorySearchTerm}
-                    onChange={(e) => setDirectorySearchTerm(e.target.value)}
-                    placeholder="Search university or department by name, code, or faculty..."
-                    className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-500 font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none"
-                  />
-                  {directorySearchTerm && (
-                    <button
-                      type="button"
-                      onClick={() => setDirectorySearchTerm('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white p-0.5 rounded cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <select
-                    value={directoryUniFilter}
-                    onChange={(e) => setDirectoryUniFilter(e.target.value)}
-                    aria-label="Filter by institution"
-                    className="px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none cursor-pointer"
-                  >
-                    <option value="all">All Institutions ({universities.length})</option>
-                    {universities.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.shortCode} - {u.name}
-                      </option>
-                    ))}
-                  </select>
-
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => {
@@ -1500,1034 +1476,927 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                       });
                       setExpandedDirectoryUnis(allExpanded);
                     }}
-                    className="px-3.5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10 font-mono-tech text-xs cursor-pointer transition-colors"
+                    className="px-3 py-2 rounded-xl bg-white/[0.05] hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10 font-mono-tech text-[11px] uppercase tracking-wider cursor-pointer transition-colors"
                   >
                     {Object.values(expandedDirectoryUnis).some((v) => !v) ? 'Expand All' : 'Collapse All'}
                   </button>
+
+                  <button
+                    id="open-add-uni-btn"
+                    type="button"
+                    onClick={() => setIsAddUniOpen(true)}
+                    className="px-3.5 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-mono-tech text-[11px] tracking-wider uppercase font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-black" />
+                    <span>Add Institution</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Upload / Add New University Form (Toggleable) */}
-              {isAddUniOpen && (
-                <div className="p-6 rounded-2xl bg-[#08090e] border border-[#d4af37]/30 space-y-4">
-                  <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                    <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                      <Plus className="w-4 h-4 text-[#d4af37]" />
-                      <span>Add New Institution to Directory</span>
-                    </h4>
+              {seedingSuccessMsg && (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono-tech flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{seedingSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* Compact Search Bar & University Filter */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={directorySearchTerm}
+                    onChange={(e) => setDirectorySearchTerm(e.target.value)}
+                    placeholder="Search university, short code, department, or faculty..."
+                    className="w-full pl-9 pr-8 py-2 rounded-xl bg-[#0e1017] border border-white/12 text-white placeholder:text-zinc-500 font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none"
+                  />
+                  {directorySearchTerm && (
                     <button
                       type="button"
-                      onClick={() => setIsAddUniOpen(false)}
-                      className="text-xs font-mono-tech text-zinc-400 hover:text-white"
+                      onClick={() => setDirectorySearchTerm('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white p-0.5 rounded cursor-pointer"
                     >
-                      Cancel
+                      <X className="w-3.5 h-3.5" />
                     </button>
-                  </div>
+                  )}
+                </div>
 
-                  <form onSubmit={handleAddNewUniversitySeed} className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-body">
-                    <div className="sm:col-span-2">
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Institution Full Name *
-                      </label>
-                      <input
-                        required
-                        type="text"
-                        value={newUniName}
-                        onChange={(e) => setNewUniName(e.target.value)}
-                        placeholder="e.g. Obafemi Awolowo University (OAU)"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                      />
-                    </div>
+                <select
+                  value={directoryUniFilter}
+                  onChange={(e) => setDirectoryUniFilter(e.target.value)}
+                  aria-label="Filter by institution"
+                  className="px-3 py-2 rounded-xl bg-[#0e1017] border border-white/12 text-white font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none cursor-pointer shrink-0"
+                >
+                  <option value="all">All Institutions ({universities.length})</option>
+                  {universities.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.shortCode} - {u.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-                    <div>
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Short Code *
-                      </label>
-                      <input
-                        required
-                        type="text"
-                        value={newUniShortCode}
-                        onChange={(e) => setNewUniShortCode(e.target.value)}
-                        placeholder="e.g. OAU"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-600 font-mono-tech uppercase focus:border-white/40 focus:outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Institution Type
-                      </label>
-                      <select
-                        value={newUniInstitutionType}
-                        onChange={(e) => setNewUniInstitutionType(e.target.value as any)}
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white font-mono-tech focus:border-white/40 focus:outline-none"
-                      >
-                        <option value="university">University</option>
-                        <option value="polytechnic">Polytechnic</option>
-                        <option value="college_of_education">College of Education</option>
-                      </select>
-                    </div>
-
-                    <div className="flex flex-col justify-end">
-                      <label className="flex items-center gap-2 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={newUniIsPriority}
-                          onChange={(e) => setNewUniIsPriority(e.target.checked)}
-                          className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
-                        />
-                        <span className="font-mono-tech text-[11px] text-zinc-300">
-                          Currently working with (Priority)
-                        </span>
-                      </label>
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Batch Order Number
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={newUniOrderNumber}
-                        onChange={(e) => setNewUniOrderNumber(Number(e.target.value))}
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white font-mono-tech focus:border-white/40 focus:outline-none"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <ImageDropzone
-                        value={newUniLogoUrl}
-                        onChange={setNewUniLogoUrl}
-                        label="Official Institutional Crest / Logo Image"
-                        aspectRatio="1:1"
-                        maxDimension={400}
-                        required
-                        helperText="Drag & drop or click to upload the official institution crest"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Institutional Motto
-                      </label>
-                      <input
-                        type="text"
-                        value={newUniMotto}
-                        onChange={(e) => setNewUniMotto(e.target.value)}
-                        placeholder="e.g. For Learning and Culture"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Campus Location
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Ile-Ife, Osun State"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Official Website Portal
-                      </label>
-                      <input
-                        type="url"
-                        value={newUniWebsite}
-                        onChange={(e) => setNewUniWebsite(e.target.value)}
-                        placeholder="https://oauife.edu.ng"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-600 font-mono-tech focus:border-white/40 focus:outline-none text-xs"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Primary Faculty / College
-                      </label>
-                      <input
-                        type="text"
-                        value={newUniFaculty}
-                        onChange={(e) => setNewUniFaculty(e.target.value)}
-                        placeholder="e.g. Faculty of Technology"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                        Initial Departments (Comma separated)
-                      </label>
-                      <input
-                        type="text"
-                        value={newUniDepartments}
-                        onChange={(e) => setNewUniDepartments(e.target.value)}
-                        placeholder="e.g. Computer Science, Electrical Engineering, Mechanical"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e1017] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-3 pt-2 flex items-center justify-end gap-2">
+              {/* POPUP MODAL: ADD NEW INSTITUTION (Inspired by Album Admin & Invite UI) */}
+              {isAddUniOpen && (
+                <div
+                  className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn"
+                  onClick={() => setIsAddUniOpen(false)}
+                >
+                  <div
+                    className="w-full max-w-2xl max-h-[90vh] rounded-3xl bg-[#121318] border border-white/15 shadow-2xl overflow-hidden flex flex-col text-white"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Modal Header */}
+                    <div className="px-6 py-4 bg-[#18181b] border-b border-white/10 flex items-center justify-between gap-3 shrink-0">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-[#d4af37]/15 border border-[#d4af37]/35 flex items-center justify-center text-[#d4af37] shrink-0">
+                          <Building2 className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="font-mono-tech text-[10px] uppercase tracking-widest text-[#d4af37] font-bold block">
+                            Institution Onboarding
+                          </span>
+                          <h4 className="font-syne font-bold text-base sm:text-lg text-white truncate">
+                            Add New Institution
+                          </h4>
+                        </div>
+                      </div>
                       <button
                         type="button"
                         onClick={() => setIsAddUniOpen(false)}
-                        className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs"
+                        className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-colors cursor-pointer shrink-0"
+                        aria-label="Close modal"
                       >
-                        Cancel
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-5 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-semibold font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer shadow-md"
-                      >
-                        Upload &amp; Save Institution
+                        <X className="w-4 h-4" />
                       </button>
                     </div>
-                  </form>
+
+                    {/* Modal Form Body */}
+                    <form
+                      onSubmit={handleAddNewUniversitySeed}
+                      className="flex-1 overflow-y-auto p-6 space-y-5 text-xs font-body"
+                    >
+                      {/* Section 1: Core Identity */}
+                      <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.08] space-y-4">
+                        <span className="font-mono-tech text-[10px] uppercase tracking-widest text-[#d4af37] font-bold block">
+                          1. Institution Identity
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                          <div className="sm:col-span-2">
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Institution Full Name *
+                            </label>
+                            <input
+                              required
+                              type="text"
+                              value={newUniName}
+                              onChange={(e) => setNewUniName(e.target.value)}
+                              placeholder="e.g. Obafemi Awolowo University"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white placeholder:text-zinc-600 focus:border-[#d4af37] focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Short Code *
+                            </label>
+                            <input
+                              required
+                              type="text"
+                              value={newUniShortCode}
+                              onChange={(e) => setNewUniShortCode(e.target.value)}
+                              placeholder="e.g. OAU"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white placeholder:text-zinc-600 font-mono-tech uppercase focus:border-[#d4af37] focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Institution Type
+                            </label>
+                            <select
+                              value={newUniInstitutionType}
+                              onChange={(e) => setNewUniInstitutionType(e.target.value as any)}
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white font-mono-tech focus:border-[#d4af37] focus:outline-none"
+                            >
+                              <option value="university">University</option>
+                              <option value="polytechnic">Polytechnic</option>
+                              <option value="college_of_education">College of Education</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Batch Order #
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={newUniOrderNumber}
+                              onChange={(e) => setNewUniOrderNumber(Number(e.target.value))}
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white font-mono-tech focus:border-[#d4af37] focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="flex flex-col justify-end">
+                            <label className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 cursor-pointer hover:bg-amber-500/15 transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={newUniIsPriority}
+                                onChange={(e) => setNewUniIsPriority(e.target.checked)}
+                                className="rounded border-zinc-700 text-[#d4af37] focus:ring-[#d4af37] w-4 h-4 cursor-pointer"
+                              />
+                              <span className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-300 font-bold">
+                                Priority Partner
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section 2: Crest & Portal Details */}
+                      <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.08] space-y-4">
+                        <span className="font-mono-tech text-[10px] uppercase tracking-widest text-[#d4af37] font-bold block">
+                          2. Official Crest &amp; Metadata
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                          <div className="sm:col-span-2">
+                            <ImageDropzone
+                              value={newUniLogoUrl}
+                              onChange={setNewUniLogoUrl}
+                              label="Official Institutional Crest / Logo *"
+                              aspectRatio="1:1"
+                              maxDimension={400}
+                              required
+                              helperText="Drag & drop or click to upload the official institution crest"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Institutional Motto
+                            </label>
+                            <input
+                              type="text"
+                              value={newUniMotto}
+                              onChange={(e) => setNewUniMotto(e.target.value)}
+                              placeholder="e.g. For Learning and Culture"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white placeholder:text-zinc-600 focus:border-[#d4af37] focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Official Website Portal
+                            </label>
+                            <input
+                              type="url"
+                              value={newUniWebsite}
+                              onChange={(e) => setNewUniWebsite(e.target.value)}
+                              placeholder="https://oauife.edu.ng"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white placeholder:text-zinc-600 font-mono-tech focus:border-[#d4af37] focus:outline-none text-xs"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section 3: Initial Faculty & Departments */}
+                      <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.08] space-y-3.5">
+                        <span className="font-mono-tech text-[10px] uppercase tracking-widest text-[#d4af37] font-bold block">
+                          3. Initial Faculty &amp; Departments (Optional)
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                          <div>
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Primary Faculty
+                            </label>
+                            <input
+                              type="text"
+                              value={newUniFaculty}
+                              onChange={(e) => setNewUniFaculty(e.target.value)}
+                              placeholder="e.g. Faculty of Law"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white placeholder:text-zinc-600 focus:border-[#d4af37] focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1 font-bold">
+                              Initial Departments (Comma separated)
+                            </label>
+                            <input
+                              type="text"
+                              value={newUniDepartments}
+                              onChange={(e) => setNewUniDepartments(e.target.value)}
+                              placeholder="e.g. Public Law, Commercial Law, International Law"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-[#090a0f] border border-white/12 text-white placeholder:text-zinc-600 focus:border-[#d4af37] focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Modal Footer */}
+                      <div className="pt-2 border-t border-white/10 flex items-center justify-end gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setIsAddUniOpen(false)}
+                          className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs uppercase tracking-wider cursor-pointer transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-5 py-2.5 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-bold font-mono-tech text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md"
+                        >
+                          Save Institution
+                        </button>
+                      </div>
+                    </form>
+                  </div>
                 </div>
               )}
 
-              {/* Numbered Universities 3-Layer Hierarchy with Closable Pods & Search */}
-              <div className="space-y-6">
-                {filteredDirectoryUniversities.length === 0 ? (
-                  <div className="py-12 text-center rounded-2xl bg-white/[0.02] border border-white/10 space-y-3">
-                    <Building2 className="w-8 h-8 text-zinc-500 mx-auto" />
-                    <p className="font-syne font-bold text-sm text-white">No Universities or Departments Found</p>
-                    <p className="font-mono-tech text-xs text-zinc-400">
-                      No directory matches for "{directorySearchTerm}". Try clearing your search query or selecting another university.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDirectorySearchTerm('');
-                        setDirectoryUniFilter('all');
-                      }}
-                      className="px-4 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer"
-                    >
-                      Clear Search &amp; Filters
-                    </button>
-                  </div>
-                ) : (
-                  filteredDirectoryUniversities.map((uni, uniIdx) => {
-                    const cardNumber = uniIdx + 1;
-                    const formattedOrder = String(cardNumber).padStart(2, '0');
-                    const isExpanded = expandedDirectoryUnis[uni.id] !== false;
-                    const q = directorySearchTerm.toLowerCase().trim();
-                    const departmentsList = [...(uni.departments || [])]
-                      .sort((a, b) => a.name.localeCompare(b.name))
-                      .filter((d) => {
-                        if (!q) return true;
+              {/* SPREADSHEET TABLE VIEW */}
+              {filteredDirectoryUniversities.length === 0 ? (
+                <div className="py-12 text-center rounded-2xl bg-white/[0.02] border border-white/10 space-y-3">
+                  <Building2 className="w-8 h-8 text-zinc-500 mx-auto" />
+                  <p className="font-syne font-bold text-sm text-white">No Universities or Departments Found</p>
+                  <p className="font-mono-tech text-xs text-zinc-400">
+                    No directory matches for "{directorySearchTerm}". Try clearing your search query or selecting another university.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDirectorySearchTerm('');
+                      setDirectoryUniFilter('all');
+                    }}
+                    className="px-4 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer"
+                  >
+                    Clear Search &amp; Filters
+                  </button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-white/15 bg-[#08090e] shadow-xl">
+                  <table className="w-full text-left border-collapse min-w-[920px]">
+                    <thead>
+                      <tr className="bg-white/[0.05] border-b border-white/15 font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
+                        <th className="py-3 px-3 border-r border-white/10 w-16 text-center">#</th>
+                        <th className="py-3 px-3.5 border-r border-white/10">Institution</th>
+                        <th className="py-3 px-3 border-r border-white/10 w-24">Code</th>
+                        <th className="py-3 px-3 border-r border-white/10 w-44">Location &amp; Portal</th>
+                        <th className="py-3 px-3 border-r border-white/10 w-28 text-center">Depts</th>
+                        <th className="py-3 px-3 border-r border-white/10 w-28 text-center">Status</th>
+                        <th className="py-3 px-3.5 text-right w-72">University Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10 text-xs">
+                      {filteredDirectoryUniversities.map((uni, uniIdx) => {
+                        const cardNumber = uniIdx + 1;
+                        const formattedOrder = String(cardNumber).padStart(2, '0');
+                        const isExpanded = expandedDirectoryUnis[uni.id] !== false;
+                        const q = directorySearchTerm.toLowerCase().trim();
+                        const departmentsList = [...(uni.departments || [])]
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .filter((d) => {
+                            if (!q) return true;
+                            return (
+                              d.name.toLowerCase().includes(q) ||
+                              (d.code && d.code.toLowerCase().includes(q)) ||
+                              (d.faculty && d.faculty.toLowerCase().includes(q)) ||
+                              uni.name.toLowerCase().includes(q) ||
+                              uni.shortCode.toLowerCase().includes(q)
+                            );
+                          });
+
                         return (
-                          d.name.toLowerCase().includes(q) ||
-                          (d.code && d.code.toLowerCase().includes(q)) ||
-                          (d.faculty && d.faculty.toLowerCase().includes(q)) ||
-                          uni.name.toLowerCase().includes(q) ||
-                          uni.shortCode.toLowerCase().includes(q)
-                        );
-                      });
+                          <React.Fragment key={uni.id}>
+                            {/* SPREADSHEET ROW: UNIVERSITY (LAYER 1) */}
+                            <tr
+                              id={`uni-compartment-${uni.id}`}
+                              onClick={() => toggleDirectoryUniExpand(uni.id)}
+                              className="bg-white/[0.02] hover:bg-white/[0.05] transition-colors cursor-pointer"
+                            >
+                              {/* # & Expand Toggle */}
+                              <td className="py-3 px-3 border-r border-white/10 font-mono-tech font-bold text-center text-[#d4af37]">
+                                <div className="flex items-center justify-center gap-1">
+                                  {isExpanded ? (
+                                    <ChevronUp className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                  ) : (
+                                    <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                  )}
+                                  <span>{formattedOrder}</span>
+                                </div>
+                              </td>
 
-                    return (
-                      <div
-                        key={uni.id}
-                        id={`uni-compartment-${uni.id}`}
-                        className="rounded-2xl bg-[#08090e] border border-white/15 overflow-hidden transition-all duration-300 shadow-xl"
-                      >
-                        {/* University Header Bar (Layer 1) */}
-                        <div className="p-5 sm:p-6 bg-gradient-to-r from-white/[0.04] to-transparent border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                          <div className="flex items-start gap-4">
-                            {/* Institution Number Badge */}
-                            <div className="flex flex-col items-center justify-center w-12 h-12 rounded-xl bg-white/10 border border-white/20 text-white shrink-0 font-mono-tech font-bold">
-                              <span className="text-[10px] text-zinc-400">INST</span>
-                              <span className="text-base text-[#d4af37]">#{formattedOrder}</span>
-                            </div>
+                              {/* Crest + Name + Motto */}
+                              <td className="py-3 px-3.5 border-r border-white/10">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-9 h-9 rounded-lg overflow-hidden bg-black border border-white/15 shrink-0 flex items-center justify-center p-1">
+                                    <img
+                                      src={uni.logoUrl}
+                                      alt={uni.name}
+                                      referrerPolicy="no-referrer"
+                                      className="w-full h-full object-contain"
+                                    />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-syne font-bold text-sm text-white truncate">
+                                      {uni.name}
+                                    </div>
+                                    <div className="text-[11px] text-zinc-400 italic truncate">
+                                      “{uni.motto || 'In Deed and in Truth'}”
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
 
-                            {/* Institution Crest */}
-                            <div className="w-12 h-12 rounded-xl overflow-hidden bg-black border border-white/15 shrink-0 flex items-center justify-center p-1">
-                              <img
-                                src={uni.logoUrl}
-                                alt={uni.name}
-                                referrerPolicy="no-referrer"
-                                className="w-full h-full object-contain filter grayscale-[10%]"
-                              />
-                            </div>
-
-                            {/* Institution Info */}
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2.5 flex-wrap">
-                                <h4 className="font-syne font-bold text-base text-white tracking-tight">
-                                  {uni.name}
-                                </h4>
-                                <span className="text-[10px] font-mono-tech text-black bg-white font-bold px-2 py-0.5 rounded-full">
+                              {/* Short Code */}
+                              <td className="py-3 px-3 border-r border-white/10 font-mono-tech">
+                                <span className="px-2 py-0.5 rounded bg-white text-black font-bold text-[10px] uppercase">
                                   {uni.shortCode}
                                 </span>
-                                {uni.isPriority && (
-                                  <span className="text-[10px] font-mono-tech font-bold px-2 py-0.5 rounded-full bg-[#d4af37] text-black shadow-xs">
-                                    Current
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-xs text-zinc-400 font-serif-body italic mt-0.5">
-                                "{uni.motto || 'In Deed and in Truth'}"
-                              </p>
-                              <div className="flex items-center gap-3 text-[11px] font-mono-tech text-zinc-400 mt-1.5 flex-wrap">
-                                <span className="text-white font-semibold">{departmentsList.length} Departments</span>
-                                <span>•</span>
-                                <span>{uni.location || 'Accredited Campus'}</span>
-                                {uni.officialWebsite && (
-                                  <>
-                                    <span>•</span>
-                                    <a
-                                      href={uni.officialWebsite}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="text-zinc-400 hover:text-white flex items-center gap-1 hover:underline"
-                                    >
-                                      <span>Portal</span>
-                                      <ExternalLink className="w-3 h-3" />
-                                    </a>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
+                              </td>
 
-                          {/* University Actions (Edit University & Add Department) */}
-                          <div className="flex items-center gap-2 self-start md:self-center shrink-0">
-                            <button
-                              id={`edit-uni-btn-${uni.id}`}
-                              onClick={() => setSelectedUniForEdit(uni)}
-                              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs font-semibold border border-white/15 flex items-center gap-1.5 transition-all cursor-pointer"
-                            >
-                              <Edit3 className="w-3.5 h-3.5 text-zinc-300" />
-                              <span>Edit Institution</span>
-                            </button>
-
-                            <button
-                              id={`add-dept-btn-${uni.id}`}
-                              onClick={() => {
-                                if (addingDeptUniId === uni.id) {
-                                  setAddingDeptUniId(null);
-                                } else {
-                                  setAddingDeptUniId(uni.id);
-                                  setNewDeptFaculty(uni.faculties?.[0]?.facultyName || 'Faculty of Sciences');
-                                  setNewDeptLogoUrl(uni.logoUrl);
-                                  if (!isExpanded) toggleDirectoryUniExpand(uni.id);
-                                }
-                              }}
-                              className="px-3.5 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-mono-tech text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
-                            >
-                              <FolderPlus className="w-3.5 h-3.5 text-black" />
-                              <span>{addingDeptUniId === uni.id ? 'Cancel' : '+ Add Department'}</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => toggleDirectoryUniExpand(uni.id)}
-                              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 transition-all cursor-pointer flex items-center justify-center"
-                              title={isExpanded ? 'Collapse Pod' : 'Expand Pod'}
-                              aria-label={isExpanded ? 'Collapse Pod' : 'Expand Pod'}
-                            >
-                              {isExpanded ? <ChevronUp className="w-4 h-4 text-zinc-300" /> : <ChevronDown className="w-4 h-4 text-zinc-300" />}
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Collapsible University Pod Body */}
-                        {isExpanded && (
-                          <>
-
-                        {/* Inline Add Department Form */}
-                        {addingDeptUniId === uni.id && (
-                          <div className="p-5 sm:p-6 bg-white/[0.02] border-b border-white/10">
-                            <div className="max-w-3xl space-y-4">
-                              <div className="flex items-center gap-2">
-                                <Plus className="w-4 h-4 text-[#d4af37]" />
-                                <h5 className="font-syne font-bold text-sm text-white">
-                                  Add Department to #{formattedOrder} {uni.name}
-                                </h5>
-                              </div>
-                              <form onSubmit={(e) => handleAddNewDepartment(uni.id, e)} className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                                <div>
-                                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                                    Department Name *
-                                  </label>
-                                  <input
-                                    required
-                                    type="text"
-                                    value={newDeptName}
-                                    onChange={(e) => setNewDeptName(e.target.value)}
-                                    placeholder="e.g. Electrical &amp; Electronics Engineering"
-                                    className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                                  />
-                                </div>
-
-                                <div>
-                                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                                    Department Code
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={newDeptCode}
-                                    onChange={(e) => setNewDeptCode(e.target.value)}
-                                    placeholder="e.g. EEE"
-                                    className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                                  />
-                                </div>
-
-                                <div>
-                                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                                    Faculty / College
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={newDeptFaculty}
-                                    onChange={(e) => setNewDeptFaculty(e.target.value)}
-                                    placeholder="e.g. Faculty of Engineering"
-                                    className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                                  />
-                                </div>
-
-                                <div className="sm:col-span-2 space-y-4">
-                                  <ImageDropzone
-                                    value={newDeptHeroUrl}
-                                    onChange={setNewDeptHeroUrl}
-                                    label="Department Directory Hero Banner Image"
-                                    aspectRatio="banner"
-                                    maxDimension={1600}
-                                    helperText="High-resolution hero cover banner displayed on the department's legacy wall directory"
-                                  />
-
-                                  <ImageDropzone
-                                    value={newDeptLogoUrl}
-                                    onChange={setNewDeptLogoUrl}
-                                    label="Department Crest / Badge Logo"
-                                    aspectRatio="1:1"
-                                    maxDimension={400}
-                                    helperText="Department seal or faculty emblem (defaults to university crest if omitted)"
-                                  />
-                                </div>
-
-                                <div className="sm:col-span-2">
-                                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                                    Department Hero Caption (Host Curated)
-                                  </label>
-                                  <textarea
-                                    rows={2}
-                                    value={newDeptCaption}
-                                    onChange={(e) => setNewDeptCaption(e.target.value)}
-                                    placeholder="A timeless celebration of academic distinction, collaborative breakthroughs, and enduring brotherhood..."
-                                    className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none font-sans"
-                                  />
-                                </div>
-
-                                <div>
-                                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                                    Head of Department (HOD)
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={newDeptHod}
-                                    onChange={(e) => setNewDeptHod(e.target.value)}
-                                    placeholder="e.g. Prof. S. A. Adeleke"
-                                    className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
-                                  />
-                                </div>
-
-                                <div>
-                                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                                    Department Portal Link
-                                  </label>
-                                  <input
-                                    type="url"
-                                    value={newDeptPortal}
-                                    onChange={(e) => setNewDeptPortal(e.target.value)}
-                                    placeholder="https://..."
-                                    className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 font-mono-tech focus:border-white/40 focus:outline-none"
-                                  />
-                                </div>
-
-                                <div className="sm:col-span-2 pt-2 flex items-center justify-end gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => setAddingDeptUniId(null)}
-                                    className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs"
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button
-                                    type="submit"
-                                    className="px-5 py-2 rounded-lg bg-[#d4af37] hover:bg-[#e6c158] text-black font-semibold font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
-                                  >
-                                    Save Department
-                                  </button>
-                                </div>
-                              </form>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Departments Swipeable Horizontal List (Layer 2 & Layer 3) */}
-                        <div className="p-5 sm:p-6 pt-4">
-                          {departmentsList.length === 0 ? (
-                            <div className="py-6 text-center text-zinc-500 font-mono-tech text-xs">
-                              No departments registered yet. Click "+ Add Department" above to configure.
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              {/* Horizontal Swipe Indicator & Scroll Controls */}
-                              <div className="flex items-center justify-between px-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[11px] font-mono-tech uppercase tracking-wider text-zinc-300 font-bold">
-                                    Departments ({departmentsList.length})
-                                  </span>
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono-tech text-[#d4af37] bg-[#d4af37]/10 px-2.5 py-0.5 rounded-full border border-[#d4af37]/20">
-                                    <span>⇄ Swipe horizontally</span>
-                                  </span>
-                                </div>
-                                {departmentsList.length > 1 && (
-                                  <div className="flex items-center gap-1.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const el = document.getElementById(`dept-scroll-${uni.id}`);
-                                        if (el) el.scrollBy({ left: -360, behavior: 'smooth' });
-                                      }}
-                                      className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white flex items-center justify-center text-sm transition-colors cursor-pointer"
-                                      title="Scroll left"
-                                      aria-label="Scroll left"
-                                    >
-                                      ‹
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const el = document.getElementById(`dept-scroll-${uni.id}`);
-                                        if (el) el.scrollBy({ left: 360, behavior: 'smooth' });
-                                      }}
-                                      className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white flex items-center justify-center text-sm transition-colors cursor-pointer"
-                                      title="Scroll right"
-                                      aria-label="Scroll right"
-                                    >
-                                      ›
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Swipable Horizontal Flex Track */}
-                              <div
-                                id={`dept-scroll-${uni.id}`}
-                                className="flex gap-5 overflow-x-auto pb-4 pt-1 px-1 scroll-smooth snap-x snap-mandatory focus:outline-none"
-                                style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch' }}
+                              {/* Location & Portal */}
+                              <td
+                                className="py-3 px-3 border-r border-white/10 font-mono-tech text-[11px] text-zinc-300"
+                                onClick={(e) => e.stopPropagation()}
                               >
-                                {departmentsList.map((dept) => {
-                                  return (
-                                    <div
-                                      key={dept.id}
-                                      id={`department-compartment-${dept.id}`}
-                                      className="w-[340px] sm:w-[420px] lg:w-[460px] shrink-0 snap-start p-6 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-white/25 transition-all flex flex-col justify-between space-y-4 shadow-lg hover:shadow-xl"
-                                    >
-                                    {/* Department Top Row (Layer 2 Header) */}
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div className="flex items-start gap-3 min-w-0">
-                                        <div className="w-10 h-10 rounded-lg overflow-hidden bg-black/60 border border-white/15 shrink-0 flex items-center justify-center p-1">
-                                          <img
-                                            src={dept.logoUrl || uni.logoUrl}
-                                            alt={dept.name}
-                                            referrerPolicy="no-referrer"
-                                            className="w-full h-full object-contain filter grayscale-[10%]"
-                                          />
-                                        </div>
-                                        <div className="min-w-0">
-                                          <div className="flex items-center gap-2 flex-wrap">
-                                            <h5 className="font-syne font-bold text-sm text-white">
-                                              {dept.name}
-                                            </h5>
-                                            {dept.code && (
-                                              <span className="text-[9px] font-mono-tech uppercase bg-white/10 text-white px-1.5 py-0.5 rounded">
-                                                {dept.code}
-                                              </span>
-                                            )}
-                                          </div>
-                                          <p className="text-[11px] font-mono-tech text-zinc-400">
-                                            {dept.faculty} {dept.hodName && `• HOD: ${dept.hodName}`}
-                                          </p>
-                                          {/* Department Legacy Status Indicator */}
-                                          <div className="pt-0.5">
-                                            {dept.legacy_status === 'established' ? (
-                                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-mono-tech font-semibold">
-                                                <Award className="w-2.5 h-2.5" />
-                                                <span>Legacy Established {dept.founding_class_year ? `('Class of ${dept.founding_class_year})` : ''}</span>
-                                              </span>
-                                            ) : dept.legacy_status === 'pending_verification' ? (
-                                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono-tech font-semibold">
-                                                <Clock className="w-2.5 h-2.5" />
-                                                <span>Founding Application Under Review</span>
-                                              </span>
-                                            ) : (
-                                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#d4af37]/10 text-[#d4af37] border border-[#d4af37]/20 text-[9px] font-mono-tech">
-                                                <Sparkles className="w-2.5 h-2.5" />
-                                                <span>Founding Class Available (Sponsored $0)</span>
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
+                                <div className="truncate">{uni.location || 'Accredited Campus'}</div>
+                                {uni.officialWebsite && (
+                                  <a
+                                    href={uni.officialWebsite}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-[#d4af37] hover:underline inline-flex items-center gap-1 text-[10px] mt-0.5"
+                                  >
+                                    <span>Official Portal</span>
+                                    <ExternalLink className="w-2.5 h-2.5" />
+                                  </a>
+                                )}
+                              </td>
+
+                              {/* Department Count */}
+                              <td className="py-3 px-3 border-r border-white/10 text-center font-mono-tech">
+                                <span className="px-2.5 py-1 rounded-full bg-white/10 text-white font-bold text-[11px]">
+                                  {departmentsList.length}
+                                </span>
+                              </td>
+
+                              {/* Priority / Status */}
+                              <td className="py-3 px-3 border-r border-white/10 text-center font-mono-tech">
+                                {uni.isPriority ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-[#d4af37] text-black font-bold text-[10px] uppercase">
+                                    Priority
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] uppercase">
+                                    Active
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* University Actions */}
+                              <td
+                                className="py-3 px-3.5 text-right"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    id={`edit-uni-btn-${uni.id}`}
+                                    type="button"
+                                    onClick={() => setSelectedUniForEdit(uni)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[11px] font-semibold border border-white/15 inline-flex items-center gap-1 transition-all cursor-pointer"
+                                  >
+                                    <Edit3 className="w-3 h-3 text-zinc-300" />
+                                    <span>Edit Institution</span>
+                                  </button>
+
+                                  <button
+                                    id={`add-dept-btn-${uni.id}`}
+                                    type="button"
+                                    onClick={() => {
+                                      if (addingDeptUniId === uni.id) {
+                                        setAddingDeptUniId(null);
+                                      } else {
+                                        setAddingDeptUniId(uni.id);
+                                        setNewDeptFaculty(uni.faculties?.[0]?.facultyName || 'Faculty of Sciences');
+                                        setNewDeptLogoUrl(uni.logoUrl);
+                                        if (!isExpanded) toggleDirectoryUniExpand(uni.id);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1.5 rounded-lg bg-[#d4af37] hover:bg-[#e6c158] text-black font-mono-tech text-[11px] font-bold inline-flex items-center gap-1 transition-all cursor-pointer"
+                                  >
+                                    <FolderPlus className="w-3 h-3 text-black" />
+                                    <span>{addingDeptUniId === uni.id ? 'Cancel' : '+ Add Department'}</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+
+                            {/* INLINE ADD DEPARTMENT FORM ROW */}
+                            {isExpanded && addingDeptUniId === uni.id && (
+                              <tr className="bg-[#0c0e16]">
+                                <td colSpan={7} className="p-5 border-b border-white/10">
+                                  <div className="max-w-3xl space-y-4">
+                                    <div className="flex items-center gap-2">
+                                      <Plus className="w-4 h-4 text-[#d4af37]" />
+                                      <h5 className="font-syne font-bold text-sm text-white">
+                                        Add Department to #{formattedOrder} {uni.name}
+                                      </h5>
+                                    </div>
+                                    <form onSubmit={(e) => handleAddNewDepartment(uni.id, e)} className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                      <div>
+                                        <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                                          Department Name *
+                                        </label>
+                                        <input
+                                          required
+                                          type="text"
+                                          value={newDeptName}
+                                          onChange={(e) => setNewDeptName(e.target.value)}
+                                          placeholder="e.g. Electrical &amp; Electronics Engineering"
+                                          className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
+                                        />
                                       </div>
 
-                                      {dept.code && (
-                                        <span className="text-[10px] font-mono-tech bg-white/10 text-zinc-300 border border-white/15 px-2 py-0.5 rounded-full shrink-0">
-                                          {dept.code}
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    {/* Hero Artwork Preview & Caption */}
-                                    <div className="relative rounded-xl overflow-hidden bg-black/50 border border-white/10 aspect-[21/9] group">
-                                      <img
-                                        src={dept.heroImageUrl}
-                                        alt={dept.name}
-                                        referrerPolicy="no-referrer"
-                                        className="w-full h-full object-cover filter brightness-75 group-hover:scale-105 transition-transform duration-500"
-                                      />
-                                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent flex flex-col justify-end p-3">
-                                        <span className="text-[9px] font-mono-tech text-[#d4af37] uppercase tracking-wider flex items-center gap-1">
-                                          <ImageIcon className="w-3 h-3" />
-                                          <span>Department Hero Image &amp; Caption</span>
-                                        </span>
-                                        <p className="text-[11px] text-zinc-200 font-serif italic line-clamp-2 mt-0.5">
-                                          "{dept.caption}"
-                                        </p>
+                                      <div>
+                                        <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                                          Department Code
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={newDeptCode}
+                                          onChange={(e) => setNewDeptCode(e.target.value)}
+                                          placeholder="e.g. EEE"
+                                          className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
+                                        />
                                       </div>
+
+                                      <div>
+                                        <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                                          Faculty / College
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={newDeptFaculty}
+                                          onChange={(e) => setNewDeptFaculty(e.target.value)}
+                                          placeholder="e.g. Faculty of Engineering"
+                                          className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                                          Head of Department (HOD)
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={newDeptHod}
+                                          onChange={(e) => setNewDeptHod(e.target.value)}
+                                          placeholder="e.g. Prof. S. A. Adeleke"
+                                          className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none"
+                                        />
+                                      </div>
+
+                                      <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <ImageDropzone
+                                          value={newDeptHeroUrl}
+                                          onChange={setNewDeptHeroUrl}
+                                          label="Department Directory Hero Banner Image"
+                                          aspectRatio="banner"
+                                          maxDimension={1600}
+                                          helperText="Hero cover banner displayed on the department's legacy wall"
+                                        />
+
+                                        <ImageDropzone
+                                          value={newDeptLogoUrl}
+                                          onChange={setNewDeptLogoUrl}
+                                          label="Department Crest / Badge Logo"
+                                          aspectRatio="1:1"
+                                          maxDimension={400}
+                                          helperText="Defaults to university crest if omitted"
+                                        />
+                                      </div>
+
+                                      <div className="sm:col-span-2">
+                                        <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                                          Department Hero Caption (Host Curated)
+                                        </label>
+                                        <textarea
+                                          rows={2}
+                                          value={newDeptCaption}
+                                          onChange={(e) => setNewDeptCaption(e.target.value)}
+                                          placeholder="A timeless celebration of academic distinction..."
+                                          className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 focus:border-white/40 focus:outline-none font-sans"
+                                        />
+                                      </div>
+
+                                      <div className="sm:col-span-2">
+                                        <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                                          Department Portal Link
+                                        </label>
+                                        <input
+                                          type="url"
+                                          value={newDeptPortal}
+                                          onChange={(e) => setNewDeptPortal(e.target.value)}
+                                          placeholder="https://..."
+                                          className="w-full px-3.5 py-2 rounded-lg bg-[#060709] border border-white/15 text-white placeholder:text-zinc-600 font-mono-tech focus:border-white/40 focus:outline-none"
+                                        />
+                                      </div>
+
+                                      <div className="sm:col-span-2 pt-2 flex items-center justify-end gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => setAddingDeptUniId(null)}
+                                          className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs"
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="submit"
+                                          className="px-5 py-2 rounded-lg bg-[#d4af37] hover:bg-[#e6c158] text-black font-semibold font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
+                                        >
+                                          Save Department
+                                        </button>
+                                      </div>
+                                    </form>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+
+                            {/* EXPANDED SUB-SPREADSHEET FOR DEPARTMENTS UNDER THIS UNIVERSITY */}
+                            {isExpanded && (
+                              <tr className="bg-[#05060a]">
+                                <td colSpan={7} className="p-0">
+                                  {departmentsList.length === 0 ? (
+                                    <div className="py-5 px-6 text-zinc-500 font-mono-tech text-xs border-l-4 border-[#d4af37]/40">
+                                      No departments registered under {uni.shortCode} yet. Click "+ Add Department" on the row above.
                                     </div>
-
-                                    {/* Department Class Albums List (Includes Active + Soft-Deleted within 30 Days or Kept by Host) */}
-                                    {(() => {
-                                      const deptAlbums = sets
-                                        .filter((s) => {
-                                          if (s.id.startsWith('crownfield-')) return false;
-                                          const matchesDept =
-                                            s.departmentId === dept.id ||
-                                            (s.departmentName?.toLowerCase().trim() === dept.name.toLowerCase().trim() &&
-                                              (!s.institutionId || s.institutionId === uni.id));
-                                          if (!matchesDept) return false;
-                                          if (s.deletedAt) {
-                                            const daysPassed = Math.floor(
-                                              (Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24)
-                                            );
-                                            const daysRemaining = Math.max(0, 30 - daysPassed);
-                                            if (daysRemaining <= 0 && !s.keptByHostOnly) return false;
-                                          }
-                                          return true;
-                                        })
-                                        .sort((a, b) => b.graduationYear - a.graduationYear);
-
-                                      if (deptAlbums.length === 0) return null;
-
-                                      return (
-                                        <div className="space-y-2 pt-2 border-t border-white/10">
-                                          <div className="flex items-center justify-between text-[10px] font-mono-tech uppercase tracking-wider text-zinc-400">
-                                            <span>Class Albums ({deptAlbums.length})</span>
-                                            <span>Directory Archive</span>
-                                          </div>
-                                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                                            {deptAlbums.map((album) => {
-                                              const isDeleted = Boolean(album.deletedAt);
-                                              const daysPassed = album.deletedAt
-                                                ? Math.floor((Date.now() - new Date(album.deletedAt).getTime()) / (1000 * 60 * 60 * 24))
-                                                : 0;
-                                              const daysRemaining = Math.max(0, 30 - daysPassed);
+                                  ) : (
+                                    <div className="border-l-4 border-[#d4af37]/60 pl-4 pr-3 py-3 space-y-2">
+                                      <div className="overflow-x-auto rounded-xl border border-white/10 bg-[#0b0d14]">
+                                        <table className="w-full text-left border-collapse">
+                                          <thead>
+                                            <tr className="bg-white/[0.03] border-b border-white/10 font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
+                                              <th className="py-2 px-3 border-r border-white/10 w-12 text-center">Dept</th>
+                                              <th className="py-2 px-3 border-r border-white/10">Department &amp; Code</th>
+                                              <th className="py-2 px-3 border-r border-white/10">Faculty &amp; HOD</th>
+                                              <th className="py-2 px-3 border-r border-white/10 w-44">Legacy Status</th>
+                                              <th className="py-2 px-3 border-r border-white/10">Class Albums</th>
+                                              <th className="py-2 px-3 text-right w-80">Department Actions</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-white/[0.06] text-xs">
+                                            {departmentsList.map((dept, deptIdx) => {
+                                              const deptAlbums = sets
+                                                .filter((s) => {
+                                                  if (s.id.startsWith('crownfield-')) return false;
+                                                  const matchesDept =
+                                                    s.departmentId === dept.id ||
+                                                    (s.departmentName?.toLowerCase().trim() === dept.name.toLowerCase().trim() &&
+                                                      (!s.institutionId || s.institutionId === uni.id));
+                                                  if (!matchesDept) return false;
+                                                  if (s.deletedAt) {
+                                                    const daysPassed = Math.floor(
+                                                      (Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24)
+                                                    );
+                                                    const daysRemaining = Math.max(0, 30 - daysPassed);
+                                                    if (daysRemaining <= 0 && !s.keptByHostOnly) return false;
+                                                  }
+                                                  return true;
+                                                })
+                                                .sort((a, b) => b.graduationYear - a.graduationYear);
 
                                               return (
-                                                <div
-                                                  key={album.id}
-                                                  className={`p-2.5 rounded-xl border flex flex-col gap-2 transition-colors ${
-                                                    isDeleted
-                                                      ? 'bg-red-950/20 border-red-500/30'
-                                                      : 'bg-black/40 border-white/10'
-                                                  }`}
+                                                <tr
+                                                  key={dept.id}
+                                                  id={`department-compartment-${dept.id}`}
+                                                  className="hover:bg-white/[0.03] transition-colors"
                                                 >
-                                                  <div className="flex items-start justify-between gap-2">
-                                                    <div className="min-w-0">
-                                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                                        <span className="font-syne font-bold text-xs text-white truncate">
-                                                          Class of {album.graduationYear} • {album.classSetName}
-                                                        </span>
-                                                        {isDeleted ? (
-                                                          album.keptByHostOnly ? (
-                                                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono-tech text-[9px] uppercase font-bold">
-                                                              Deleted • Kept by Host (Host Only)
-                                                            </span>
-                                                          ) : (
-                                                            <span className="px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-300 font-mono-tech text-[9px] uppercase font-bold">
-                                                              Deleted • Purges in {daysRemaining}d
-                                                            </span>
-                                                          )
-                                                        ) : (
-                                                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[9px] uppercase font-bold">
-                                                            {album.isPublished ? 'Published' : 'Active'}
+                                                  {/* Dept # */}
+                                                  <td className="py-2.5 px-3 border-r border-white/10 text-center font-mono-tech text-[11px] text-zinc-500">
+                                                    {formattedOrder}.{deptIdx + 1}
+                                                  </td>
+
+                                                  {/* Department Name, Code & Hero Thumbnail */}
+                                                  <td className="py-2.5 px-3 border-r border-white/10">
+                                                    <div className="flex items-center gap-2.5 min-w-0">
+                                                      <img
+                                                        src={dept.heroImageUrl || dept.logoUrl || uni.logoUrl}
+                                                        alt={dept.name}
+                                                        referrerPolicy="no-referrer"
+                                                        className="w-10 h-7 rounded object-cover bg-black border border-white/15 shrink-0"
+                                                      />
+                                                      <div className="min-w-0">
+                                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                                          <span className="font-syne font-bold text-xs text-white">
+                                                            {dept.name}
                                                           </span>
+                                                          {dept.code && (
+                                                            <span className="text-[9px] font-mono-tech uppercase bg-white/10 text-zinc-300 px-1.5 py-0.5 rounded">
+                                                              {dept.code}
+                                                            </span>
+                                                          )}
+                                                        </div>
+                                                        {dept.caption && (
+                                                          <p className="text-[10px] text-zinc-400 italic truncate max-w-xs">
+                                                            “{dept.caption}”
+                                                          </p>
                                                         )}
                                                       </div>
-                                                      <p className="text-[10px] font-mono-tech text-zinc-400 truncate mt-0.5">
-                                                        Admin: {album.classRepName} ({album.classRepEmail})
-                                                      </p>
                                                     </div>
+                                                  </td>
 
-                                                    <div className="flex items-center gap-1.5 shrink-0">
+                                                  {/* Faculty & HOD */}
+                                                  <td className="py-2.5 px-3 border-r border-white/10 font-mono-tech text-[11px] text-zinc-300">
+                                                    <div>{dept.faculty || '—'}</div>
+                                                    {dept.hodName && (
+                                                      <div className="text-[10px] text-zinc-400">HOD: {dept.hodName}</div>
+                                                    )}
+                                                  </td>
+
+                                                  {/* Legacy Status */}
+                                                  <td className="py-2.5 px-3 border-r border-white/10">
+                                                    {dept.legacy_status === 'established' ? (
+                                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-mono-tech font-semibold">
+                                                        <Award className="w-2.5 h-2.5" />
+                                                        <span>
+                                                          Established {dept.founding_class_year ? `('${dept.founding_class_year})` : ''}
+                                                        </span>
+                                                      </span>
+                                                    ) : dept.legacy_status === 'pending_verification' ? (
+                                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono-tech font-semibold">
+                                                        <Clock className="w-2.5 h-2.5" />
+                                                        <span>Under Review</span>
+                                                      </span>
+                                                    ) : (
+                                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#d4af37]/10 text-[#d4af37] border border-[#d4af37]/20 text-[9px] font-mono-tech">
+                                                        <Sparkles className="w-2.5 h-2.5" />
+                                                        <span>Founding Available</span>
+                                                      </span>
+                                                    )}
+                                                  </td>
+
+                                                  {/* Class Albums */}
+                                                  <td className="py-2.5 px-3 border-r border-white/10">
+                                                    {deptAlbums.length === 0 ? (
+                                                      <span className="text-[10px] font-mono-tech text-zinc-500">None yet</span>
+                                                    ) : (
+                                                      <div className="flex flex-wrap items-center gap-1.5">
+                                                        {deptAlbums.map((album) => {
+                                                          const isDeleted = Boolean(album.deletedAt);
+                                                          return (
+                                                            <div
+                                                              key={album.id}
+                                                              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[10px] font-mono-tech ${
+                                                                isDeleted
+                                                                  ? 'bg-red-950/20 border-red-500/30 text-red-300'
+                                                                  : 'bg-black/50 border-white/10 text-zinc-200'
+                                                              }`}
+                                                            >
+                                                              <span>'{String(album.graduationYear).slice(-2)}</span>
+                                                              <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                  try {
+                                                                    sessionStorage.setItem(
+                                                                      'kohot_host_return_spot',
+                                                                      JSON.stringify({
+                                                                        tab: activeTab,
+                                                                        uniId: uni.id,
+                                                                        elementId: `department-compartment-${dept.id}`,
+                                                                        scrollY: window.scrollY,
+                                                                      })
+                                                                    );
+                                                                  } catch {}
+                                                                  onViewDepartmentAlbum(album.id);
+                                                                }}
+                                                                className="text-[#d4af37] hover:underline font-bold cursor-pointer"
+                                                              >
+                                                                View
+                                                              </button>
+                                                              {isDeleted && (
+                                                                <button
+                                                                  type="button"
+                                                                  onClick={() => handleHostToggleKeepDeletedAlbum(album.id)}
+                                                                  className="text-amber-300 hover:underline cursor-pointer"
+                                                                >
+                                                                  {album.keptByHostOnly ? 'Kept' : 'Keep'}
+                                                                </button>
+                                                              )}
+                                                            </div>
+                                                          );
+                                                        })}
+                                                      </div>
+                                                    )}
+                                                  </td>
+
+                                                  {/* Department Actions: Edit Details, Legacy Plaque, View Legacy Wall */}
+                                                  <td className="py-2.5 px-3 text-right">
+                                                    <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
+                                                      <button
+                                                        id={`edit-dept-btn-${dept.id}`}
+                                                        type="button"
+                                                        onClick={() => setSelectedDeptForEdit({ dept, uni })}
+                                                        className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[10px] inline-flex items-center gap-1 transition-colors cursor-pointer border border-white/10"
+                                                      >
+                                                        <Edit3 className="w-3 h-3 text-zinc-300" />
+                                                        <span>Edit Details</span>
+                                                      </button>
+
                                                       <button
                                                         type="button"
-                                                        onClick={() => onViewDepartmentAlbum(album.id)}
-                                                        className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[10px] uppercase font-bold transition-colors cursor-pointer"
+                                                        onClick={() => setSelectedDeptForPlaque({ dept, uni })}
+                                                        className="px-2.5 py-1 rounded-lg bg-[#d4af37]/15 hover:bg-[#d4af37]/25 text-[#d4af37] font-mono-tech text-[10px] inline-flex items-center gap-1 transition-colors cursor-pointer border border-[#d4af37]/30"
+                                                        title="View Department Architectural Legacy Plaque"
                                                       >
-                                                        View
+                                                        <Award className="w-3 h-3 text-[#d4af37]" />
+                                                        <span>Legacy Plaque</span>
                                                       </button>
-                                                      {isDeleted && (
+
+                                                      {onViewDepartmentLegacyWall && (
                                                         <button
+                                                          id={`view-legacy-wall-${dept.id}-btn`}
                                                           type="button"
-                                                          onClick={() => handleHostToggleKeepDeletedAlbum(album.id)}
-                                                          className={`px-2.5 py-1 rounded-lg font-mono-tech text-[10px] uppercase font-bold transition-colors cursor-pointer border ${
-                                                            album.keptByHostOnly
-                                                              ? 'bg-amber-500/25 border-amber-400/50 text-amber-200 hover:bg-amber-500/35'
-                                                              : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
-                                                          }`}
-                                                          title="Keep this deleted album on the Host dashboard even if the admin does not recover it within 30 days (visible only to Host)"
+                                                          onClick={() => {
+                                                            try {
+                                                              sessionStorage.setItem(
+                                                                'kohot_host_return_spot',
+                                                                JSON.stringify({
+                                                                  tab: 'seeder',
+                                                                  elementId: `department-compartment-${dept.id}`,
+                                                                  uniId: uni.id,
+                                                                  deptId: dept.id,
+                                                                  scrollY: window.scrollY,
+                                                                })
+                                                              );
+                                                            } catch {}
+                                                            onViewDepartmentLegacyWall(dept.id, uni.id);
+                                                          }}
+                                                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-[10px] inline-flex items-center gap-1 transition-colors cursor-pointer border border-white/10"
+                                                          title="View Public Department Legacy Wall"
                                                         >
-                                                          {album.keptByHostOnly ? 'Kept (Host Only)' : 'Keep Album'}
+                                                          <BookOpen className="w-3 h-3 text-[#d4af37]" />
+                                                          <span>View Legacy Wall</span>
                                                         </button>
                                                       )}
                                                     </div>
-                                                  </div>
-                                                </div>
+                                                  </td>
+                                                </tr>
                                               );
                                             })}
-                                          </div>
-                                        </div>
-                                      );
-                                    })()}
-
-                                    {/* Department Actions: Edit Details, Legacy Plaque & View Legacy Wall */}
-                                    <div className="pt-2 border-t border-white/5 flex items-center justify-between gap-2 flex-wrap">
-                                      <div className="flex items-center gap-2 flex-wrap">
-                                        <button
-                                          id={`edit-dept-btn-${dept.id}`}
-                                          onClick={() => setSelectedDeptForEdit({ dept, uni })}
-                                          className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer border border-white/10"
-                                        >
-                                          <Edit3 className="w-3 h-3 text-zinc-300" />
-                                          <span>Edit Details &amp; Hero</span>
-                                        </button>
-
-                                        <button
-                                          onClick={() => setSelectedDeptForPlaque({ dept, uni })}
-                                          className="px-3 py-1.5 rounded-lg bg-[#d4af37]/15 hover:bg-[#d4af37]/25 text-[#d4af37] font-mono-tech text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer border border-[#d4af37]/30"
-                                          title="View Department Architectural Legacy Plaque"
-                                        >
-                                          <Award className="w-3 h-3 text-[#d4af37]" />
-                                          <span>Legacy Plaque</span>
-                                        </button>
-
-                                        {onViewDepartmentLegacyWall && (
-                                          <button
-                                            id={`view-legacy-wall-${dept.id}-btn`}
-                                            onClick={() => {
-                                              try {
-                                                sessionStorage.setItem("kohot_host_return_spot", JSON.stringify({
-                                                  tab: "seeder",
-                                                  elementId: `department-compartment-${dept.id}`,
-                                                  uniId: uni.id,
-                                                  deptId: dept.id,
-                                                  scrollY: window.scrollY
-                                                }));
-                                              } catch {}
-                                              onViewDepartmentLegacyWall(dept.id, uni.id);
-                                            }}
-                                            className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer border border-white/10"
-                                            title="View Public Department Legacy Wall"
-                                          >
-                                            <BookOpen className="w-3 h-3 text-[#d4af37]" />
-                                            <span>View Legacy Wall</span>
-                                          </button>
-                                        )}
+                                          </tbody>
+                                        </table>
                                       </div>
                                     </div>
-                                  </div>
-                                );
-                              })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* =========================================================================
-                AUTOMATED DATABASE SEEDER TOOL (BOLD SYSTEM CONTROL)
-                ========================================================================= */}
-            <div className="p-7 sm:p-9 rounded-3xl bg-gradient-to-br from-[#18181b] via-[#202024] to-[#121214] border-2 border-white/20 hover:border-[#d4af37]/40 shadow-2xl space-y-6 transition-all">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-white/10">
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2.5 flex-wrap">
-                    <span className="px-3 py-1 rounded-full text-[10px] font-mono-tech uppercase tracking-widest font-bold bg-[#d4af37]/20 text-[#d4af37] border border-[#d4af37]/40 flex items-center gap-1.5">
-                      <Shield className="w-3 h-3 text-[#d4af37]" />
-                      Master System Control
-                    </span>
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech text-white/60 bg-white/5 border border-white/10">
-                      Tier 0 Core Engine
-                    </span>
-                  </div>
-                  <h3 className="font-syne font-black text-2xl sm:text-3xl text-white tracking-tight flex items-center gap-3">
-                    <Database className="w-7 h-7 text-[#d4af37] shrink-0" />
-                    Automated Database Seeder &amp; Reset Tool
-                  </h3>
-                  <p className="font-body text-xs sm:text-sm text-zinc-300 max-w-2xl leading-relaxed">
-                    Restores default accredited institutional directories, official university crests, and department seeds into memory and storage.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3 self-start lg:self-center">
-                  <button
-                    id="host-migrate-images-btn"
-                    type="button"
-                    disabled={isMigratingImages}
-                    onClick={handleHostMigrateImages}
-                    className="shrink-0 bg-[#d4af37]/20 hover:bg-[#d4af37] text-[#d4af37] hover:text-black font-tech text-xs tracking-widest uppercase font-extrabold py-4 px-6 rounded-2xl flex items-center gap-2.5 transition-all shadow-xl cursor-pointer border border-[#d4af37]/40 disabled:opacity-50"
-                  >
-                    <Upload className={`w-4 h-4 ${isMigratingImages ? 'animate-bounce' : ''}`} />
-                    <span>{isMigratingImages ? 'Migrating...' : 'Migrate images'}</span>
-                  </button>
-
-                  <button
-                    id="execute-reseed-btn"
-                    onClick={handleExecuteDefaultSeed}
-                    className="shrink-0 bg-white hover:bg-[#d4af37] text-black font-tech text-xs tracking-widest uppercase font-extrabold py-4 px-8 rounded-2xl flex items-center gap-2.5 transition-all shadow-2xl hover:scale-105 active:scale-95 cursor-pointer border border-white/20"
-                  >
-                    <RefreshCw className="w-4 h-4 text-black" />
-                    <span>Execute Preloaded Seed</span>
-                  </button>
-                </div>
-              </div>
-
-              {migrationReport && (
-                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-mono-tech flex items-center justify-between gap-3">
-                  <span>
-                    R2 Migration Report: {migrationReport.migratedCount} base64 image(s) migrated across {migrationReport.albumsUpdated} album(s) • {migrationReport.failedCount} failed
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setMigrationReport(null)}
-                    className="text-emerald-300 hover:text-white text-[10px] uppercase"
-                  >
-                    Dismiss
-                  </button>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
-
-              {/* Bolder summary metrics strip */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-1">
-                <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center gap-3.5">
-                  <Building2 className="w-5 h-5 text-[#d4af37] shrink-0" />
-                  <div>
-                    <div className="text-[10px] font-mono-tech uppercase text-zinc-400 font-medium">Preloaded Institutions</div>
-                    <div className="font-syne font-bold text-sm sm:text-base text-white">{universities.length} Universities Active</div>
-                  </div>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center gap-3.5">
-                  <GraduationCap className="w-5 h-5 text-[#d4af37] shrink-0" />
-                  <div>
-                    <div className="text-[10px] font-mono-tech uppercase text-zinc-400 font-medium">Archival Class Sets</div>
-                    <div className="font-syne font-bold text-sm sm:text-base text-white">{liveSets.length} Live Class Sets</div>
-                  </div>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center gap-3.5">
-                  <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-                  <div>
-                    <div className="text-[10px] font-mono-tech uppercase text-zinc-400 font-medium">Storage Architecture</div>
-                    <div className="font-syne font-bold text-sm sm:text-base text-white">R2 BUCKET &amp; D1 Database</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* System Check Strip (True Env Vars Only) */}
-              {systemCheck && (
-                <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono-tech uppercase tracking-widest text-zinc-400 font-bold">
-                      System Environment Check (True Env Vars Only)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={runSystemCheck}
-                      disabled={isSystemChecking}
-                      className="text-[10px] font-mono-tech text-[#d4af37] hover:underline cursor-pointer"
-                    >
-                      {isSystemChecking ? 'Checking...' : 'Refresh Status'}
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-[11px] font-mono-tech">
-                    {[
-                      { label: 'SESSION_SECRET', ok: systemCheck.sessionSecretSet },
-                      { label: 'PAYSTACK_SECRET_KEY', ok: Boolean(systemCheck.paystackSecretKeySet) },
-                      { label: 'PAYSTACK_PUBLIC_KEY', ok: Boolean(systemCheck.paystackPublicKeySet) },
-                      { label: 'GOOGLE_CLIENT_ID', ok: systemCheck.googleClientIdSet },
-                    ].map((item) => (
-                      <div
-                        key={item.label}
-                        className={`px-3 py-2 rounded-xl border flex items-center justify-between ${
-                          item.ok
-                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                            : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-                        }`}
-                      >
-                        <span className="truncate">{item.label}</span>
-                        <span className="font-bold ml-2">{item.ok ? 'SET' : 'MISSING'}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Host Payments Tab / Needs Review Ledger */}
-              <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono-tech uppercase tracking-widest text-zinc-400 font-bold flex items-center gap-1.5">
-                    <DollarSign className="w-3.5 h-3.5 text-[#d4af37]" />
-                    Host Payments &amp; Webhook Review Ledger ({transactions.length})
-                  </span>
-                  <span className="text-[11px] font-mono-tech text-emerald-400 font-bold">
-                    Verified Total: ₦{totalRevenue.toLocaleString()}
-                  </span>
-                </div>
-                {transactions.length === 0 ? (
-                  <p className="text-xs text-zinc-500 font-body">No payment transactions recorded yet.</p>
-                ) : (
-                  <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
-                    {transactions.slice(0, 25).map((tx) => {
-                      const rawStatus = String((tx as any).status || '');
-                      const needsReview = rawStatus.toLowerCase().includes('review');
-                      return (
-                        <div
-                          key={tx.id || tx.reference}
-                          className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs ${
-                            needsReview
-                              ? 'bg-amber-500/10 border-amber-500/40 text-amber-200'
-                              : 'bg-white/[0.02] border-white/10 text-zinc-300'
-                          }`}
-                        >
-                          <div className="space-y-0.5">
-                            <div className="font-mono-tech font-bold text-white flex items-center gap-2">
-                              <span>{tx.reference}</span>
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] uppercase ${
-                                  needsReview
-                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                                    : rawStatus.toLowerCase() === 'paid'
-                                    ? 'bg-emerald-500/20 text-emerald-300'
-                                    : 'bg-zinc-700 text-zinc-300'
-                                }`}
-                              >
-                                {needsReview ? 'paid, needs review' : rawStatus}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-zinc-400">
-                              {tx.payerEmail || tx.payerName || 'Student / Admin'} • {tx.setName || tx.setId || 'Unlinked Album'}
-                              {tx.notes ? ` — ${tx.notes}` : ''}
-                            </div>
-                          </div>
-                          <div className="font-mono-tech font-bold text-sm text-white shrink-0">
-                            ₦{Number(tx.amount || 0).toLocaleString()}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
+        )}
+
+        {/* =========================================================================
+            1B. FINANCES MODULE (DEDICATED TOP-LEVEL HOST FINANCES TAB)
+            ========================================================================= */}
+        {activeTab === 'finances' && (
+          <MasterFinancesSection
+            sets={liveSets}
+            universities={universities}
+            transactions={transactions}
+            onUpdateSet={(updatedSet) => onUpdateSingleSet?.(updatedSet)}
+            currentUserEmail={currentUser.email}
+          />
         )}
 
         {/* =========================================================================
             2. EDIT MODULE: KOHOT MEDIA & ASSET CONTROL STUDIO
             ========================================================================= */}
         {activeTab === 'editor' && (
-          <div id="editor-module" className="p-7 sm:p-9 rounded-3xl bg-gradient-to-br from-[#18181b] via-[#202024] to-[#121214] border-2 border-white/20 shadow-2xl space-y-8">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse" />
-                  <span className="font-mono-tech text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-semibold">
-                    CENTRAL ASSET REPOSITORY
-                  </span>
+          <div id="editor-module" className="p-5 sm:p-6 rounded-2xl bg-[#18181b] border border-white/12 shadow-xl space-y-6">
+            {/* Compact Header + Sub-tab Switcher Bar */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 pb-4 border-b border-white/[0.08]">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                  <Film className="w-4 h-4" />
                 </div>
-                <h2 className="font-syne font-bold text-2xl text-white flex items-center gap-2.5">
-                  <Film className="w-6 h-6 text-blue-400" />
-                  <span>KoHot Media &amp; Visuals</span>
-                </h2>
-                <p className="font-body text-xs text-zinc-400 mt-1 max-w-2xl">
-                  Centralized management of Class Album ambient audio, homepage tour reels, brand logo, and global platform assets.
-                </p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="font-syne font-bold text-base sm:text-lg text-white">
+                      KoHot Media &amp; Visuals
+                    </h2>
+                    {editorSavedMsg && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono-tech flex items-center gap-1 animate-fadeIn">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Published</span>
+                      </span>
+                    )}
+                  </div>
+                  <p className="font-body text-xs text-zinc-400 truncate">
+                    Manage homepage tour reels, brand logo, album media, and platform statistics.
+                  </p>
+                </div>
               </div>
 
-              {editorSavedMsg && (
-                <span className="px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono-tech flex items-center gap-2 animate-fadeIn shrink-0">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Settings Published</span>
-                </span>
-              )}
-            </div>
-
-            {/* Sub-tab Switch: Website Media vs Album Media vs Website Statistics & Growth */}
-            <div className="flex items-center gap-2.5 p-1.5 rounded-2xl bg-black/50 border border-white/10 w-fit flex-wrap">
-              <button
-                type="button"
-                onClick={() => setMediaSubTab('website')}
-                className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                  mediaSubTab === 'website'
-                    ? 'bg-white text-black font-semibold shadow'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                <Film className="w-3.5 h-3.5 text-blue-400" />
-                <span>Website Media</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMediaSubTab('albums')}
-                className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                  mediaSubTab === 'albums'
-                    ? 'bg-white text-black font-semibold shadow'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                <ImageIcon className="w-3.5 h-3.5 text-[#d4af37]" />
-                <span>Album Media</span>
-                <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-[10px] font-mono-tech">
-                  {liveSets.length} Live Sets
-                </span>
-              </button>
-              <button
-                id="subclip-website-stats-btn"
-                type="button"
-                onClick={() => setMediaSubTab('stats')}
-                className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                  mediaSubTab === 'stats'
-                    ? 'bg-white text-black font-semibold shadow'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Website Statistics &amp; Growth</span>
-              </button>
+              {/* Sub-tab Switch: Website Media vs Album Media vs Website Statistics & Growth */}
+              <div className="inline-flex items-center gap-1.5 p-1 rounded-xl bg-black/50 border border-white/10 max-w-full overflow-x-auto no-scrollbar shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    setMediaSubTab('website');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                    mediaSubTab === 'website'
+                      ? 'bg-white text-black font-bold shadow'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <Film className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Website Media</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    setMediaSubTab('albums');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                    mediaSubTab === 'albums'
+                      ? 'bg-white text-black font-bold shadow'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <ImageIcon className="w-3.5 h-3.5 text-[#d4af37]" />
+                  <span>Album Media ({liveSets.length})</span>
+                </button>
+                <button
+                  id="subclip-website-stats-btn"
+                  type="button"
+                  onClick={(e) => {
+                    setMediaSubTab('stats');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                    mediaSubTab === 'stats'
+                      ? 'bg-white text-black font-bold shadow'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Website Stats</span>
+                </button>
+              </div>
             </div>
 
             {mediaSubTab === 'stats' ? (
@@ -2540,6 +2409,9 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             ) : mediaSubTab === 'albums' ? (
               <MasterAlbumMediaSection
                 sets={liveSets}
+                universities={universities}
+                contentOverride={contentOverride}
+                onUpdateContentOverride={onUpdateContentOverride}
                 onViewDepartmentAlbum={onViewDepartmentAlbum}
                 compressionResolution={editCompressionResolution}
                 onUpdateCompressionResolution={setEditCompressionResolution}
@@ -3644,29 +3516,33 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             9. ADMIN HELP & SUPPORT MODULE (Unified with Sub-Clips: Admin Help, Support, Requests)
             ========================================================================= */}
         {activeTab === 'disputes' && (
-          <div id="admin-help-and-support-module" className="space-y-6 animate-fadeIn">
-            {/* Unified Section Header & Sub-Clips */}
-            <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
-              <div>
-                <div className="flex items-center gap-2 text-amber-400 text-xs font-mono-tech uppercase tracking-wider mb-1">
+          <div id="admin-help-and-support-module" className="space-y-5 animate-fadeIn">
+            {/* Compact Section Header & Sub-Clips */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-[#18181b] border border-white/12 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 shadow-sm">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-[#d4af37] shrink-0">
                   <Shield className="w-4 h-4" />
-                  <span>Master Host Center</span>
                 </div>
-                <h2 className="font-syne font-bold text-xl sm:text-2xl text-white">
-                  Admin Help &amp; Support
-                </h2>
-                <p className="font-body text-xs text-zinc-400 mt-1">
-                  Manage Class Album Admin ownership disputes, co-admin claims, support inquiries, and department requests in one unified workspace.
-                </p>
+                <div className="min-w-0">
+                  <h2 className="font-syne font-bold text-base sm:text-lg text-white">
+                    Admin Help &amp; Support
+                  </h2>
+                  <p className="font-body text-xs text-zinc-400 truncate">
+                    Manage ownership disputes, co-admin claims, support tickets, and department requests.
+                  </p>
+                </div>
               </div>
 
               {/* Sub-Clips Switcher */}
-              <div className="inline-flex flex-wrap items-center p-1.5 rounded-full bg-black/60 border border-white/15 self-start sm:self-center shrink-0 gap-1">
+              <div className="inline-flex items-center p-1 rounded-xl bg-black/50 border border-white/10 self-start lg:self-center max-w-full overflow-x-auto no-scrollbar gap-1 shrink-0">
                 <button
                   id="subclip-admin-help-btn"
                   type="button"
-                  onClick={() => setAdminHelpSupportSubTab('admin_help')}
-                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                  onClick={(e) => {
+                    setAdminHelpSupportSubTab('admin_help');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-3.5 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                     adminHelpSupportSubTab === 'admin_help'
                       ? 'bg-amber-400 text-black font-bold shadow'
                       : 'text-zinc-400 hover:text-white'
@@ -3678,8 +3554,11 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 <button
                   id="subclip-support-btn"
                   type="button"
-                  onClick={() => setAdminHelpSupportSubTab('support')}
-                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                  onClick={(e) => {
+                    setAdminHelpSupportSubTab('support');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-3.5 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                     adminHelpSupportSubTab === 'support'
                       ? 'bg-[#d4af37] text-black font-bold shadow'
                       : 'text-zinc-400 hover:text-white'
@@ -3688,7 +3567,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   <Inbox className="w-3.5 h-3.5" />
                   <span>Support</span>
                   {newSupportCount > 0 && (
-                    <span className="px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold">
+                    <span className="px-1.5 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold">
                       {newSupportCount}
                     </span>
                   )}
@@ -3696,8 +3575,11 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 <button
                   id="subclip-requests-btn"
                   type="button"
-                  onClick={() => setAdminHelpSupportSubTab('requests')}
-                  className={`px-4 py-2 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                  onClick={(e) => {
+                    setAdminHelpSupportSubTab('requests');
+                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }}
+                  className={`px-3.5 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                     adminHelpSupportSubTab === 'requests'
                       ? 'bg-white text-black font-bold shadow'
                       : 'text-zinc-400 hover:text-white'
@@ -3706,7 +3588,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   <FolderPlus className="w-3.5 h-3.5" />
                   <span>Requests</span>
                   {pendingRequestsCount > 0 && (
-                    <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-mono-tech font-bold">
+                    <span className="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-mono-tech font-bold">
                       {pendingRequestsCount}
                     </span>
                   )}

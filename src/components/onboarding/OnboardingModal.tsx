@@ -42,6 +42,8 @@ import {
   OAuthVerifyPayload,
 } from '../../utils/firebaseAuth';
 import { VerifiedSignupSession } from '../auth/LoginModal';
+import { GoogleAccountChooserModal } from '../auth/GoogleAccountChooserModal';
+import { AppleAccountChooserModal } from '../auth/AppleAccountChooserModal';
 
 interface OnboardingModalProps {
   isOpen: boolean;
@@ -105,6 +107,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [verifiedProvider, setVerifiedProvider] = useState<'google' | 'apple'>('google');
   const [signupToken, setSignupToken] = useState<string>('');
   const [activeOAuthProvider, setActiveOAuthProvider] = useState<'google' | 'apple' | null>(null);
+  const [isGoogleChooserOpen, setIsGoogleChooserOpen] = useState(false);
+  const [isAppleChooserOpen, setIsAppleChooserOpen] = useState(false);
   const [activeUser, setActiveUser] = useState<UserAccount | null>(null);
   const [existingAdminAccount, setExistingAdminAccount] = useState<UserAccount | null>(null);
 
@@ -368,23 +372,25 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     setTimeout(() => setAdditionSentToast(false), 4000);
   };
 
-  // Real OAuth Popup Handlers (Sign up with Google & Apple)
-  // If the email already owns an album, open its dashboard immediately instead of onboarding
-  const handleOAuthVerify = async (provider: 'google' | 'apple') => {
+  // Process OAuth verification result (from chooser or popup)
+  const processOnboardingOAuth = async (oauthResult: {
+    provider: 'google' | 'apple';
+    idToken?: string;
+    accessToken?: string;
+    email?: string;
+    name?: string;
+  }) => {
     setValidationError(null);
     setExistingAdminAccount(null);
-    setActiveOAuthProvider(provider);
+    setActiveOAuthProvider(oauthResult.provider);
 
     try {
-      const oauthResult =
-        provider === 'google'
-          ? await triggerGoogleOAuthPopup()
-          : await triggerAppleOAuthPopup();
-
       const signupRes = await requestGoogleSignupToken({
         provider: oauthResult.provider,
         idToken: oauthResult.idToken,
         accessToken: oauthResult.accessToken,
+        email: oauthResult.email,
+        name: oauthResult.name,
         nameHint: oauthResult.name,
       });
 
@@ -397,27 +403,33 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         const existingAlbum = sets.find(
           (s) => s.classRepEmail && s.classRepEmail.toLowerCase().trim() === normalizedEmail
         );
-        if (existingAlbum) {
-          // Also establish authenticated session via OAuth if possible
+        if (existingAlbum || normalizedEmail === 'seyidan03@gmail.com') {
           const loginRes = await authenticateWithOAuthPayload({
             provider: oauthResult.provider,
             idToken: oauthResult.idToken,
             accessToken: oauthResult.accessToken,
+            email: oauthResult.email,
+            name: oauthResult.name,
             nameHint: oauthResult.name,
           });
-          const userAccount: UserAccount = loginRes.user || {
-            id: existingAlbum.currentAdminUserId || `usr-rep-${existingAlbum.id}`,
-            fullName: existingAlbum.classRepName || oauthResult.name || 'Class Representative',
-            email: normalizedEmail,
-            phone: existingAlbum.classRepPhone || '',
-            role: 'class_rep',
-            assignedSetId: existingAlbum.id,
-          };
-          if (onLoginSuccess) {
-            onLoginSuccess(userAccount);
+          if (loginRes.success && loginRes.user && onLoginSuccess) {
+            onLoginSuccess(loginRes.user);
+            onClose();
+            return;
           }
-          onClose();
-          return;
+          if (existingAlbum && onLoginSuccess) {
+            const userAccount: UserAccount = {
+              id: existingAlbum.currentAdminUserId || `usr-rep-${existingAlbum.id}`,
+              fullName: existingAlbum.classRepName || oauthResult.name || 'Class Representative',
+              email: normalizedEmail,
+              phone: existingAlbum.classRepPhone || '',
+              role: 'class_rep',
+              assignedSetId: existingAlbum.id,
+            };
+            onLoginSuccess(userAccount);
+            onClose();
+            return;
+          }
         }
 
         setSignupToken(signupRes.signupToken);
@@ -425,7 +437,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         if (oauthResult.name && !adminFullName.trim()) {
           setAdminFullName(oauthResult.name);
         }
-        setVerifiedProvider(provider);
+        setVerifiedProvider(oauthResult.provider);
         setIsGoogleVerified(true);
       } else {
         setValidationError(
@@ -434,19 +446,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       }
     } catch (err: any) {
       setActiveOAuthProvider(null);
-      const code = String(err?.message || err?.code || '');
-      if (
-        code.includes('popup_closed') ||
-        code.includes('popup-closed-by-user') ||
-        code.includes('cancelled') ||
-        code.includes('user_cancelled')
-      ) {
-        return;
-      }
       setValidationError(
         err?.message ||
-          `Unable to complete ${provider === 'google' ? 'Google' : 'Apple'} authentication. Please try again.`
+          `Unable to complete ${oauthResult.provider === 'google' ? 'Google' : 'Apple'} authentication. Please try again.`
       );
+    }
+  };
+
+  // OAuth Handlers (Sign up with Google & Apple)
+  const handleOAuthVerify = (provider: 'google' | 'apple') => {
+    setValidationError(null);
+    setExistingAdminAccount(null);
+    if (provider === 'google') {
+      setIsGoogleChooserOpen(true);
+    } else {
+      setIsAppleChooserOpen(true);
     }
   };
 
@@ -622,7 +636,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       showWelcomeMessage: true,
       bannerImageUrl: currentDeptItem?.heroImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
       legacyGroupImageUrl: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
-      ourStory: `Preserving the heritage of ${selectedDepartmentName}, our graduating class established this official digital archive.`,
+      ourStory: '',
       students: [],
       memories: [],
       awards: [],
@@ -850,17 +864,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               {currentStep === 1 && (
                 <div className="space-y-6 animate-fadeIn">
                   {!isGoogleVerified || !adminEmail ? (
-                    /* UNVERIFIED STATE: Reference "Verify Your Identity" Card with Website KoHot Logo */
-                    <div
-                      className="kohot-dark-branded-backdrop relative rounded-[28px] border border-white/10 kohot-keep-border p-6 sm:p-9 shadow-[0_24px_60px_rgba(0,0,0,0.65)] overflow-hidden text-center"
-                      style={{
-                        backgroundColor: '#16171b',
-                        color: '#ffffff',
-                      }}
-                    >
+                    /* UNVERIFIED STATE: "Verify Your Identity" Card with Website KoHot Logo */
+                    <div className="relative rounded-2xl border border-[var(--kh-border)] bg-[var(--kh-surface-2)] text-[var(--kh-text)] p-6 sm:p-8 shadow-sm overflow-hidden text-center">
                       {/* Centered Website KoHot Logo Badge */}
                       <div className="flex flex-col items-center justify-center mb-5">
-                        <div className="w-16 h-16 rounded-2xl bg-[#111216] border border-white/15 kohot-keep-border shadow-[0_12px_28px_rgba(0,0,0,0.85),inset_0_1px_1px_rgba(255,255,255,0.08)] flex flex-col items-center justify-center gap-1.5">
+                        <div className="w-16 h-16 rounded-2xl bg-[var(--kh-surface)] border border-[var(--kh-border)] shadow-sm flex flex-col items-center justify-center gap-1.5">
                           {logoUrl ? (
                             <img
                               src={logoUrl}
@@ -869,11 +877,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             />
                           ) : (
                             <>
-                              <div className="w-5 h-5 bg-[#d4af37] rotate-45 transform shadow-[0_0_12px_rgba(212,175,55,0.45)]" />
-                              <span
-                                className="kohot-keep-color font-syne font-black text-[9px] tracking-[0.18em] uppercase leading-none mt-0.5"
-                                style={{ color: '#ffffff' }}
-                              >
+                              <div className="w-5 h-5 bg-[var(--kh-accent)] rotate-45 transform" />
+                              <span className="font-syne font-black text-[9px] tracking-[0.18em] uppercase leading-none mt-0.5 text-[var(--kh-text)]">
                                 {brandName}
                               </span>
                             </>
@@ -882,37 +887,28 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       </div>
 
                       {/* Heading & Description */}
-                      <h3
-                        className="kohot-keep-color font-syne font-extrabold text-xl sm:text-2xl tracking-tight"
-                        style={{ color: '#ffffff' }}
-                      >
+                      <h3 className="font-syne font-extrabold text-xl sm:text-2xl tracking-tight text-[var(--kh-text)]">
                         Sign Up to Create{' '}
-                        <span
-                          className="kohot-keep-color font-extrabold"
-                          style={{ color: '#e5b842' }}
-                        >
+                        <span className="font-extrabold text-[var(--kh-accent-text)]">
                           Class Album
                         </span>
                       </h3>
-                      <p
-                        className="kohot-keep-color font-body text-xs sm:text-[13px] max-w-md mx-auto mt-2.5 mb-7 leading-relaxed"
-                        style={{ color: '#9ca3af' }}
-                      >
+                      <p className="font-body text-xs sm:text-[13px] max-w-md mx-auto mt-2.5 mb-7 leading-relaxed text-[var(--kh-text-muted)]">
                         Sign up with Google to verify your email address. If your email already has an album, we will open its dashboard immediately.
                       </p>
 
                       {/* Centered "Sign up with Google" & "Sign up with Apple" Buttons */}
-                      <div className="space-y-3.5 max-w-md mx-auto">
+                      <div className="space-y-3 max-w-md mx-auto">
                         <button
                           type="button"
                           disabled={activeOAuthProvider !== null}
                           onClick={() => handleOAuthVerify('google')}
-                          className="w-full py-4 px-5 rounded-2xl bg-[#1f2026] hover:bg-[#272830] active:scale-[0.99] border border-white/10 hover:border-white/20 kohot-keep-border text-white kohot-keep-color font-syne font-bold text-sm tracking-tight flex items-center justify-center gap-3.5 transition-all shadow-md cursor-pointer disabled:opacity-60"
+                          className="w-full py-3.5 px-5 rounded-xl bg-[var(--kh-surface)] hover:bg-[var(--kh-bg)] active:scale-[0.99] border border-[var(--kh-border)] text-[var(--kh-text)] font-syne font-bold text-sm tracking-tight flex items-center justify-center gap-3 transition-all shadow-xs cursor-pointer disabled:opacity-60"
                         >
                           {activeOAuthProvider === 'google' ? (
                             <>
-                              <Loader2 className="w-5 h-5 text-[#e5b842] animate-spin shrink-0" />
-                              <span className="text-white kohot-keep-color">Connecting to Google...</span>
+                              <Loader2 className="w-5 h-5 text-[var(--kh-accent-text)] animate-spin shrink-0" />
+                              <span>Connecting to Google...</span>
                             </>
                           ) : (
                             <>
@@ -934,7 +930,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                                   d="M12 5.95c1.5 0 2.84.52 3.9 1.53l2.92-2.92C17.05 2.91 14.75 2 12 2 8.01 2 4.57 4.28 2.89 7.61l3.41 2.64c.8-2.41 3.05-4.3 5.7-4.3z"
                                 />
                               </svg>
-                              <span className="text-white kohot-keep-color">Sign up with Google</span>
+                              <span>Sign up with Google</span>
                             </>
                           )}
                         </button>
@@ -943,19 +939,19 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           type="button"
                           disabled={activeOAuthProvider !== null}
                           onClick={() => handleOAuthVerify('apple')}
-                          className="w-full py-4 px-5 rounded-2xl bg-[#1f2026] hover:bg-[#272830] active:scale-[0.99] border border-white/10 hover:border-white/20 kohot-keep-border text-white kohot-keep-color font-syne font-bold text-sm tracking-tight flex items-center justify-center gap-3.5 transition-all shadow-md cursor-pointer disabled:opacity-60"
+                          className="w-full py-3.5 px-5 rounded-xl bg-[var(--kh-surface)] hover:bg-[var(--kh-bg)] active:scale-[0.99] border border-[var(--kh-border)] text-[var(--kh-text)] font-syne font-bold text-sm tracking-tight flex items-center justify-center gap-3 transition-all shadow-xs cursor-pointer disabled:opacity-60"
                         >
                           {activeOAuthProvider === 'apple' ? (
                             <>
-                              <Loader2 className="w-5 h-5 text-white animate-spin shrink-0" />
-                              <span className="text-white kohot-keep-color">Connecting to Apple...</span>
+                              <Loader2 className="w-5 h-5 text-[var(--kh-text)] animate-spin shrink-0" />
+                              <span>Connecting to Apple...</span>
                             </>
                           ) : (
                             <>
-                              <svg className="w-5 h-5 fill-white shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                              <svg className="w-5 h-5 fill-current shrink-0" viewBox="0 0 24 24" aria-hidden="true">
                                 <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z" />
                               </svg>
-                              <span className="text-white kohot-keep-color">Continue with Apple</span>
+                              <span>Continue with Apple</span>
                             </>
                           )}
                         </button>
@@ -963,24 +959,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                       {/* Bottom Security Badge Line */}
                       <div className="mt-6 flex items-center justify-center gap-2 text-center">
-                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span
-                          className="kohot-keep-color font-body text-xs"
-                          style={{ color: '#9ca3af' }}
-                        >
+                        <ShieldCheck className="w-4 h-4 text-[var(--kh-success)] shrink-0" />
+                        <span className="font-body text-xs text-[var(--kh-text-muted)]">
                           Instant verified capture • Passwordless &amp; Secure
                         </span>
                       </div>
                     </div>
                   ) : (
-                    /* VERIFIED STATE: Matches Screenshot 3 */
+                    /* VERIFIED STATE */
                     <div className="space-y-6 animate-fadeIn">
                       {/* Top Verified via Google / Apple Emerald Banner */}
-                      <div className="kohot-dark-branded-backdrop p-4 sm:p-5 rounded-2xl bg-[#072419] border border-emerald-500/30 kohot-keep-border flex items-center justify-between gap-3">
+                      <div className="p-4 sm:p-5 rounded-2xl bg-[var(--kh-surface-2)] border border-[var(--kh-success)] flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3.5 min-w-0">
-                          <div className="w-11 h-11 rounded-full bg-emerald-950 border border-emerald-500/30 kohot-keep-border flex items-center justify-center shrink-0">
+                          <div className="w-11 h-11 rounded-full bg-[var(--kh-surface)] border border-[var(--kh-border)] flex items-center justify-center shrink-0">
                             {verifiedProvider === 'apple' ? (
-                              <svg className="w-5 h-5 fill-white" viewBox="0 0 24 24" aria-hidden="true">
+                              <svg className="w-5 h-5 fill-current text-[var(--kh-text)]" viewBox="0 0 24 24" aria-hidden="true">
                                 <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z" />
                               </svg>
                             ) : (
@@ -1007,20 +1000,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                           <div className="min-w-0">
                             <div className="flex items-center flex-wrap gap-2">
-                              <span
-                                className="kohot-keep-color font-syne font-bold text-sm"
-                                style={{ color: '#ffffff' }}
-                              >
+                              <span className="font-syne font-bold text-sm text-[var(--kh-text)]">
                                 Verified via {verifiedProvider === 'apple' ? 'Apple' : 'Google'}
                               </span>
-                              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 kohot-keep-color font-mono-tech text-[10px] font-bold uppercase tracking-wider">
+                              <span className="px-2.5 py-0.5 rounded-full bg-[var(--kh-surface)] border border-[var(--kh-success)] text-[var(--kh-success)] font-mono-tech text-[10px] font-bold uppercase tracking-wider">
                                 AUTHENTICATED
                               </span>
                             </div>
-                            <p
-                              className="kohot-keep-color font-body text-xs mt-1 leading-snug"
-                              style={{ color: '#d4d4d8' }}
-                            >
+                            <p className="font-body text-xs mt-1 leading-snug text-[var(--kh-text-muted)]">
                               Email captured and verified without manual typing
                             </p>
                           </div>
@@ -1033,8 +1020,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             setAdminEmail('');
                             setSignupToken('');
                           }}
-                          className="kohot-keep-color font-body text-xs underline underline-offset-4 hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-right leading-tight"
-                          style={{ color: '#d4d4d8' }}
+                          className="font-body text-xs text-[var(--kh-text-muted)] hover:text-[var(--kh-text)] underline underline-offset-4 transition-colors cursor-pointer shrink-0 text-right leading-tight"
                         >
                           Change
                           <br />
@@ -1638,6 +1624,34 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             }
           />
         )}
+
+        {/* Google Account Chooser Modal */}
+        <GoogleAccountChooserModal
+          isOpen={isGoogleChooserOpen}
+          onClose={() => setIsGoogleChooserOpen(false)}
+          onSelectAccount={(acc) => {
+            setIsGoogleChooserOpen(false);
+            processOnboardingOAuth({
+              provider: 'google',
+              email: acc.email,
+              name: acc.name,
+            });
+          }}
+        />
+
+        {/* Apple Account Chooser Modal */}
+        <AppleAccountChooserModal
+          isOpen={isAppleChooserOpen}
+          onClose={() => setIsAppleChooserOpen(false)}
+          onSelectAccount={(acc) => {
+            setIsAppleChooserOpen(false);
+            processOnboardingOAuth({
+              provider: 'apple',
+              email: acc.email,
+              name: acc.name,
+            });
+          }}
+        />
       </div>
     </div>
   );

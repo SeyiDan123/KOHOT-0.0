@@ -66,7 +66,7 @@ export const ClassLegacyPreservationSection: React.FC<ClassLegacyPreservationSec
                 Your class, all in one place.
               </h3>
               <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                Portraits, memories, voices, achievements and parting words — beautifully brought together.
+                Portraits, memories, personal stories, achievements and parting words — beautifully brought together.
               </p>
             </div>
           </div>

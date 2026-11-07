@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { ArrowLeft } from 'lucide-react';
 
 interface AlbumAdminSwitcherProps {
   activeMode: 'main' | 'manage' | 'preview';
@@ -21,39 +22,14 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
   showMainButton = false,
   showManageButton = true,
 }) => {
-  const hasMain = Boolean(showMainButton);
+  const hasMain = Boolean(showMainButton && onMainDashboard);
 
-  const [isModalOpen, setIsModalOpen] = React.useState(false);
-
-  // Reserve exact height at the bottom of the document so footers and page content end flush at the top of this base bar,
-  // and detect whenever any modal or pop-up card is open so the bottom bar never blocks any pop-up card or window.
+  // Reserve exact height at the bottom of the document so footers and page content end flush at the top of this base bar
   useEffect(() => {
     if (typeof document === 'undefined') return;
     document.body.classList.add('has-solid-bottom-switcher');
 
-    const checkModals = () => {
-      const hasLockedBody =
-        document.body.classList.contains('modal-backdrop-locked') ||
-        document.documentElement.classList.contains('modal-backdrop-locked');
-      const hasDialog = Boolean(
-        document.querySelector(
-          '[role="dialog"], [aria-modal="true"], [id$="-modal-backdrop"], [id$="-modal-dialog"], div.fixed.inset-0[class*="bg-black"]'
-        )
-      );
-      setIsModalOpen(hasLockedBody || hasDialog);
-    };
-
-    checkModals();
-    const observer = new MutationObserver(checkModals);
-    observer.observe(document.body, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
-      childList: true,
-      subtree: true,
-    });
-
     return () => {
-      observer.disconnect();
       document.body.classList.remove('has-solid-bottom-switcher');
     };
   }, []);
@@ -61,11 +37,8 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
   const switcherElement = (
     <aside
       id="album-admin-sticky-toggle-container"
-      className={`fixed inset-x-0 bottom-0 z-30 select-none flex flex-col items-center transition-opacity duration-150 ${
-        isModalOpen ? 'opacity-0 pointer-events-none invisible' : ' opacity-100 pointer-events-auto visible'
-      }`}
+      className="fixed inset-x-0 bottom-0 z-30 select-none flex flex-col items-center opacity-100 pointer-events-auto visible"
       aria-label="Admin View Toggle"
-      aria-hidden={isModalOpen}
     >
       {/* Optional contextual hint if viewing another class's album (floats just above the solid base) */}
       {isViewingOtherAlbum && activeMode === 'preview' && (
@@ -77,37 +50,34 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
       {/* Solid, Filled Full-Width Base Bar matching Google AI Studio bottom dock */}
       <div
         id="album-admin-solid-base"
-        className="w-full bg-[#16171a] border-t border-white/[0.08] shadow-[0_-8px_28px_rgba(0,0,0,0.55)] flex items-center justify-center px-4 h-[68px]"
+        className="relative w-full bg-[#16171a] border-t border-white/[0.08] shadow-[0_-8px_28px_rgba(0,0,0,0.55)] flex items-center justify-center px-4 h-[68px]"
         style={{
           paddingBottom: 'env(safe-area-inset-bottom, 0px)',
         }}
       >
-        {/* Recessed Dark Pill Track */}
+        {/* Minimalist left arrow button on the left side (Google AI Studio style) to return to Main Host Dashboard */}
+        {hasMain && (
+          <button
+            id="toggle-btn-main-dashboard"
+            type="button"
+            onClick={() => {
+              if (onMainDashboard) {
+                onMainDashboard();
+              }
+            }}
+            className="absolute left-4 sm:left-6 w-9 h-9 rounded-lg flex items-center justify-center text-[#9aa0a6] hover:text-[#f1f3f4] hover:bg-white/[0.06] border border-transparent hover:border-white/10 transition-all duration-200 cursor-pointer"
+            title="Back to Main Host Dashboard"
+            aria-label="Back to Main Host Dashboard"
+          >
+            <ArrowLeft className="w-4 h-4 shrink-0" />
+          </button>
+        )}
+
+        {/* Recessed Dark Pill Track (Manage | Preview only) */}
         <div
           id="album-admin-toggle-track"
           className="relative flex items-center justify-center p-1 rounded-full bg-[#0d0e11] border border-white/[0.05] shadow-inner gap-1"
         >
-          {/* Toggle Option: Main (Shown only in Host Demo Edit / Preview mode) */}
-          {hasMain && (
-            <button
-              id="toggle-btn-main-dashboard"
-              type="button"
-              onClick={() => {
-                if (onMainDashboard) {
-                  onMainDashboard();
-                }
-              }}
-              className={`relative z-10 px-6 sm:px-7 py-2.5 rounded-full text-[14px] sm:text-[15px] font-body leading-none tracking-normal flex items-center justify-center transition-all duration-200 cursor-pointer whitespace-nowrap ${
-                activeMode === 'main'
-                  ? 'bg-[#2c2d31] text-[#f1f3f4] font-medium shadow-[0_2px_6px_rgba(0,0,0,0.45)]'
-                  : 'bg-transparent text-[#9aa0a6] hover:text-[#e8eaed] font-normal'
-              }`}
-              title="Return to Host Main Dashboard"
-            >
-              <span>Main</span>
-            </button>
-          )}
-
           {/* Toggle Option: Manage */}
           {showManageButton && (
             <button
@@ -160,6 +130,7 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
 
   return switcherElement;
 };
+
 
 
 

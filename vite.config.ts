@@ -254,6 +254,14 @@ function createDevStorage() {
         if (q.includes("status != 'declined'")) {
           filtered = filtered.filter((r) => r.status !== 'declined' && r.status !== 'removed');
         }
+      } else if (q.includes('WHERE set_id = ?') && boundArgs.length >= 1) {
+        const cutoffMs = Date.now() - 15 * 60 * 1000;
+        filtered = filtered.filter((r) => {
+          if (String(r.set_id) !== String(boundArgs[0])) return false;
+          if (boundArgs.length >= 2 && String(r.uploader_email) !== String(boundArgs[1])) return false;
+          const createdMs = r.created_at ? new Date(r.created_at).getTime() : 0;
+          return createdMs >= cutoffMs;
+        });
       }
       const resRow = { cnt: filtered.length, count: filtered.length };
       return mode === 'first' ? resRow : { results: [resRow] };
@@ -459,7 +467,7 @@ function workerApiPlugin() {
     name: 'worker-api',
     configureServer(server: any) {
       server.middlewares.use(async (req: any, res: any, next: any) => {
-        if (req.url && (req.url.startsWith('/api/') || req.url.startsWith('/media/'))) {
+        if (req.url && (req.url.startsWith('/api/') || req.url.startsWith('/media/') || req.url.startsWith('/i/'))) {
           try {
             const workerModule = await server.ssrLoadModule('./worker/index.ts');
             const worker = workerModule.default;
@@ -480,7 +488,7 @@ function workerApiPlugin() {
 
             const webRes = await worker.fetch(webReq, {
               GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '',
-              SESSION_SECRET: process.env.SESSION_SECRET || '',
+              SESSION_SECRET: process.env.SESSION_SECRET || 'kohot-dev-preview-session-secret-2026',
               HOST_EMAIL: process.env.HOST_EMAIL || 'seyidan03@gmail.com',
               PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || '',
               PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY || process.env.VITE_PAYSTACK_PUBLIC_KEY || '',
@@ -518,6 +526,8 @@ export default defineConfig(() => {
       'process.env.APP_URL': JSON.stringify(process.env.APP_URL || ''),
     },
     server: {
+      port: 3000,
+      host: '0.0.0.0',
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify - file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

@@ -54,46 +54,27 @@ function cleanupDomScroll() {
   document.documentElement.style.overflow =
     originalHtmlOverflow && originalHtmlOverflow !== 'hidden' ? originalHtmlOverflow : '';
   document.body.style.paddingRight = originalBodyPaddingRight || '';
-  document.body.style.position = originalBodyPosition || '';
-  document.body.style.top = originalBodyTop || '';
-  document.body.style.left = originalBodyLeft || '';
-  document.body.style.right = originalBodyRight || '';
-  document.body.style.width = originalBodyWidth || '';
   document.body.style.overscrollBehavior = '';
   document.documentElement.style.overscrollBehavior = '';
   document.body.classList.remove('modal-backdrop-locked');
   document.documentElement.classList.remove('modal-backdrop-locked');
-
-  if (typeof window !== 'undefined' && savedScrollY >= 0) {
-    window.scrollTo({ top: savedScrollY, left: 0, behavior: 'instant' as ScrollBehavior });
-  }
 }
 
 /**
  * Universal static background scroll lock hook.
  * Locks both <body> and <html> elements cleanly while a modal/dialog is actively open,
- * pinning body position so the blurred background behind the popup card is completely static.
+ * keeping the blurred background and bottom bar completely static without layout jumps.
  */
 export function useStaticBackdropScrollLock(isOpen: boolean) {
   useEffect(() => {
     if (!isOpen) return;
 
     if (lockCount === 0) {
-      savedScrollY =
-        typeof window !== 'undefined'
-          ? window.scrollY || document.documentElement.scrollTop || 0
-          : 0;
-
       const prevBodyOverflow = document.body.style.overflow;
       const prevHtmlOverflow = document.documentElement.style.overflow;
       originalBodyOverflow = prevBodyOverflow === 'hidden' ? '' : prevBodyOverflow;
       originalHtmlOverflow = prevHtmlOverflow === 'hidden' ? '' : prevHtmlOverflow;
       originalBodyPaddingRight = document.body.style.paddingRight;
-      originalBodyPosition = document.body.style.position;
-      originalBodyTop = document.body.style.top;
-      originalBodyLeft = document.body.style.left;
-      originalBodyRight = document.body.style.right;
-      originalBodyWidth = document.body.style.width;
 
       // Prevent content shift from scrollbar disappearing
       const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
@@ -103,11 +84,6 @@ export function useStaticBackdropScrollLock(isOpen: boolean) {
 
       document.body.style.overflow = 'hidden';
       document.documentElement.style.overflow = 'hidden';
-      document.body.style.position = 'fixed';
-      document.body.style.top = `-${savedScrollY}px`;
-      document.body.style.left = '0';
-      document.body.style.right = '0';
-      document.body.style.width = '100%';
       document.body.style.overscrollBehavior = 'none';
       document.documentElement.style.overscrollBehavior = 'none';
       document.body.classList.add('modal-backdrop-locked');

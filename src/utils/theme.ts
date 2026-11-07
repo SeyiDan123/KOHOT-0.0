@@ -1,61 +1,69 @@
-export type ThemeMode = 'light' | 'dark';
+export type ThemeMode = 'dark' | 'light';
 
-/**
- * UNIFIED CLASS-BASED DARK MODE TOGGLE
- * Default state on hard refresh: LIGHT MODE.
- * Controls document.documentElement.classList.toggle('dark').
- * Persists state via localStorage.setItem('kohot_theme', 'dark' | 'light').
- */
+const THEME_STORAGE_KEY = 'kohot_theme_mode';
+export const THEME_CHANGE_EVENT = 'kohot-theme-change';
 
-export const getTheme = (): ThemeMode => {
-  if (typeof window === 'undefined') return 'light';
+export function getStoredTheme(): ThemeMode {
+  if (typeof window === 'undefined') return 'dark';
   try {
-    const saved = localStorage.getItem('kohot_theme');
-    if (saved === 'dark') return 'dark';
-    return 'light'; // Default is always LIGHT MODE
-  } catch {
-    return 'light';
-  }
-};
-
-export const applyTheme = (theme: ThemeMode): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem('kohot_theme', theme);
-    const root = document.documentElement;
-    root.classList.add('disable-transitions');
-    if (theme === 'dark') {
-      root.classList.add('dark');
-      root.setAttribute('data-theme', 'dark');
-    } else {
-      root.classList.remove('dark');
-      root.setAttribute('data-theme', 'light');
+    const stored =
+      localStorage.getItem(THEME_STORAGE_KEY) || localStorage.getItem('kohot_theme');
+    if (stored === 'light' || stored === 'dark') {
+      return stored;
     }
-    // Force layout reflow
-    void root.offsetHeight;
-    requestAnimationFrame(() => {
-      root.classList.remove('disable-transitions');
-    });
-    window.dispatchEvent(new CustomEvent('kohot_theme_changed', { detail: { theme } }));
-  } catch (e) {
-    console.error('Failed to set theme in localStorage', e);
+  } catch {
+    // ignore storage errors
   }
-};
+  return 'dark';
+}
 
-export const toggleTheme = (current?: ThemeMode): ThemeMode => {
-  const active = current || getTheme();
-  const next: ThemeMode = active === 'dark' ? 'light' : 'dark';
+export const getTheme = getStoredTheme;
+
+let transitionTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function applyTheme(theme: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.classList.add('disable-transitions');
+  if (transitionTimer) {
+    clearTimeout(transitionTimer);
+  }
+  if (theme === 'dark') {
+    root.classList.add('dark');
+    root.setAttribute('data-theme', 'dark');
+    root.style.colorScheme = 'dark';
+  } else {
+    root.classList.remove('dark');
+    root.setAttribute('data-theme', 'light');
+    root.style.colorScheme = 'light';
+  }
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+    localStorage.setItem('kohot_theme', theme);
+  } catch {
+    // ignore
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: { theme } }));
+    window.dispatchEvent(new CustomEvent('kohot_theme_changed', { detail: { theme } }));
+  }
+  // Force synchronous reflow and keep disable-transitions through React's re-render paint
+  void root.offsetHeight;
+  transitionTimer = setTimeout(() => {
+    root.classList.remove('disable-transitions');
+    transitionTimer = null;
+  }, 80);
+}
+
+export function toggleTheme(current?: ThemeMode): ThemeMode {
+  const base = current || getStoredTheme();
+  const next: ThemeMode = base === 'dark' ? 'light' : 'dark';
   applyTheme(next);
   return next;
-};
+}
 
-// Aliases for seamless backwards compatibility
-export const getAlbumTheme = getTheme;
-export const setAlbumTheme = applyTheme;
-export const toggleAlbumTheme = toggleTheme;
-
-export const getDashboardTheme = getTheme;
-export const setDashboardTheme = applyTheme;
-export const toggleDashboardTheme = toggleTheme;
-
-export const getInitialTheme = getTheme;
+export function initializeTheme(): ThemeMode {
+  const theme = getStoredTheme();
+  applyTheme(theme);
+  return theme;
+}

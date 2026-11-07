@@ -788,7 +788,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 </div>
               </ScrollReveal>
 
-              {/* Feature 8: Final Thoughts */}
+              {/* Feature 8: Personal Stories & Executive Reflections */}
               <ScrollReveal delayMs={450} durationMs={700}>
                 <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
                   <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
@@ -799,14 +799,14 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                       <Quote className="w-6 h-6" />
                     </div>
                     <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Final Thoughts &amp; Voices
+                      Personal Stories &amp; Reflections
                     </h4>
                     <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      Valedictory charges and wisdom recorded directly from revered lecturers, heads of department, and student union executives.
+                      Heartfelt parting words, campus reflections, and featured messages from the class president, executives, and graduating classmates.
                     </p>
                   </div>
                   <span className="font-mono-tech text-[10px] text-cyan-600 dark:text-cyan-400 uppercase tracking-wider font-semibold">
-                    Mentorship &amp; Guidance
+                    Parting Words &amp; Legacy
                   </span>
                 </div>
               </ScrollReveal>

@@ -66,8 +66,8 @@ export const GlazedImage: React.FC<GlazedImageProps> = ({
           ref={imgRef}
           src={src}
           alt={alt}
-          loading={priority ? 'eager' : 'lazy'}
-          decoding="async"
+          loading="eager"
+          decoding="sync"
           referrerPolicy="no-referrer"
           onError={() => setHasError(true)}
           className={`w-full h-full object-cover ${className}`}

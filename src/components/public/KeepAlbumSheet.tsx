@@ -19,6 +19,7 @@ import {
   generateGoogleCalendarUrl, 
   downloadIcsCalendarFile 
 } from '../../utils/calendarHelper';
+import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 
 class SheetErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   constructor(props: { children: React.ReactNode }) {
@@ -69,6 +70,9 @@ export const KeepAlbumSheet: React.FC<KeepAlbumSheetProps> = ({
   const [isAndroidDevice, setIsAndroidDevice] = useState(false);
   const [isInAppBrowser, setIsInAppBrowser] = useState(false);
 
+  // Lock background scroll completely when Keep sheet is open
+  useStaticBackdropScrollLock(isOpen);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -111,7 +115,7 @@ export const KeepAlbumSheet: React.FC<KeepAlbumSheetProps> = ({
   if (!isOpen) return null;
 
   const safeSetId = currentSet?.id || '';
-  const albumUrl = safeSetId ? getAlbumUrl(safeSetId) : (typeof window !== 'undefined' ? window.location.href : '');
+  const albumUrl = currentSet && safeSetId ? getAlbumUrl(currentSet) : (typeof window !== 'undefined' ? window.location.href : '');
   const calendarParams = {
     departmentName: currentSet?.departmentName || 'Class',
     graduationYear: currentSet?.graduationYear || new Date().getFullYear(),
@@ -184,12 +188,21 @@ export const KeepAlbumSheet: React.FC<KeepAlbumSheetProps> = ({
   };
 
   const sheetElement = (
-    <div className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn">
+    <div
+      id="keep-album-sheet-backdrop"
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn overflow-hidden overscroll-none touch-none"
+    >
       {/* Background click to close */}
       <div className="absolute inset-0" onClick={onClose} />
 
       {/* Main Bottom Sheet Container */}
       <div 
+        onClick={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
+        data-modal-scrollable="true"
         className={`relative w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl border shadow-2xl overflow-hidden transition-all duration-300 z-10 min-h-[280px] ${
           isLightMode 
             ? 'bg-white border-zinc-200 text-slate-900' 

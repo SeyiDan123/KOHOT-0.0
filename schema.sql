@@ -68,11 +68,14 @@ CREATE TABLE IF NOT EXISTS class_sets (
   class_set_name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active', -- 'active' | 'archived'
   data_json TEXT NOT NULL, -- Full ClassSet JSON structure
+  invite_code TEXT,
   admin_user_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(institution_id, department_id, graduation_year)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_sets_invite_code ON class_sets(invite_code);
 
 -- 5. Financial Transactions Table
 CREATE TABLE IF NOT EXISTS transactions (
@@ -200,6 +203,9 @@ CREATE TABLE IF NOT EXISTS testimonials (
   publication_permission TEXT DEFAULT 'public', -- 'public' | 'private'
   review_status TEXT DEFAULT 'pending', -- 'approved' | 'rejected' | 'pending'
   is_featured INTEGER DEFAULT 0, -- 1 = true, 0 = false
+  is_visible INTEGER DEFAULT 1, -- 1 = visible on website, 0 = hidden
+  is_demo INTEGER DEFAULT 0, -- 1 = sample testimonial, 0 = real submission
+  display_order INTEGER DEFAULT 0,
   request_status TEXT DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -259,8 +265,13 @@ INSERT OR IGNORE INTO platform_settings (key, value) VALUES
   ('profile_cap_default', '200'),
   ('reinstate_days', '7'),
   ('draft_retention_days', '30'),
+  ('recovery_period_days', '14'),
   ('gate_mode', 'publish'),
-  ('default_kohot_slots_per_album', '0');
+  ('default_kohot_slots_per_album', '0'),
+  ('public_directory_enabled', '0'),
+  ('hidden_directory_institutions', '[]'),
+  ('hidden_directory_albums', '[]'),
+  ('institution_currencies', '{}');
 
 -- 15. Profile Submissions
 CREATE TABLE IF NOT EXISTS profile_submissions (

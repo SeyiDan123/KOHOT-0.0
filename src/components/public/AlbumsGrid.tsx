@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect } from 'react';
 import { 
   ClassSet, 
   WebsiteContentOverride, 
@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { getTheme, applyTheme } from '../../utils/theme';
 import { updateManifestTag } from '../../utils/metaTags';
+import { getCleanClassSummary } from '../../utils/storyFormatting';
 
 interface AlbumsGridProps {
   universities?: UniversityDirectoryItem[];
@@ -65,6 +66,7 @@ interface AlbumsGridProps {
     fromYear: number;
   }) => void;
   onUpdateSet?: (updatedSet: ClassSet) => void;
+  onOpenPublicDirectory?: () => void;
 }
 
 /**
@@ -92,9 +94,43 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
   inviteContext: propInviteContext,
   onOpenOnboardingWithInvite,
   onUpdateSet,
+  onOpenPublicDirectory,
 }) => {
   const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [publicDirectoryServerEnabled, setPublicDirectoryServerEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch('/api/public/directory', { credentials: 'include' })
+      .then((res) => {
+        if (res.status === 404) {
+          setPublicDirectoryServerEnabled(false);
+        } else if (res.ok) {
+          return res.json().then((d) => setPublicDirectoryServerEnabled(Boolean(d?.enabled)));
+        }
+      })
+      .catch(() => {});
+  }, [contentOverride?.publicDirectoryEnabled]);
+
+  const isExploreOtherDepartmentsEnabled = useMemo(() => {
+    if (contentOverride?.publicDirectoryEnabled !== undefined) {
+      return Boolean(contentOverride.publicDirectoryEnabled);
+    }
+    try {
+      const raw = window.localStorage.getItem('kohot_platform_settings_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.public_directory_enabled !== undefined) {
+          return Boolean(parsed.public_directory_enabled);
+        }
+      }
+    } catch {}
+    return Boolean(publicDirectoryServerEnabled);
+  }, [contentOverride?.publicDirectoryEnabled, publicDirectoryServerEnabled]);
+
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
+  }, []);
 
   // Theme mode state (context aware, defaults to light)
   const [isLightMode, setIsLightMode] = useState<boolean>(() => getTheme() === 'light');
@@ -476,8 +512,8 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
             </button>
           )}
 
-          <div className="flex items-center gap-3">
-            {/* Context-aware Light/Dark Mode Switcher */}
+          <div className="ml-auto flex items-center gap-2.5">
+            {/* Context-aware Light/Dark Mode Switcher (Left of Admin Login, on the Right) */}
             <button
               id="legacy-wall-theme-toggle-btn"
               type="button"
@@ -503,23 +539,21 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
               )}
             </button>
 
-            {/* Admin Sign In at Top Right Corner (Profile & Notification icons removed from Legacy Wall) */}
-            {!isAlbumAdmin && (
-              <button
-                id="legacy-wall-top-admin-signin-btn"
-                type="button"
-                onClick={onOpenLogin}
-                className={`px-3.5 py-1.5 rounded-full border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs hover:scale-105 active:scale-95 shrink-0 font-mono-tech text-xs uppercase font-semibold ${
-                  isLightMode
-                    ? 'bg-slate-900 hover:bg-black border-slate-900 text-white'
-                    : 'bg-white hover:bg-zinc-200 border-white text-black'
-                }`}
-                title="Admin Sign In"
-              >
-                <Lock className="w-3 h-3 text-[#d4af37]" />
-                <span>Admin Sign In</span>
-              </button>
-            )}
+            {/* Admin Login Button at Top Right Corner */}
+            <button
+              id="legacy-wall-top-admin-signin-btn"
+              type="button"
+              onClick={onOpenLogin}
+              className={`px-3.5 py-1.5 rounded-full border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs hover:scale-105 active:scale-95 shrink-0 font-mono-tech text-xs uppercase font-semibold ${
+                isLightMode
+                  ? 'bg-slate-900 hover:bg-black border-slate-900 text-white'
+                  : 'bg-white hover:bg-zinc-200 border-white text-black'
+              }`}
+              title="Admin Login"
+            >
+              <Lock className="w-3 h-3 text-[#d4af37]" />
+              <span>Admin Login</span>
+            </button>
           </div>
         </div>
       </header>
@@ -579,9 +613,24 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                     ? currentDepartment.name.toUpperCase()
                     : `DEPARTMENT OF ${currentDepartment.name.toUpperCase()}`}
               </h1>
-              <p className="font-body text-xs sm:text-sm text-[#d4af37] tracking-wide pt-1 text-center">
-                Tap any graduating class below to step inside their album and meet the set.
-              </p>
+              {isExploreOtherDepartmentsEnabled && (
+                <div className="pt-2 flex justify-center">
+                  <button
+                    id="legacy-wall-explore-other-departments-btn"
+                    type="button"
+                    onClick={() => {
+                      if (onOpenPublicDirectory) {
+                        onOpenPublicDirectory();
+                      } else {
+                        window.location.hash = '#directory';
+                      }
+                    }}
+                    className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white font-mono-tech text-[11px] inline-flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <span>Explore other departments ↗</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -661,9 +710,15 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
               </button>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-4">
+              {/* Subtle short instruction just before the 1st set card */}
+              <p className={`font-mono-tech text-[11px] sm:text-xs tracking-wide pl-7 sm:pl-12 md:pl-14 ${
+                isLightMode ? 'text-slate-500' : 'text-zinc-400'
+              }`}>
+                Tap any class album to meet the set.
+              </p>
               {/* Timeline Train Rails Layout */}
-              <div className="relative pl-7 sm:pl-12 md:pl-14 pt-2">
+              <div className="relative pl-7 sm:pl-12 md:pl-14 pt-1">
                 {/* Understated subtle architectural sidebar line on the legacy wall */}
                 <div className="absolute left-3 sm:left-5 md:left-6 top-6 bottom-6 w-px bg-zinc-300 dark:bg-zinc-800 rounded-full pointer-events-none" />
 
@@ -818,9 +873,27 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                                   {set.classSetName}
                                 </h3>
 
-                                <p className={`text-xs font-sans line-clamp-2 leading-relaxed font-normal ${isLightMode ? 'text-slate-600' : 'text-zinc-400'}`}>
-                                  {set.ourStory ? set.ourStory.slice(0, 140) + '...' : 'Permanent digital class album capturing the achievements and profiles of this graduating class.'}
-                                </p>
+                                {(() => {
+                                  const tagline = (set.classSlogan || '').replace(/^["“”']+|["“”']+$/g, '').trim();
+                                  const cleanSummary = getCleanClassSummary(set.ourStory);
+                                  const summarySnippet = cleanSummary ? cleanSummary.slice(0, 140) : '';
+                                  return (
+                                    <div className="space-y-1">
+                                      <p className={`text-xs font-sans line-clamp-2 leading-relaxed font-normal ${isLightMode ? 'text-slate-600' : 'text-zinc-400'}`}>
+                                        {tagline
+                                          ? `“${tagline}”`
+                                          : summarySnippet
+                                          ? summarySnippet
+                                          : `Class of ${set.graduationYear} · ${studentCount} graduates`}
+                                      </p>
+                                      {tagline && summarySnippet && (
+                                        <p className={`text-[11px] font-sans line-clamp-2 leading-relaxed ${isLightMode ? 'text-slate-500' : 'text-zinc-500'}`}>
+                                          {summarySnippet}
+                                        </p>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
 
                                 {/* Classmate Face Preview Circles */}
                                 {(set.students || []).length > 0 && (
@@ -920,6 +993,22 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                 <span className="font-syne font-bold text-xs tracking-wider uppercase text-white group-hover:text-[#d4af37] transition-colors">
                   KoHot
                 </span>
+              </button>
+            )}
+
+            {isExploreOtherDepartmentsEnabled && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onOpenPublicDirectory) {
+                    onOpenPublicDirectory();
+                  } else {
+                    window.location.hash = '#directory';
+                  }
+                }}
+                className="px-3.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-300 hover:text-[#d4af37] font-mono-tech text-[11px] transition-colors cursor-pointer"
+              >
+                Explore other departments ↗
               </button>
             )}
           </div>

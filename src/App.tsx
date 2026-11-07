@@ -59,9 +59,10 @@ import { resolveOrSynthesizeSet } from './utils/urlHelper';
 import { getTheme, applyTheme } from './utils/theme';
 import { forceUnlockAllScroll } from './utils/useStaticBackdropScrollLock';
 import { AlertTriangle, X, RefreshCw } from 'lucide-react';
+import { PublicDirectoryView } from './components/public/PublicDirectoryView';
 
 interface ResolvedRoute {
-  view: 'landing' | 'albums_grid' | 'department_album' | 'layer1_rep' | 'layer0_master' | 'student_submit';
+  view: 'landing' | 'albums_grid' | 'department_album' | 'layer1_rep' | 'layer0_master' | 'student_submit' | 'public_directory';
   setId: string;
   uniId: string | null;
   deptId: string | null;
@@ -86,12 +87,28 @@ function resolveCurrentRoute(currentSets: ClassSet[], currentUnis: UniversityDir
   const search = window.location.search || '';
   const pathname = window.location.pathname || '';
 
-  // 0. Explicit Demo Legacy Wall / All Albums Directory: #demo-albums, #albums, #legacy-wall, #directory
+  // 0a. Public Directory route: #directory, ?directory=1, /directory
+  if (
+    hash === '#directory' ||
+    hash.startsWith('#directory/') ||
+    search.includes('directory=1') ||
+    pathname === '/directory'
+  ) {
+    return {
+      view: 'public_directory',
+      setId: currentSets[0]?.id || 'unilag-cs-2026',
+      uniId: null,
+      deptId: null,
+      isExternalEntry: true,
+      label: 'PUBLIC DIRECTORY',
+    };
+  }
+
+  // 0. Explicit Demo Legacy Wall / All Albums Directory: #demo-albums, #albums, #legacy-wall
   if (
     hash === '#demo-albums' ||
     hash === '#albums' ||
     hash === '#legacy-wall' ||
-    hash === '#directory' ||
     hash.startsWith('#demo')
   ) {
     const defaultDept = currentSets[0]?.departmentId || 'dept-unilag-cs';
@@ -331,7 +348,10 @@ export default function App() {
     return null;
   });
 
-  const [activeView, setActiveView] = useState<'landing' | 'albums_grid' | 'department_album' | 'layer1_rep' | 'layer0_master' | 'student_submit'>(() => {
+  const [activeView, setActiveView] = useState<'landing' | 'albums_grid' | 'department_album' | 'layer1_rep' | 'layer0_master' | 'student_submit' | 'public_directory'>(() => {
+    if (initialRoute.view === 'public_directory') {
+      return 'public_directory';
+    }
     if (initialRoute.isExternalEntry && initialRoute.view !== 'landing') {
       return initialRoute.view;
     }
@@ -863,7 +883,7 @@ export default function App() {
         activationRef: `KOHOT-FND-${Math.floor(10000 + Math.random() * 90000)}`,
         bannerImageUrl: dept?.heroImageUrl || 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
         legacyGroupImageUrl: 'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
-        ourStory: `As the verified Founding Class of ${req.departmentName}, we established the permanent KoHot Legacy and campus plaque for generations to follow.`,
+        ourStory: '',
         students: [
           {
             id: `rep-std-${Date.now()}`,
@@ -1125,12 +1145,13 @@ export default function App() {
               setTransitionLabel(label);
               setTransitionInstitution(inst);
               setIsTransitioning(true);
-              setTimeout(() => {
+              requestAnimationFrame(() => {
                 setSelectedSetId(id);
                 setAlbumOriginView('landing');
                 setActiveView('department_album');
                 window.history.pushState(null, '', `#album-${id}`);
-              }, 3000);
+                window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+              });
             }}
             onExploreDemos={() => {
               setIsOnboardingOpen(false);
@@ -1140,10 +1161,11 @@ export default function App() {
               setTransitionLabel('Department of Public Law');
               setTransitionInstitution('Crownfield University (CU)');
               setIsTransitioning(true);
-              setTimeout(() => {
+              requestAnimationFrame(() => {
                 setActiveView('albums_grid');
                 window.history.pushState(null, '', '#demo-albums');
-              }, 3000);
+                window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+              });
             }}
             onOpenLogin={() => setIsLoginOpen(true)}
             onOpenOnboarding={() => {
@@ -1168,10 +1190,15 @@ export default function App() {
               const preparedStudent = {
                 ...newStudent,
                 approved: false, // Awaiting admin verification in Owner Dashboard
+                status: 'pending' as const,
+                submissionStatus: 'pending' as const,
               };
+              const exists = currentSet.students.some((s) => s.id === preparedStudent.id);
               const updated = {
                 ...currentSet,
-                students: [preparedStudent, ...currentSet.students],
+                students: exists
+                  ? currentSet.students.map((s) => (s.id === preparedStudent.id ? preparedStudent : s))
+                  : [preparedStudent, ...currentSet.students],
               };
               handleUpdateSingleSet(updated);
             }}
@@ -1361,9 +1388,7 @@ export default function App() {
                     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
                   }}
                   onUpdateSet={(updated) => {
-                    if (isCurrentAlbumOwner) {
-                      handleUpdateSingleSet(updated);
-                    }
+                    handleUpdateSingleSet(updated);
                   }}
                   onManageAlbum={
                     isAdminLoggedIn
@@ -1458,6 +1483,36 @@ export default function App() {
             }}
             showMainButton={Boolean(currentUser?.role === 'master_host')}
             onMainDashboard={() => setActiveView('layer0_master')}
+            onOpenPublicDirectory={() => {
+              setActiveView('public_directory');
+              window.history.pushState(null, '', '#directory');
+              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+            }}
+          />
+        )}
+
+        {activeView === 'public_directory' && (
+          <PublicDirectoryView
+            sets={sets}
+            universities={universities}
+            contentOverride={contentOverride}
+            onSelectAlbum={(albumId) => {
+              const selected = sets.find((s) => s.id === albumId);
+              if (selected) {
+                if (selected.institutionId) setSelectedUniversityId(selected.institutionId);
+                if (selected.departmentId) setSelectedDepartmentId(selected.departmentId);
+              }
+              setSelectedSetId(albumId);
+              setAlbumOriginView('albums_grid');
+              setActiveView('department_album');
+              window.history.pushState(null, '', `#album-${albumId}`);
+              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+            }}
+            onBack={() => {
+              setActiveView('albums_grid');
+              window.history.pushState(null, '', '#legacy-wall');
+              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+            }}
           />
         )}
 
@@ -1547,15 +1602,7 @@ export default function App() {
                 setSelectedDepartmentId(deptId);
                 if (uniId) setSelectedUniversityId(uniId);
                 setAlbumOriginView('layer0_master');
-                const targetUni = universities.find((u) => u.id === uniId || u.departments?.some((d) => d.id === deptId));
-                const targetDept = targetUni?.departments?.find((d) => d.id === deptId);
-                const deptName = targetDept?.name || 'Academic Department';
-                setTransitionLabel(deptName.toLowerCase().startsWith('department of') ? deptName : `Department of ${deptName}`);
-                setTransitionInstitution(targetUni?.name || 'Academic Institution');
-                setIsTransitioning(true);
-                setTimeout(() => {
-                  setActiveView('albums_grid');
-                }, 1500);
+                setActiveView('albums_grid');
               }}
               onSwitchRole={() => handleLogout()}
             />

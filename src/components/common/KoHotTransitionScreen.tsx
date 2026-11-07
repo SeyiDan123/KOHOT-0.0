@@ -66,8 +66,8 @@ export const KoHotTransitionScreen: React.FC<KoHotTransitionScreenProps> = ({
   return (
     <div
       id="kohot-branded-loading-splash"
-      className={`fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-[#18181b] select-none transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
-        isFadingOut ? 'opacity-0 scale-[1.02] pointer-events-none' : 'opacity-100 scale-100 pointer-events-auto'
+      className={`fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-[#18181b] select-none transition-opacity duration-500 ease-out ${
+        isFadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
       }`}
     >
       {/* Subtle warm ambient lighting aura with gentle pulse */}

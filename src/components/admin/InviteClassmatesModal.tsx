@@ -1,21 +1,18 @@
-import { useStaticBackdropScrollLock } from "../../utils/useStaticBackdropScrollLock";
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
+import {
+  Copy,
+  Check,
+  MessageCircle,
+  Send,
+  Share2,
+  QrCode,
+  Download,
+  RotateCcw,
+  MessageSquare,
+} from 'lucide-react';
 import { ClassSet } from '../../types';
 import { getSubmitUrl, copyUrlToClipboard } from '../../utils/urlHelper';
-import { useFeedback } from '../common/FeedbackSystem';
-import { 
-  X, 
-  Share2, 
-  Copy, 
-  Check, 
-  Send, 
-  MessageSquare, 
-  ExternalLink,
-  Sparkles,
-  Users,
-  QrCode
-} from 'lucide-react';
+import { UniversalModal } from '../common/UniversalModal';
 
 interface InviteClassmatesModalProps {
   isOpen: boolean;
@@ -28,300 +25,295 @@ export const InviteClassmatesModal: React.FC<InviteClassmatesModalProps> = ({
   onClose,
   currentSet,
 }) => {
-  const { showSuccess, showError } = useFeedback();
-  const shareableSubmitUrl = getSubmitUrl(currentSet);
-  const defaultMessage = `🎓 Calling all Class of ${currentSet.graduationYear || 2026} (${currentSet.departmentName}, ${currentSet.institutionName}) graduates!\n\nSubmit your official graduate portrait, nickname, and parting quote for our KoHot Digital Class Album here (takes 60 seconds, no registration needed):\n${shareableSubmitUrl}\n\nLet's immortalize our shared university memories!`;
+  const inviteLink = getSubmitUrl(currentSet);
 
-  const [messageText, setMessageText] = useState(defaultMessage);
+  const defaultMessageTemplate = `Hey everyone! 👋🎓\n\nWe are curating our official ${currentSet.departmentName} (Class of ${currentSet.graduationYear} — ${currentSet.classSetName}) Digital Class Album on KoHot.\n\nPlease take 60 seconds to submit your portrait photo, nickname, parting quote, and social handles using our official submission link below:\n\n${inviteLink}`;
+
+  const [customMessage, setCustomMessage] = useState(defaultMessageTemplate);
+  const [isMessageExpanded, setIsMessageExpanded] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [copiedFullMessage, setCopiedFullMessage] = useState(false);
-  const [showQr, setShowQr] = useState(false);
+  const [copiedMessage, setCopiedMessage] = useState(false);
+  const [showQrCode, setShowQrCode] = useState(false);
 
-  useStaticBackdropScrollLock(isOpen);
-
-  // Escape key listener
   useEffect(() => {
-    if (!isOpen) return;
-    
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen, onClose]);
+    if (isOpen) {
+      setCustomMessage(defaultMessageTemplate);
+      setIsMessageExpanded(false);
+      setShowQrCode(false);
+    }
+  }, [isOpen, currentSet.id, inviteLink]);
 
   if (!isOpen) return null;
 
-  const handleCopyLinkOnly = async () => {
-    try {
-      await copyUrlToClipboard(shareableSubmitUrl);
-      setCopiedLink(true);
-      showSuccess('Invitation ready to share.', 'The album link is copied and ready.');
-      setTimeout(() => setCopiedLink(false), 2500);
-    } catch {
-      showError("We couldn't prepare the invitation.", 'Nothing has been sent.');
+  const getShareReadyMessage = () => {
+    const trimmed = customMessage.trim();
+    if (trimmed.includes(inviteLink)) {
+      return trimmed;
     }
+    return `${trimmed}\n\n${inviteLink}`;
+  };
+
+  const finalShareText = getShareReadyMessage();
+
+  const handleCopyLink = async () => {
+    await copyUrlToClipboard(inviteLink);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 3000);
   };
 
   const handleCopyFullMessage = async () => {
-    try {
-      await copyUrlToClipboard(messageText);
-      setCopiedFullMessage(true);
-      showSuccess('Invitation ready to share.', 'The message and album link are ready.');
-      setTimeout(() => setCopiedFullMessage(false), 2500);
-    } catch {
-      showError("We couldn't prepare the invitation.", 'Nothing has been sent.');
-    }
-  };
-
-  const handleShareWhatsApp = () => {
-    showSuccess('Invitation ready to share.', 'Opening WhatsApp with the message and album link.');
-    const waUrl = `https://wa.me/?text=${encodeURIComponent(messageText)}`;
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleShareTelegram = () => {
-    showSuccess('Invitation ready to share.', 'Opening Telegram with the message and album link.');
-    const tgUrl = `https://t.me/share/url?url=${encodeURIComponent(shareableSubmitUrl)}&text=${encodeURIComponent(messageText)}`;
-    window.open(tgUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleShareSms = () => {
-    showSuccess('Invitation ready to share.', 'Opening SMS with the message and album link.');
-    const smsUrl = `sms:?body=${encodeURIComponent(messageText)}`;
-    window.location.href = smsUrl;
+    await copyUrlToClipboard(finalShareText);
+    setCopiedMessage(true);
+    setTimeout(() => setCopiedMessage(false), 3000);
   };
 
   const handleNativeShare = async () => {
-    if (navigator.share) {
+    if (typeof navigator !== 'undefined' && 'share' in navigator) {
       try {
         await navigator.share({
           title: `${currentSet.departmentName} Class of ${currentSet.graduationYear} Album`,
-          text: messageText,
-          url: shareableSubmitUrl,
+          text: finalShareText,
+          url: inviteLink,
         });
-        showSuccess('Invitation ready to share.', 'The message and album link are ready.');
-      } catch (err) {
-        // dismissed or canceled by user
-      }
-    } else {
-      await handleCopyFullMessage();
+        return;
+      } catch {}
     }
+    await handleCopyFullMessage();
   };
 
-  const modalElement = (
-    <div 
-      id="invite-classmates-modal-backdrop"
-      className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-2 sm:p-4 md:p-6 overflow-hidden animate-fadeIn select-none"
-      onClick={onClose}
-    >
-      <div 
-        id="invite-classmates-modal-dialog"
-        className="relative w-full max-w-xl bg-[#0c0d14] border border-white/15 rounded-2xl sm:rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-3rem)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-5 sm:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-black/30 z-10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#d4af37]/10 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center shrink-0">
-              <Users className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-syne font-bold text-lg text-white">
-                  Invite Classmates
-                </h3>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] uppercase font-semibold">
-                  Profile Submissions
-                </span>
-              </div>
-              <p className="font-body text-xs text-zinc-400">
-                {currentSet.departmentName} • Class of {currentSet.graduationYear}
-              </p>
-            </div>
-          </div>
+  const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(finalShareText)}`;
+  const telegramUrl = `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent(
+    customMessage.replace(inviteLink, '').trim()
+  )}`;
+  const smsUrl = `sms:?body=${encodeURIComponent(finalShareText)}`;
+  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=12&data=${encodeURIComponent(
+    inviteLink
+  )}`;
+
+  const singleLinePreview = customMessage
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return (
+    <UniversalModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Invite classmates"
+      subtitle={`${currentSet.departmentName} · Class of ${currentSet.graduationYear}`}
+      maxWidth="lg"
+      footer={
+        <div className="w-full flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 font-mono-tech text-xs font-medium transition-colors cursor-pointer"
+          >
+            Close
+          </button>
 
           <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+            type="button"
+            onClick={handleCopyFullMessage}
+            className="px-5 py-2.5 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-mono-tech text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
           >
-            <X className="w-4 h-4" />
+            {copiedMessage ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-black" />
+                <span>Copied message</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5 text-black" />
+                <span>Copy message</span>
+              </>
+            )}
           </button>
         </div>
+      }
+    >
+      <div className="space-y-5">
+        {/* Helper line */}
+        <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300">
+          Classmates add their own profile in about a minute. No account needed.
+        </p>
 
-        {/* Modal Content */}
-        <div className="p-5 sm:p-6 flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-5 text-xs font-body">
-          {/* Explanation Banner */}
-          <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-start gap-3">
-            <Sparkles className="w-4 h-4 text-[#d4af37] shrink-0 mt-0.5" />
-            <p className="text-zinc-300 leading-relaxed text-xs">
-              Share this invite on WhatsApp class groups, Telegram, or SMS. Classmates can submit their official portrait, moniker, and parting quote in under 60 seconds with no account registration required.
-            </p>
-          </div>
-
-          {/* Invitation Message Template */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                Invitation Message Preview (Editable)
-              </label>
-              <button
-                type="button"
-                onClick={() => setMessageText(defaultMessage)}
-                className="text-[11px] font-mono-tech text-[#d4af37] hover:underline cursor-pointer"
-              >
-                Reset to Default
-              </button>
-            </div>
-
-            <textarea
-              rows={6}
-              value={messageText}
-              onChange={(e) => setMessageText(e.target.value)}
-              className="w-full p-3.5 rounded-2xl bg-[#08090e] border border-white/15 text-white font-body text-xs leading-relaxed focus:outline-none focus:border-[#d4af37]/60 transition-colors"
+        {/* 1. Invite link block first */}
+        <div className="space-y-1.5">
+          <label
+            htmlFor="invite-classmates-link-input"
+            className="block font-mono-tech text-xs font-semibold text-slate-900 dark:text-white"
+          >
+            Invite link
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="invite-classmates-link-input"
+              type="text"
+              readOnly
+              value={inviteLink}
+              onFocus={(e) => e.currentTarget.select()}
+              className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none"
             />
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-[#272a36] dark:hover:bg-[#323646] text-white font-mono-tech text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 border border-slate-900 dark:border-white/15"
+            >
+              {copiedLink ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="kohot-keep-color text-white">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5 text-white" />
+                  <span className="kohot-keep-color text-white">Copy link</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowQrCode((prev) => !prev)}
+              aria-expanded={showQrCode}
+              title="Show QR code"
+              className={`px-3 py-2.5 rounded-xl border font-mono-tech text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+                showQrCode
+                  ? 'bg-amber-500/15 border-[#d4af37] text-slate-900 dark:text-white'
+                  : 'bg-slate-100 hover:bg-slate-200 dark:bg-[#1e2029] dark:hover:bg-[#272a36] border-slate-300 dark:border-white/15 text-slate-900 dark:text-white'
+              }`}
+            >
+              <QrCode className="w-3.5 h-3.5 text-[#b89728] dark:text-[#d4af37]" />
+              <span>QR</span>
+            </button>
           </div>
 
-          {/* Submission URL Box */}
-          <div className="p-3 rounded-2xl bg-[#08090e] border border-white/10 flex items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <span className="block font-mono-tech text-[10px] uppercase text-zinc-500 tracking-wider">
-                Direct Submission Link
-              </span>
-              <span className="block font-mono-tech text-xs text-white truncate">
-                {shareableSubmitUrl}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={handleCopyLinkOnly}
-                className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white border border-white/10 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
-              >
-                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedLink ? 'Copied' : 'Copy'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowQr((prev) => !prev)}
-                className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-[#d4af37] border border-white/10 font-mono-tech text-xs flex items-center gap-1 transition-colors cursor-pointer"
-                title="Show QR Code"
-              >
-                <QrCode className="w-3.5 h-3.5" />
-                <span>QR</span>
-              </button>
-
-              <a
-                href={shareableSubmitUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-zinc-400 hover:text-white border border-white/10 transition-colors"
-                title="Preview Submission Form"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            </div>
-          </div>
-
-          {showQr && (
-            <div className="p-4 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col items-center gap-2 animate-fadeIn">
-              <div className="p-3 bg-white rounded-2xl">
+          {showQrCode && (
+            <div className="mt-3 p-4 rounded-2xl bg-slate-50 dark:bg-[#0c0d14] border border-slate-200 dark:border-white/10 flex flex-col sm:flex-row items-center gap-4 animate-fadeIn">
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shrink-0">
                 <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(shareableSubmitUrl)}`}
-                  alt="Invite Classmates QR Code"
-                  className="w-36 h-36 object-contain"
+                  src={qrImageUrl}
+                  alt="Class Album Submission QR Code"
+                  className="w-32 h-32 object-contain"
                 />
               </div>
-              <span className="font-mono-tech text-[10px] text-zinc-400">
-                Scan to open classmate invite form
-              </span>
+              <div className="space-y-2 text-center sm:text-left">
+                <h4 className="font-syne font-bold text-sm text-slate-900 dark:text-white">
+                  Scan to submit profile
+                </h4>
+                <p className="font-body text-xs text-slate-600 dark:text-zinc-300">
+                  Opens the {currentSet.departmentName} (Class of {currentSet.graduationYear}) profile submission form directly.
+                </p>
+                <a
+                  href={qrImageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={`KoHot-${currentSet.departmentName}-${currentSet.graduationYear}-QR.png`}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 dark:bg-white/10 dark:hover:bg-white/15 text-slate-900 dark:text-white font-mono-tech text-xs font-medium transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download QR image</span>
+                </a>
+              </div>
             </div>
           )}
+        </div>
 
-          {/* Quick Share Buttons */}
-          <div className="space-y-2">
-            <span className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 font-semibold">
-              Share Invitation Immediately
-            </span>
+        {/* 2. "Share via" row: four equal 56px buttons in a single row */}
+        <div className="space-y-1.5">
+          <span className="block font-mono-tech text-xs font-semibold text-slate-900 dark:text-white">
+            Share via
+          </span>
+          <div className="grid grid-cols-4 gap-2">
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-14 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#1e2029] dark:hover:bg-[#272a36] border border-slate-300 dark:border-white/15 flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
+            >
+              <MessageCircle className="w-4 h-4 text-[#16a34a] dark:text-[#25D366] shrink-0" />
+              <span className="font-mono-tech text-[11px] font-semibold text-slate-900 dark:text-white leading-none">
+                WhatsApp
+              </span>
+            </a>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <a
+              href={telegramUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-14 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#1e2029] dark:hover:bg-[#272a36] border border-slate-300 dark:border-white/15 flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
+            >
+              <Send className="w-4 h-4 text-[#0284c7] dark:text-[#38bdf8] shrink-0" />
+              <span className="font-mono-tech text-[11px] font-semibold text-slate-900 dark:text-white leading-none">
+                Telegram
+              </span>
+            </a>
+
+            <a
+              href={smsUrl}
+              className="h-14 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#1e2029] dark:hover:bg-[#272a36] border border-slate-300 dark:border-white/15 flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
+            >
+              <MessageSquare className="w-4 h-4 text-[#059669] dark:text-[#34d399] shrink-0" />
+              <span className="font-mono-tech text-[11px] font-semibold text-slate-900 dark:text-white leading-none">
+                SMS
+              </span>
+            </a>
+
+            <button
+              type="button"
+              onClick={handleNativeShare}
+              className="h-14 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#1e2029] dark:hover:bg-[#272a36] border border-slate-300 dark:border-white/15 flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
+            >
+              <Share2 className="w-4 h-4 text-[#b45309] dark:text-[#d4af37] shrink-0" />
+              <span className="font-mono-tech text-[11px] font-semibold text-slate-900 dark:text-white leading-none">
+                More
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* 3. Message: collapsed by default as a single-line preview with "Edit"; expanded shows editable textarea (max 6 visible lines) + "Reset to default" */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <label className="block font-mono-tech text-xs font-semibold text-slate-900 dark:text-white">
+              Message
+            </label>
+            {isMessageExpanded && (
               <button
                 type="button"
-                onClick={handleShareWhatsApp}
-                className="py-2.5 px-3 rounded-2xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/30 text-[#25D366] font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                onClick={() => setCustomMessage(defaultMessageTemplate)}
+                className="font-mono-tech text-xs text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
               >
-                <MessageSquare className="w-3.5 h-3.5" />
-                <span>WhatsApp</span>
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset to default</span>
               </button>
+            )}
+          </div>
 
+          {!isMessageExpanded ? (
+            <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 flex items-center justify-between gap-3">
+              <p className="font-body text-xs text-slate-700 dark:text-zinc-300 truncate min-w-0 flex-1">
+                {singleLinePreview}
+              </p>
               <button
                 type="button"
-                onClick={handleShareTelegram}
-                className="py-2.5 px-3 rounded-2xl bg-[#0088cc]/15 hover:bg-[#0088cc]/25 border border-[#0088cc]/30 text-[#0088cc] font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                onClick={() => setIsMessageExpanded(true)}
+                className="font-mono-tech text-xs font-semibold text-slate-900 dark:text-white hover:underline shrink-0 cursor-pointer"
               >
-                <Send className="w-3.5 h-3.5" />
-                <span>Telegram</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleShareSms}
-                className="py-2.5 px-3 rounded-2xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/30 text-amber-300 font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-                <span>SMS</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleNativeShare}
-                className="py-2.5 px-3 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-                <span>Share</span>
+                Edit
               </button>
             </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 sm:p-5 border-t border-white/10 bg-black/40 flex items-center justify-between gap-3 shrink-0 z-10">
-          <span className="text-[11px] font-mono-tech text-zinc-500 hidden sm:inline">
-            KoHot • Frictionless Graduate Directory
-          </span>
-
-          <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
-            >
-              Close
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCopyFullMessage}
-              className="px-5 py-2 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow active:scale-95"
-            >
-              {copiedFullMessage ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedFullMessage ? 'Message Copied!' : 'Copy Invitation'}</span>
-            </button>
-          </div>
+          ) : (
+            <div className="space-y-1.5 animate-fadeIn">
+              <textarea
+                rows={6}
+                value={customMessage}
+                onChange={(e) => setCustomMessage(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-body text-xs leading-relaxed focus:outline-none focus:border-[#d4af37] resize-y max-h-36"
+              />
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    </UniversalModal>
   );
-
-  if (typeof document !== 'undefined') {
-    return createPortal(modalElement, document.body);
-  }
-  return modalElement;
 };

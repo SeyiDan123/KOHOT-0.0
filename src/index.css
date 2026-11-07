@@ -13,7 +13,6 @@
 
 @layer base {
   html {
-    scroll-behavior: smooth;
     -webkit-overflow-scrolling: touch;
     background-color: #f8fafc;
     color: #0f172a;
@@ -35,11 +34,10 @@
     transition: none !important;
   }
 
-  * {
-    scroll-behavior: smooth;
-  }
-
-  :root {
+  :root,
+  html:not(.dark),
+  [data-theme="light"],
+  .kh-theme[data-theme="light"] {
     --color-gold: #d4af37;
     --color-gold-light: #e6c158;
     --color-gold-dark: #b89728;
@@ -47,6 +45,54 @@
     --font-tech: 'Space Grotesk', monospace, sans-serif;
     --font-mono-tech: 'Space Grotesk', monospace, sans-serif;
     --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+    --kh-bg: #f8fafc;
+    --kh-surface: #ffffff;
+    --kh-surface-2: #f1f5f9;
+    --kh-surface-subtle: #f8fafc;
+    --kh-surface-elevated: #ffffff;
+    --kh-border: #e2e8f0;
+    --kh-border-strong: #cbd5e1;
+    --kh-text: #0f172a;
+    --kh-text-secondary: #334155;
+    --kh-text-muted: #64748b;
+    --kh-gold: #d4af37;
+    --kh-gold-hover: #b89728;
+    --kh-accent: #d4af37;
+    --kh-accent-text: #09090b;
+    --kh-input-bg: #ffffff;
+    --kh-success: #16a34a;
+    --kh-success-bg: rgba(22, 163, 74, 0.1);
+    --kh-warning: #d97706;
+    --kh-warning-bg: rgba(217, 119, 6, 0.1);
+    --kh-danger: #dc2626;
+    --kh-danger-bg: rgba(220, 38, 38, 0.1);
+  }
+
+  html.dark,
+  [data-theme="dark"],
+  .kh-theme[data-theme="dark"] {
+    --kh-bg: #121214;
+    --kh-surface: #18181b;
+    --kh-surface-2: #222226;
+    --kh-surface-subtle: #1f1f23;
+    --kh-surface-elevated: #27272a;
+    --kh-border: #2e2e34;
+    --kh-border-strong: #3f3f46;
+    --kh-text: #f4f4f5;
+    --kh-text-secondary: #d4d4d8;
+    --kh-text-muted: #a1a1aa;
+    --kh-gold: #d4af37;
+    --kh-gold-hover: #e6c158;
+    --kh-accent: #d4af37;
+    --kh-accent-text: #09090b;
+    --kh-input-bg: #121215;
+    --kh-success: #22c55e;
+    --kh-success-bg: rgba(34, 197, 94, 0.12);
+    --kh-warning: #f59e0b;
+    --kh-warning-bg: rgba(245, 158, 11, 0.12);
+    --kh-danger: #ef4444;
+    --kh-danger-bg: rgba(239, 68, 68, 0.12);
   }
 
   body {
@@ -302,9 +348,11 @@ html.dark [data-dashboard-theme="dark"] {
 .dashboard-light div[class*="bg-[#0a0c12]"],
 .dashboard-light div[class*="bg-[#0c0e14]"],
 .dashboard-light div[class*="bg-[#12131a]"],
+.dashboard-light div[class*="bg-[#121318]"],
 .dashboard-light div[class*="bg-[#11131e]"],
 .dashboard-light div[class*="bg-[#12141c]"],
 .dashboard-light div[class*="bg-[#0e1017]"],
+.dashboard-light div[class*="bg-[#0e1117]"],
 .dashboard-light div[class*="bg-[#07080c]"],
 .dashboard-light div[class*="bg-[#0d0e16]"],
 .dashboard-light div[class*="bg-[#0a0a0c]"],
@@ -314,8 +362,10 @@ html.dark [data-dashboard-theme="dark"] {
 .dashboard-light div[class*="from-[#18181b]"],
 .dashboard-light div[class*="bg-zinc-900"],
 .dashboard-light section[class*="bg-[#0c0d14]"],
+.dashboard-light section[class*="bg-[#0e1117]"],
 .dashboard-light section[class*="bg-[#18181b]"],
 .dashboard-light article[class*="bg-[#0c0d14]"],
+.dashboard-light article[class*="bg-[#0e1117]"],
 .dashboard-light article[class*="bg-[#18181b]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0c0d14]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#08090e]"],
@@ -325,9 +375,11 @@ html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#06070a]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0a0c12]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0c0e14]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#12131a]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#121318]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#11131e]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#12141c]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0e1017]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0e1117]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#07080c]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0d0e16]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#0a0a0c]"],
@@ -336,8 +388,10 @@ html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#202024]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="from-[#18181b]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-zinc-900"],
 html:not(.dark) [data-dashboard-theme="light"] section[class*="bg-[#0c0d14]"],
+html:not(.dark) [data-dashboard-theme="light"] section[class*="bg-[#0e1117]"],
 html:not(.dark) [data-dashboard-theme="light"] section[class*="bg-[#18181b]"],
-html:not(.dark) [data-dashboard-theme="light"] article[class*="bg-[#0c0d14]"] {
+html:not(.dark) [data-dashboard-theme="light"] article[class*="bg-[#0c0d14]"],
+html:not(.dark) [data-dashboard-theme="light"] article[class*="bg-[#0e1117]"] {
   background-color: #ffffff !important;
   background-image: none !important;
   border-color: #cbd5e1 !important;
@@ -345,8 +399,22 @@ html:not(.dark) [data-dashboard-theme="light"] article[class*="bg-[#0c0d14]"] {
   box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.08), 0 2px 6px -1px rgba(15, 23, 42, 0.04) !important;
 }
 
+.dashboard-light span[class*="bg-[#112236]"],
+html:not(.dark) [data-dashboard-theme="light"] span[class*="bg-[#112236]"] {
+  background-color: #eff6ff !important;
+  border-color: #bfdbfe !important;
+  color: #1d4ed8 !important;
+}
+
+.dashboard-light div[class*="bg-[#2a2415]"],
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-[#2a2415]"] {
+  background-color: #fef3c7 !important;
+  border-color: #fcd34d !important;
+}
+
 /* Dark Mode Primary Dashboard Cards */
 .dashboard-dark div[class*="bg-[#0c0d14]"],
+.dashboard-dark div[class*="bg-[#0e1117]"],
 .dashboard-dark div[class*="bg-[#08090e]"],
 .dashboard-dark div[class*="bg-[#10121a]"],
 .dashboard-dark div[class*="bg-[#060709]"],
@@ -355,6 +423,7 @@ html:not(.dark) [data-dashboard-theme="light"] article[class*="bg-[#0c0d14]"] {
 .dashboard-dark section[class*="bg-[#0c0d14]"],
 .dashboard-dark article[class*="bg-[#0c0d14]"],
 html.dark [data-dashboard-theme="dark"] div[class*="bg-[#0c0d14]"],
+html.dark [data-dashboard-theme="dark"] div[class*="bg-[#0e1117]"],
 html.dark [data-dashboard-theme="dark"] div[class*="bg-[#08090e]"],
 html.dark [data-dashboard-theme="dark"] div[class*="bg-[#10121a]"],
 html.dark [data-dashboard-theme="dark"] div[class*="bg-[#060709]"],
@@ -375,12 +444,12 @@ html.dark [data-dashboard-theme="dark"] article[class*="bg-[#0c0d14]"] {
 .dashboard-light div[class*="bg-white/[0.04]"],
 .dashboard-light div[class*="bg-white/[0.06]"],
 .dashboard-light div[class*="bg-white/[0.08]"],
-.dashboard-light div[class*="bg-black/20"],
-.dashboard-light div[class*="bg-black/30"],
-.dashboard-light div[class*="bg-black/40"],
-.dashboard-light div[class*="bg-black/50"],
-.dashboard-light div[class*="bg-black/60"],
-.dashboard-light div[class*="bg-black/70"],
+.dashboard-light div[class*="bg-black/20"]:not(.kohot-media-scrim):not(.pointer-events-none),
+.dashboard-light div[class*="bg-black/30"]:not(.kohot-media-scrim):not(.pointer-events-none),
+.dashboard-light div[class*="bg-black/40"]:not(.kohot-media-scrim):not(.pointer-events-none),
+.dashboard-light div[class*="bg-black/50"]:not(.kohot-media-scrim):not(.pointer-events-none),
+.dashboard-light div[class*="bg-black/60"]:not(.kohot-media-scrim):not(.pointer-events-none),
+.dashboard-light div[class*="bg-black/70"]:not(.kohot-media-scrim):not(.pointer-events-none),
 .dashboard-light div[class*="bg-zinc-800/"],
 .dashboard-light thead[class*="bg-black/"],
 .dashboard-light tr[class*="hover:bg-white/"],
@@ -390,15 +459,19 @@ html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.03]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.04]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.06]"],
 html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-white/[0.08]"],
-html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/20"],
-html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/30"],
-html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/40"],
-html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/50"],
-html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/60"],
-html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/70"] {
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/20"]:not(.kohot-media-scrim):not(.pointer-events-none),
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/30"]:not(.kohot-media-scrim):not(.pointer-events-none),
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/40"]:not(.kohot-media-scrim):not(.pointer-events-none),
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/50"]:not(.kohot-media-scrim):not(.pointer-events-none),
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/60"]:not(.kohot-media-scrim):not(.pointer-events-none),
+html:not(.dark) [data-dashboard-theme="light"] div[class*="bg-black/70"]:not(.kohot-media-scrim):not(.pointer-events-none) {
   background-color: #f8fafc !important;
   border-color: #e2e8f0 !important;
   color: #1e293b !important;
+}
+
+.kohot-media-scrim {
+  background-color: rgba(0, 0, 0, 0.35) !important;
 }
 
 /* Dark Mode Sub-cards & Wells */
@@ -642,6 +715,20 @@ html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white"]:not([cl
   border-color: #cbd5e1 !important;
 }
 
+html:not(.dark) .kohot-modal-header,
+html:not(.dark) .kohot-modal-footer {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+html.dark .kohot-modal-header,
+html.dark .kohot-modal-footer {
+  background-color: #14161f !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
 /* 7. Form Controls: Crisp White Inputs with Dark Slate Borders */
 .dashboard-light input[type="text"],
 .dashboard-light input[type="email"],
@@ -649,6 +736,7 @@ html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white"]:not([cl
 .dashboard-light input[type="number"],
 .dashboard-light input[type="url"],
 .dashboard-light input[type="tel"],
+.dashboard-light input[type="date"],
 .dashboard-light textarea,
 .dashboard-light select,
 html:not(.dark) [data-dashboard-theme="light"] input[type="text"],
@@ -657,6 +745,7 @@ html:not(.dark) [data-dashboard-theme="light"] input[type="password"],
 html:not(.dark) [data-dashboard-theme="light"] input[type="number"],
 html:not(.dark) [data-dashboard-theme="light"] input[type="url"],
 html:not(.dark) [data-dashboard-theme="light"] input[type="tel"],
+html:not(.dark) [data-dashboard-theme="light"] input[type="date"],
 html:not(.dark) [data-dashboard-theme="light"] textarea,
 html:not(.dark) [data-dashboard-theme="light"] select,
 html:not(.dark) div.fixed.inset-0 input[type="text"],
@@ -665,6 +754,7 @@ html:not(.dark) div.fixed.inset-0 input[type="password"],
 html:not(.dark) div.fixed.inset-0 input[type="number"],
 html:not(.dark) div.fixed.inset-0 input[type="url"],
 html:not(.dark) div.fixed.inset-0 input[type="tel"],
+html:not(.dark) div.fixed.inset-0 input[type="date"],
 html:not(.dark) div.fixed.inset-0 textarea,
 html:not(.dark) div.fixed.inset-0 select,
 html:not(.dark) div[id$="-modal-dialog"] input,
@@ -719,27 +809,25 @@ html.modal-backdrop-locked {
 
 @keyframes entranceMotion {
   0% {
-    opacity: 0;
-    transform: translateY(18px) scale(0.99);
+    opacity: 1;
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
 .animate-entrance {
-  animation: entranceMotion 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: none;
 }
 
 @keyframes slideUpFadeMotion {
   0% {
     opacity: 0;
-    transform: translateY(20px) scale(0.98);
+    transform: translateY(10px);
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
@@ -754,12 +842,10 @@ html.modal-backdrop-locked {
 
 @keyframes heroRevealCinematic {
   0% {
-    opacity: 0;
-    transform: scale(0.97);
+    opacity: 1;
   }
   100% {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -821,15 +907,40 @@ html.dark .bg-graduation-watermark {
   color: #ffffff !important;
 }
 
-.dashboard-light [class*="bg-amber-400"],
-.dashboard-light [class*="bg-amber-500"] {
+.dashboard-light [class*="bg-amber-400"]:not([class*="bg-amber-400/"]),
+.dashboard-light [class*="bg-amber-500"]:not([class*="bg-amber-500/"]) {
   background-color: #f59e0b !important;
   color: #000000 !important;
 }
 
-.dashboard-light [class*="bg-[#d4af37]"] {
+.dashboard-light [class*="bg-[#d4af37]"]:not([class*="bg-[#d4af37]/"]) {
   background-color: #d4af37 !important;
   color: #000000 !important;
+}
+
+/* Golden perimeter border line for held/dragged Leader, Award, Moment category, and Moment photo cards (both light and dark themes) */
+.kohot-drag-active-card,
+.dashboard-dark div.kohot-drag-active-card,
+.dashboard-light div.kohot-drag-active-card,
+html.dark [data-dashboard-theme="dark"] div.kohot-drag-active-card,
+html:not(.dark) [data-dashboard-theme="light"] div.kohot-drag-active-card {
+  border-color: #d4af37 !important;
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.75), 0 12px 28px -5px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Subtle photo scrim for +N bulk image indicator on Moments cards so the underlying image has a light dark overlay */
+.kohot-photo-more-overlay,
+.dashboard-light div.kohot-photo-more-overlay,
+.dashboard-dark div.kohot-photo-more-overlay,
+html:not(.dark) [data-dashboard-theme="light"] div.kohot-photo-more-overlay,
+html.dark [data-dashboard-theme="dark"] div.kohot-photo-more-overlay {
+  background-color: rgba(0, 0, 0, 0.22) !important;
+  color: #ffffff !important;
+}
+
+.kohot-photo-more-overlay span {
+  color: #ffffff !important;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
 }
 
 /* 10. Solid Bottom Toggle Switch Base: Reserve exact height so footers end at the top of the base and nothing is covered */
@@ -842,14 +953,5 @@ body.has-solid-bottom-switcher #floating-create-album-btn,
 body.has-solid-bottom-switcher #album-contextual-invite-bar,
 body.has-solid-bottom-switcher #legacy-wall-contextual-invite-bar {
   bottom: calc(68px + 1.25rem + env(safe-area-inset-bottom, 0px)) !important;
-}
-
-/* Never allow the bottom toggle switch area to block any pop-up card, modal window, or dialog */
-body.modal-backdrop-locked #album-admin-sticky-toggle-container,
-html.modal-backdrop-locked #album-admin-sticky-toggle-container {
-  opacity: 0 !important;
-  pointer-events: none !important;
-  visibility: hidden !important;
-  z-index: -1 !important;
 }
 

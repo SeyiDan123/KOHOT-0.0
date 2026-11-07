@@ -1,56 +1,55 @@
-import { useStaticBackdropScrollLock } from "../../utils/useStaticBackdropScrollLock";
-import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { 
-  X, 
-  Sparkles, 
-  CheckCircle2, 
-  Calendar, 
-  MessageSquare, 
-  Users, 
-  Phone, 
-  Mail, 
-  User, 
-  Lock, 
-  Globe, 
-  HelpCircle, 
-  ArrowRight, 
-  Share2, 
-  ExternalLink, 
-  AlertCircle, 
-  Check,
-  Smartphone,
-  ShieldCheck,
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  CheckCircle2,
   Copy,
-  QrCode,
-  MessageCircle
+  Check,
+  MessageCircle,
+  Send,
+  Globe,
+  Lock,
+  AlertTriangle,
+  Sparkles,
+  EyeOff,
+  Calendar,
 } from 'lucide-react';
-import { 
-  ClassSet, 
-  UserAccount, 
-  TestimonialRecord, 
-  NextClassRepresentativeRecord, 
-  PublishAlbumDraft 
+import {
+  ClassSet,
+  UserAccount,
+  TestimonialRecord,
+  NextClassRepresentativeRecord,
 } from '../../types';
-import { 
-  getStoredTestimonials, 
+import {
+  getStoredTestimonials,
   saveStoredTestimonials,
-  getStoredSets,
-  saveStoredSets 
+  getStoredNextClassInvites,
+  saveStoredNextClassInvites,
 } from '../../data/initialData';
-import { triggerClassAlbumIsLiveCommunication } from '../../utils/kohotCommunications';
-import { useFeedback } from '../common/FeedbackSystem';
-import { publishAlbumOnServer } from '../../utils/apiClient';
-import { getAlbumUrl, copyUrlToClipboard } from '../../utils/urlHelper';
+import { getAlbumShareLink, getAlbumUrl, copyUrlToClipboard } from '../../utils/urlHelper';
+import { UniversalModal } from '../common/UniversalModal';
 
 interface PublishAlbumModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentSet: ClassSet;
-  currentUser: UserAccount;
+  currentUser: UserAccount | null;
   onPublishSuccess: (updatedSet: ClassSet) => void;
   onOpenInviteNextClass?: () => void;
 }
+
+const MONTHS = [
+  { value: 1, label: 'January' },
+  { value: 2, label: 'February' },
+  { value: 3, label: 'March' },
+  { value: 4, label: 'April' },
+  { value: 5, label: 'May' },
+  { value: 6, label: 'June' },
+  { value: 7, label: 'July' },
+  { value: 8, label: 'August' },
+  { value: 9, label: 'September' },
+  { value: 10, label: 'October' },
+  { value: 11, label: 'November' },
+  { value: 12, label: 'December' },
+];
 
 export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
   isOpen,
@@ -58,928 +57,848 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
   currentSet,
   currentUser,
   onPublishSuccess,
-  onOpenInviteNextClass,
 }) => {
-  const { showSuccess } = useFeedback();
-  // Step navigation: tab / section state
-  const [activeStepTab, setActiveStepTab] = useState<1 | 2 | 3>(1);
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [publishedSuccessSet, setPublishedSuccessSet] = useState<ClassSet | null>(null);
-  const [showLearnMoreModal, setShowLearnMoreModal] = useState(false);
-  const [copiedPublishLink, setCopiedPublishLink] = useState(false);
-  const [showPublishQrCode, setShowPublishQrCode] = useState(false);
+  const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
+  const [confirmPopupMode, setConfirmPopupMode] = useState<'none' | 'publish' | 'unpublish'>('none');
+  const convocationDateInputRef = useRef<HTMLInputElement>(null);
 
-  // Automatically determine next graduation year
-  const nextGraduationYear = (currentSet.graduationYear || 2026) + 1;
-
-  // STEP 1 STATE: Convocation Date
-  const [convocationDate, setConvocationDate] = useState<string>(() => {
-    return currentSet.convocationDate || '';
-  });
-
-  // STEP 2 STATE: Experience Testimonial & Permission
-  const [experienceText, setExperienceText] = useState<string>('');
-  const [permissionChoice, setPermissionChoice] = useState<'public' | 'private' | null>(null);
-
-  // STEP 3 STATE: Pass the Legacy Forward (Next Class Rep Contact)
-  const [nextRepName, setNextRepName] = useState<string>('');
-  const [nextRepPhone, setNextRepPhone] = useState<string>('');
-  const [nextRepEmail, setNextRepEmail] = useState<string>('');
-
-  // Storage key for persisting draft if admin exits
-  const draftStorageKey = `kohot_publish_draft_${currentSet.id}`;
-
-  // Load draft on mount / open
-  useEffect(() => {
-    if (!isOpen) return;
-
-    try {
-      const rawDraft = localStorage.getItem(draftStorageKey);
-      if (rawDraft) {
-        const draft: PublishAlbumDraft = JSON.parse(rawDraft);
-        if (draft.convocationDate) setConvocationDate(draft.convocationDate);
-        if (draft.testimonialText) setExperienceText(draft.testimonialText);
-        if (draft.testimonialPermission) setPermissionChoice(draft.testimonialPermission);
-        if (draft.nextClassContact) {
-          setNextRepName(draft.nextClassContact.name || '');
-          setNextRepPhone(draft.nextClassContact.phoneOrWhatsapp || '');
-          setNextRepEmail(draft.nextClassContact.email || '');
-        }
-      } else {
-        // Fallback to existing set records if draft absent
-        if (currentSet.convocationDate) setConvocationDate(currentSet.convocationDate);
-        if (currentSet.nextClassContact) {
-          setNextRepName(currentSet.nextClassContact.name || '');
-          setNextRepPhone(currentSet.nextClassContact.phoneOrWhatsapp || '');
-          setNextRepEmail(currentSet.nextClassContact.email || '');
-        }
-      }
-    } catch (err) {
-      console.error('Failed restoring publish draft:', err);
-    }
-  }, [isOpen, currentSet.id, draftStorageKey]);
-
-  // Persist draft on changes
-  useEffect(() => {
-    if (!isOpen || publishedSuccessSet) return;
-
-    const draft: PublishAlbumDraft = {
-      setId: currentSet.id,
-      convocationDate,
-      testimonialText: experienceText,
-      testimonialPermission: permissionChoice,
-      nextClassContact: nextRepName.trim()
-        ? {
-            name: nextRepName.trim(),
-            phoneOrWhatsapp: nextRepPhone.trim(),
-            graduatingYear: nextGraduationYear,
-            email: nextRepEmail.trim() || undefined,
-            source: 'publish_step3',
-            addedAt: new Date().toISOString(),
-          }
-        : null,
-      savedAt: new Date().toISOString(),
-    };
-
-    try {
-      localStorage.setItem(draftStorageKey, JSON.stringify(draft));
-    } catch (e) {
-      // ignore storage quota errors
-    }
-  }, [
-    isOpen,
-    publishedSuccessSet,
-    convocationDate,
-    experienceText,
-    permissionChoice,
-    nextRepName,
-    nextRepPhone,
-    nextRepEmail,
-    currentSet.id,
-    nextGraduationYear,
-    draftStorageKey,
-  ]);
-
-  // Step completion validation
-  const isStep1Complete = Boolean(convocationDate && convocationDate.trim().length >= 4);
-  const isStep2Complete = Boolean(
-    experienceText.trim().length >= 10 && permissionChoice !== null
-  );
-  const isStep3Complete = Boolean(
-    nextRepName.trim().length >= 2 && nextRepPhone.trim().length >= 6
-  );
-
-  const canPublish = isStep1Complete && isStep2Complete && isStep3Complete;
-
-  // Execution of Publication
-  const handleFinalPublish = () => {
-    if (!canPublish) return;
-
-    setIsPublishing(true);
-
-    setTimeout(() => {
-      const nowIso = new Date().toISOString();
-
-      // 1. Next Class Representative contact record
-      const nextContactRecord: NextClassRepresentativeRecord = {
-        name: nextRepName.trim(),
-        phoneOrWhatsapp: nextRepPhone.trim(),
-        graduatingYear: nextGraduationYear,
-        email: nextRepEmail.trim() || undefined,
-        addedAt: nowIso,
-        source: 'publish_step3',
+  const parseInitialConvocation = () => {
+    if (currentSet.reminderSettings?.convocationMonth && currentSet.reminderSettings?.convocationYear) {
+      return {
+        day: Number(currentSet.reminderSettings.convocationDay || 18),
+        month: Number(currentSet.reminderSettings.convocationMonth),
+        year: Number(currentSet.reminderSettings.convocationYear),
       };
-
-      // 2. Updated Set Object
-      const updatedSet: ClassSet = {
-        ...currentSet,
-        isPublished: true,
-        isUnpublished: false,
-        activationStatus: 'active',
-        publishedAt: nowIso,
-        convocationDate: convocationDate.trim(),
-        nextClassContact: nextContactRecord,
-      };
-
-      // 3. Save Testimonial Record if provided
-      if (experienceText.trim()) {
-        const authorName = currentSet.classRepName || currentUser.fullName || 'Class Administrator';
-        const newTestimonial: TestimonialRecord = {
-          id: `testim-${Date.now()}`,
-          authorName,
-          name: authorName,
-          authorRole: 'Class Album Admin',
-          role: 'Class Album Admin',
-          universityName: currentSet.institutionName || currentSet.universityName || 'University',
-          departmentName: currentSet.departmentName,
-          graduationYear: currentSet.graduationYear,
-          quote: experienceText.trim(),
-          testimonialText: experienceText.trim(),
-          avatarUrl: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-          status: 'Approved',
-          isFeatured: permissionChoice === 'public',
-          publicationPermission: permissionChoice || 'private',
-          createdAt: nowIso.split('T')[0],
+    }
+    const rawSource = (currentSet.convocationDate || currentSet.publishDraft?.convocationDate || '').trim();
+    if (rawSource) {
+      const isoMatch = rawSource.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (isoMatch) {
+        return {
+          day: parseInt(isoMatch[3], 10),
+          month: parseInt(isoMatch[2], 10),
+          year: parseInt(isoMatch[1], 10),
         };
-
-        const existingTestimonials = getStoredTestimonials();
-        saveStoredTestimonials([newTestimonial, ...existingTestimonials]);
       }
-
-      // 4. Save updated Class Set to storage
-      const allSets = getStoredSets();
-      const updatedAll = allSets.map((s) => (s.id === updatedSet.id ? updatedSet : s));
-      saveStoredSets(updatedAll);
-
-      // Persist to Cloudflare D1 Server
-      publishAlbumOnServer(currentSet.id, {
-        convocationDate: convocationDate.trim(),
-        testimonialResponse: experienceText.trim(),
-        allowPublicFeature: permissionChoice === 'public',
-        nextClassRep: {
-          fullName: nextRepName.trim(),
-          phoneNumber: nextRepPhone.trim(),
-          email: nextRepEmail.trim() || undefined,
-        },
-      }).catch((serverErr) => {
-        console.warn('Background server publish sync:', serverErr);
-      });
-
-      // 5. Trigger "Class Album Is Live" automated product email to verified class members
-      triggerClassAlbumIsLiveCommunication(updatedSet);
-
-      // 6. Clear draft from localStorage
-      try {
-        localStorage.removeItem(draftStorageKey);
-      } catch (e) {}
-
-      // 7. Notify Parent Component
-      onPublishSuccess(updatedSet);
-      setPublishedSuccessSet(updatedSet);
-      setIsPublishing(false);
-      showSuccess('Your Class Album is now live.', 'Your classmates can return to it whenever they want.');
-    }, 700);
+      const slashDmyMatch = rawSource.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (slashDmyMatch) {
+        return {
+          day: parseInt(slashDmyMatch[1], 10),
+          month: parseInt(slashDmyMatch[2], 10),
+          year: parseInt(slashDmyMatch[3], 10),
+        };
+      }
+      const dmyMatch = rawSource.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
+      if (dmyMatch) {
+        const mObj = MONTHS.find((m) => m.label.toLowerCase().startsWith(dmyMatch[2].toLowerCase().slice(0, 3)));
+        return {
+          day: parseInt(dmyMatch[1], 10),
+          month: mObj ? mObj.value : 11,
+          year: parseInt(dmyMatch[3], 10),
+        };
+      }
+      const myMatch = rawSource.match(/^([A-Za-z]+)\s+(\d{4})$/);
+      if (myMatch) {
+        const mObj = MONTHS.find((m) => m.label.toLowerCase().startsWith(myMatch[1].toLowerCase().slice(0, 3)));
+        return {
+          day: 18,
+          month: mObj ? mObj.value : 11,
+          year: parseInt(myMatch[2], 10),
+        };
+      }
+    }
+    return {
+      day: 18,
+      month: 11,
+      year: currentSet.graduationYear || new Date().getFullYear(),
+    };
   };
 
-  useStaticBackdropScrollLock(isOpen);
+  const initialConv = parseInitialConvocation();
 
-  // Escape key listener
+  // Step 1: Convocation Date
+  const [convocationDay, setConvocationDay] = useState<number>(initialConv.day);
+  const [convocationMonth, setConvocationMonth] = useState<number>(initialConv.month);
+  const [convocationYear, setConvocationYear] = useState<number>(initialConv.year);
+
+  // Step 2: Review & Consent (Optional)
+  const [reviewMessage, setReviewMessage] = useState<string>(() => {
+    const existingTest = getStoredTestimonials().find((t) => t.setId === currentSet.id);
+    return (
+      (currentSet as any).testimonialText ||
+      currentSet.publishDraft?.testimonialText ||
+      existingTest?.testimonialText ||
+      ''
+    );
+  });
+  const [visibility, setVisibility] = useState<'public' | 'private'>(() => {
+    return (currentSet as any).testimonialPermission === 'private' ? 'private' : 'public';
+  });
+
+  // Step 3: Next Set Relay (Compulsory)
+  const nextGraduationYear = currentSet.graduationYear + 1;
+  const existingContact = currentSet.nextClassContact || currentSet.publishDraft?.nextClassContact || null;
+
+  const [successorName, setSuccessorName] = useState(existingContact?.name || '');
+  const [successorEmail, setSuccessorEmail] = useState(existingContact?.email || '');
+  const [successorPhone, setSuccessorPhone] = useState(existingContact?.phoneOrWhatsapp || '');
+  const [copiedRelayMessage, setCopiedRelayMessage] = useState(false);
+
+  // Final Published Share Screen State
+  const [publishedSuccess, setPublishedSuccess] = useState(false);
+  const [copiedAlbumLink, setCopiedAlbumLink] = useState(false);
+  const [copiedBroadcastText, setCopiedBroadcastText] = useState(false);
+
   useEffect(() => {
-    if (!isOpen) return;
-    
+    if (isOpen) {
+      setPublishedSuccess(false);
+      setConfirmPopupMode('none');
+      setActiveStep(1);
+      const parsed = parseInitialConvocation();
+      setConvocationDay(parsed.day);
+      setConvocationMonth(parsed.month);
+      setConvocationYear(parsed.year);
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen, onClose]);
+      const contact = currentSet.nextClassContact || currentSet.publishDraft?.nextClassContact || null;
+      if (contact) {
+        setSuccessorName(contact.name || '');
+        setSuccessorEmail(contact.email || '');
+        setSuccessorPhone(contact.phoneOrWhatsapp || '');
+      }
+      const existingTest = getStoredTestimonials().find((t) => t.setId === currentSet.id);
+      const savedReview =
+        (currentSet as any).testimonialText ||
+        currentSet.publishDraft?.testimonialText ||
+        existingTest?.testimonialText ||
+        '';
+      setReviewMessage(savedReview);
+    }
+  }, [isOpen, currentSet.id]);
 
   if (!isOpen) return null;
 
-  const modalElement = (
-    <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center p-2 sm:p-4 md:p-6 bg-black/85 backdrop-blur-md overflow-hidden animate-fadeIn" onClick={onClose}>
-      <div className="relative w-full max-w-3xl bg-[#0c0d14] border border-white/20 rounded-2xl sm:rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-3rem)]" onClick={(e) => e.stopPropagation()}>
-        
-        {/* =========================================================================
-            HEADER BAR
-            ========================================================================= */}
-        <div className="p-5 sm:p-7 border-b border-white/10 flex items-center justify-between shrink-0 bg-black/40 z-10">
-          <div className="flex items-center gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-amber-400/10 border border-amber-400/30 text-amber-400 flex items-center justify-center shadow-lg shadow-amber-400/10">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-syne font-bold text-xl sm:text-2xl text-white">
-                  Publish Class Album
-                </h3>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300 font-mono-tech text-[10px] uppercase font-bold">
-                  3 Required Steps
-                </span>
-              </div>
-              <p className="font-mono-tech text-xs text-zinc-400 mt-0.5">
-                {currentSet.departmentName} • Class of {currentSet.graduationYear}
-              </p>
+  const formatConvocationDate = (): string => {
+    const monthObj = MONTHS.find((m) => m.value === Number(convocationMonth));
+    const monthName = monthObj ? monthObj.label : 'November';
+    return `${convocationDay} ${monthName} ${convocationYear}`;
+  };
+
+  const isoConvocationValue = `${convocationYear}-${String(convocationMonth).padStart(2, '0')}-${String(convocationDay).padStart(2, '0')}`;
+  const nigerianDmyDisplay = `${String(convocationDay).padStart(2, '0')}/${String(convocationMonth).padStart(2, '0')}/${convocationYear}`;
+  const formattedConvocationStr = formatConvocationDate();
+
+  // Step 1 and Step 3 are compulsory; Step 2 (Experience) is optional
+  const isStep1Complete = Boolean(convocationDay && convocationMonth && convocationYear);
+  const isStep2Filled = reviewMessage.trim().length > 0;
+  const isStep3Complete = Boolean(successorName.trim() && successorPhone.trim());
+
+  const approvedStudents = (currentSet.students || []).filter(
+    (s) => s.approved || s.status === 'approved' || s.submissionStatus === 'approved'
+  );
+  const unpaidApprovedStudents = approvedStudents.filter((s) => {
+    if (s.isAdminProfile || s.isClassRep) return false;
+    const isCoveredBySlot = Boolean(s.usedSlot || s.slotConsumed || s.paymentStatus === 'waived');
+    const isPaidIndividually = s.paymentStatus === 'paid';
+    return !isCoveredBySlot && !isPaidIndividually;
+  });
+  const fundedProfilesOk = unpaidApprovedStudents.length === 0;
+
+  const canPublish = isStep1Complete && isStep3Complete && fundedProfilesOk;
+  const isCurrentlyPublished = Boolean(
+    (currentSet.isPublished || currentSet.published) &&
+      !currentSet.isUnpublished &&
+      !currentSet.unpublished &&
+      isStep1Complete &&
+      isStep3Complete
+  );
+
+  const getDisabledPublishReason = (): string => {
+    if (!isStep1Complete) return 'Please select your convocation date in Step 1.';
+    if (!isStep3Complete) return 'Please enter the next set representative details in Step 3.';
+    if (!fundedProfilesOk) {
+      return `${unpaidApprovedStudents.length} approved profile(s) still require a funded slot.`;
+    }
+    return '';
+  };
+
+  const albumShareLink = getAlbumShareLink(currentSet);
+  const officialAlbumUrl = getAlbumUrl(currentSet);
+
+  const generateRelayInviteUrl = () => {
+    const base = officialAlbumUrl.split('?')[0].replace(/\/+$/, '');
+    const params = new URLSearchParams();
+    params.set('relay', '1');
+    params.set('uni', currentSet.institutionId);
+    if (currentSet.departmentId) params.set('deptId', currentSet.departmentId);
+    params.set('dept', currentSet.departmentName);
+    params.set('year', String(nextGraduationYear));
+    if (successorName.trim()) params.set('repName', successorName.trim());
+    if (successorEmail.trim()) params.set('repEmail', successorEmail.trim());
+    if (successorPhone.trim()) params.set('repPhone', successorPhone.trim());
+    return `${base}/?${params.toString()}`;
+  };
+
+  const relayInviteUrl = generateRelayInviteUrl();
+
+  const relayShareText = `Congratulations on leading the ${currentSet.departmentName} Class of ${nextGraduationYear}! 🎉\n\nAs the graduating Class of ${currentSet.graduationYear}, we have archived our official Class Album on KoHot and are passing the departmental legacy baton to you.\n\nUse your pre-configured link below to initialize the Class of ${nextGraduationYear} Digital Class Album:\n${relayInviteUrl}`;
+
+  const cleanPhoneForWhatsApp = (raw: string) => {
+    const digits = raw.replace(/[^0-9]/g, '');
+    if (digits.startsWith('0') && digits.length === 11) {
+      return `234${digits.slice(1)}`;
+    }
+    return digits;
+  };
+
+  const whatsappDirectRelayUrl = successorPhone.trim()
+    ? `https://api.whatsapp.com/send?phone=${cleanPhoneForWhatsApp(successorPhone)}&text=${encodeURIComponent(relayShareText)}`
+    : `https://api.whatsapp.com/send?text=${encodeURIComponent(relayShareText)}`;
+
+  const handleCopyRelayText = async () => {
+    await copyUrlToClipboard(relayShareText);
+    setCopiedRelayMessage(true);
+    setTimeout(() => setCopiedRelayMessage(false), 3000);
+  };
+
+  const buildUpdatedSetWithCurrentFields = (publishNow: boolean): ClassSet => {
+    if (reviewMessage.trim().length > 0) {
+      const existingTestimonials = getStoredTestimonials();
+      const newTestimonial: TestimonialRecord = {
+        id: `test-${Date.now()}`,
+        name: currentUser?.fullName || currentSet.classRepName || 'Class Representative',
+        authorName: currentUser?.fullName || currentSet.classRepName || 'Class Representative',
+        email: currentUser?.email || currentSet.classRepEmail,
+        phone: currentUser?.phone || currentSet.classRepPhone,
+        role: 'Class Album Admin',
+        authorRole: `Class Admin • ${currentSet.classSetName}`,
+        university: currentSet.institutionName || 'University',
+        universityName: currentSet.institutionName || 'University',
+        universityId: currentSet.institutionId,
+        faculty: currentSet.faculty,
+        department: currentSet.departmentName,
+        departmentName: currentSet.departmentName,
+        departmentId: currentSet.departmentId,
+        classYear: currentSet.graduationYear,
+        graduationYear: currentSet.graduationYear,
+        classSetName: currentSet.classSetName,
+        setId: currentSet.id,
+        testimonialText: reviewMessage.trim(),
+        quote: reviewMessage.trim(),
+        submissionDate: new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString().split('T')[0],
+        publicationPermission: visibility,
+        reviewStatus: visibility === 'public' ? 'approved' : 'pending',
+        isFeatured: visibility === 'public',
+        requestStatus: visibility === 'public' ? 'approved' : 'private',
+        avatarUrl: currentSet.students.find((s) => s.isClassRep)?.photoUrl,
+      };
+      saveStoredTestimonials([newTestimonial, ...existingTestimonials.filter((t) => t.setId !== currentSet.id)]);
+    }
+
+    const studentEmails = Array.from(
+      new Set(
+        currentSet.students
+          .map((s) => s.email?.trim())
+          .filter((email): email is string => Boolean(email && email.includes('@')))
+      )
+    );
+
+    const nextReminderYear = Math.max(new Date().getFullYear() + 1, Number(convocationYear) + 1);
+    const monthObj = MONTHS.find((m) => m.value === Number(convocationMonth));
+    const nextReminderDate = `${convocationDay} ${monthObj?.label || 'November'} ${nextReminderYear}`;
+
+    const nextClassContact: NextClassRepresentativeRecord = {
+      name: successorName.trim(),
+      phoneOrWhatsapp: successorPhone.trim(),
+      graduatingYear: nextGraduationYear,
+      email: successorEmail.trim() || undefined,
+      addedAt: existingContact?.addedAt || new Date().toISOString(),
+      source: 'publish_step3',
+    };
+
+    let handoffInvite = currentSet.handoffInvite;
+    if (successorName.trim() && successorPhone.trim()) {
+      handoffInvite = {
+        id: currentSet.handoffInvite?.id || `handoff-${currentSet.id}-${nextGraduationYear}`,
+        fromSetId: currentSet.id,
+        fromAdminName: currentUser?.fullName || currentSet.classRepName,
+        fromAdminEmail: currentUser?.email || currentSet.classRepEmail,
+        fromClassYear: currentSet.graduationYear,
+        targetUniversityId: currentSet.institutionId,
+        targetUniversityName: currentSet.institutionName,
+        targetDepartmentId: currentSet.departmentId,
+        targetDepartmentName: currentSet.departmentName,
+        targetClassYear: nextGraduationYear,
+        targetContactName: successorName.trim(),
+        targetContactPhone: successorPhone.trim(),
+        targetContactEmail: successorEmail.trim() || undefined,
+        inviteCode:
+          currentSet.handoffInvite?.inviteCode ||
+          `RELAY-${nextGraduationYear}-${Date.now().toString(36).toUpperCase()}`,
+        status: 'invited',
+        createdAt: currentSet.handoffInvite?.createdAt || new Date().toISOString(),
+      };
+
+      const storedInvites = getStoredNextClassInvites();
+      saveStoredNextClassInvites([
+        handoffInvite,
+        ...storedInvites.filter((inv) => inv.fromSetId !== currentSet.id),
+      ]);
+    }
+
+    const updatedSet: ClassSet = {
+      ...currentSet,
+      convocationDate: formattedConvocationStr,
+      isPublished: publishNow,
+      published: publishNow,
+      isUnpublished: !publishNow,
+      unpublished: !publishNow,
+      lifecycleStatus: publishNow ? 'published' : 'draft',
+      publishedAt: publishNow
+        ? currentSet.publishedAt || new Date().toISOString().split('T')[0]
+        : currentSet.publishedAt,
+      nextClassContact,
+      handoffInvite,
+      publishDraft: {
+        setId: currentSet.id,
+        convocationDate: formattedConvocationStr,
+        testimonialText: reviewMessage.trim(),
+        testimonialPermission: visibility,
+        nextClassContact,
+        savedAt: new Date().toISOString(),
+      },
+      reminderSettings: {
+        automaticRemindersEnabled: true,
+        convocationDate: formattedConvocationStr,
+        convocationDay: Number(convocationDay),
+        convocationMonth: Number(convocationMonth),
+        convocationYear: Number(convocationYear),
+        isConvocationDayUnknown: false,
+        notificationEmails: studentEmails,
+        approvedAt: new Date().toISOString().split('T')[0],
+        nextReminderDate,
+      },
+    };
+    (updatedSet as any).testimonialText = reviewMessage.trim();
+    (updatedSet as any).testimonialPermission = visibility;
+    return updatedSet;
+  };
+
+  const handleExecutePublishConfirmed = () => {
+    if (!canPublish) return;
+    const updatedSet = buildUpdatedSetWithCurrentFields(true);
+    onPublishSuccess(updatedSet);
+    setConfirmPopupMode('none');
+    setPublishedSuccess(true);
+  };
+
+  const handleExecuteUnpublishConfirmed = () => {
+    const updatedSet = buildUpdatedSetWithCurrentFields(false);
+    onPublishSuccess(updatedSet);
+    setConfirmPopupMode('none');
+    onClose();
+  };
+
+  const publishedShareBroadcast = `🎓 Our Official ${currentSet.departmentName} (Class of ${currentSet.graduationYear}) Digital Class Album is now LIVE on KoHot!\n\nExplore our portraits, memories, and awards here:\n${albumShareLink}`;
+
+  const handleCopyAlbumLink = async () => {
+    await copyUrlToClipboard(albumShareLink);
+    setCopiedAlbumLink(true);
+    setTimeout(() => setCopiedAlbumLink(false), 3000);
+  };
+
+  const handleCopyBroadcast = async () => {
+    await copyUrlToClipboard(publishedShareBroadcast);
+    setCopiedBroadcastText(true);
+    setTimeout(() => setCopiedBroadcastText(false), 3000);
+  };
+
+  const stepSegments: Array<{ step: 1 | 2 | 3; label: string; done: boolean }> = [
+    { step: 1, label: '1. Convocation', done: isStep1Complete },
+    { step: 2, label: '2. Experience', done: isStep2Filled },
+    { step: 3, label: '3. Next set', done: isStep3Complete },
+  ];
+
+  if (publishedSuccess) {
+    return (
+      <UniversalModal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Album published"
+        subtitle={`${currentSet.departmentName} · Class of ${currentSet.graduationYear}`}
+        maxWidth="lg"
+        footer={
+          <div className="w-full flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 font-mono-tech text-xs transition-colors cursor-pointer"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={handleCopyBroadcast}
+              className="px-5 py-2.5 rounded-xl bg-[#d4af37] hover:bg-[#e6c158] text-black font-mono-tech text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer"
+            >
+              {copiedBroadcastText ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Copied message</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy broadcast message</span>
+                </>
+              )}
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="flex items-center gap-2.5 text-emerald-700 dark:text-emerald-400 text-xs font-medium">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Your class album is now live. Save &amp; Share buttons on your album are now active.</span>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block font-mono-tech text-xs font-semibold text-slate-900 dark:text-white">
+              Official album link
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                readOnly
+                value={albumShareLink}
+                onFocus={(e) => e.currentTarget.select()}
+                className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleCopyAlbumLink}
+                className="px-3.5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-mono-tech text-xs font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+              >
+                {copiedAlbumLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedAlbumLink ? 'Copied' : 'Copy link'}</span>
+              </button>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-9 h-9 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-            aria-label="Close publish modal"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="grid grid-cols-2 gap-2.5 pt-1">
+            <a
+              href={`https://api.whatsapp.com/send?text=${encodeURIComponent(publishedShareBroadcast)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-12 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-mono-tech text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <MessageCircle className="w-4 h-4 text-[#25D366]" />
+              <span>WhatsApp</span>
+            </a>
+
+            <a
+              href={`https://t.me/share/url?url=${encodeURIComponent(albumShareLink)}&text=${encodeURIComponent(
+                `🎓 Our Official ${currentSet.departmentName} (Class of ${currentSet.graduationYear}) Digital Class Album is now LIVE on KoHot!`
+              )}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-12 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-mono-tech text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <Send className="w-4 h-4 text-[#0088cc]" />
+              <span>Telegram</span>
+            </a>
+          </div>
         </div>
+      </UniversalModal>
+    );
+  }
 
-        {/* =========================================================================
-            SUCCESS SCREEN ONCE PUBLISHED
-            ========================================================================= */}
-        {publishedSuccessSet ? (
-          <div className="p-6 sm:p-8 space-y-6 overflow-y-auto text-center animate-fadeIn">
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto shadow-2xl shadow-emerald-500/20">
-              <Check className="w-8 h-8" />
-            </div>
-
-            <div className="space-y-1.5 max-w-lg mx-auto">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] uppercase tracking-wider font-bold">
-                Published · Live
-              </span>
-              <h4 className="font-syne font-bold text-2xl sm:text-3xl text-white">
-                Share your album
-              </h4>
-              <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                Your Class of {currentSet.graduationYear} ({currentSet.departmentName}) album is now live. Share this link with your classmates.
+  return (
+    <>
+      <UniversalModal
+        isOpen={isOpen}
+        onClose={onClose}
+        title={isCurrentlyPublished ? 'Published album' : 'Publish album'}
+        subtitle={`${currentSet.departmentName} · Class of ${currentSet.graduationYear}`}
+        maxWidth="lg"
+        footer={
+          <div className="w-full flex flex-col gap-2">
+            {!canPublish && (
+              <p className="text-[11px] font-body text-amber-700 dark:text-amber-300 text-right">
+                {getDisabledPublishReason()}
               </p>
-            </div>
-
-            {/* Share your album card: album link, Copy link, WhatsApp, QR code */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-white/[0.03] border border-white/10 max-w-md mx-auto text-left space-y-3.5 font-mono-tech text-xs">
-              <div className="p-2.5 rounded-xl bg-[#08090e] border border-white/10 text-zinc-200 text-xs truncate select-all">
-                {getAlbumUrl(publishedSuccessSet)}
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  id="post-publish-copy-link-btn"
-                  type="button"
-                  onClick={async () => {
-                    await copyUrlToClipboard(getAlbumUrl(publishedSuccessSet));
-                    setCopiedPublishLink(true);
-                    setTimeout(() => setCopiedPublishLink(false), 2000);
-                  }}
-                  className="py-2.5 px-3 rounded-xl bg-[#d4af37] hover:bg-[#e5c14d] text-black font-syne font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  {copiedPublishLink ? (
-                    <Check className="w-3.5 h-3.5" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                  <span>{copiedPublishLink ? 'Copied' : 'Copy link'}</span>
-                </button>
-
-                <a
-                  id="post-publish-whatsapp-btn"
-                  href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
-                    `Our official Class of ${currentSet.graduationYear} Album (${currentSet.departmentName}) is now live!\n${getAlbumUrl(publishedSuccessSet)}`
-                  )}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 border border-[#25D366]/40 text-emerald-300 font-syne font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <MessageCircle className="w-3.5 h-3.5" />
-                  <span>WhatsApp</span>
-                </a>
-
-                <button
-                  id="post-publish-qr-btn"
-                  type="button"
-                  onClick={() => setShowPublishQrCode((prev) => !prev)}
-                  className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-syne font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <QrCode className="w-3.5 h-3.5 text-[#d4af37]" />
-                  <span>QR code</span>
-                </button>
-              </div>
-
-              {showPublishQrCode && (
-                <div className="pt-3 flex flex-col items-center gap-2 border-t border-white/10">
-                  <div className="p-3 bg-white rounded-2xl shadow-lg">
-                    <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
-                        getAlbumUrl(publishedSuccessSet)
-                      )}`}
-                      alt="Published Album QR Code"
-                      className="w-36 h-36 object-contain"
-                    />
-                  </div>
-                  <span className="text-[10px] text-zinc-400">Scan to open live class album</span>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-1">
-              <a
-                href={`/#album-${publishedSuccessSet.id}`}
-                target="_blank"
-                rel="noreferrer"
-                className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg"
-              >
-                <span>View Live Album</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-
-              {onOpenInviteNextClass && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenInviteNextClass();
-                  }}
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-amber-400 hover:bg-amber-300 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-400/20"
-                >
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>Invite Next Class ({nextGraduationYear})</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-syne text-xs uppercase tracking-wider transition-colors cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* =====================================================================
-                STEP INDICATOR STRIP
-                ===================================================================== */}
-            <div className="grid grid-cols-3 border-b border-white/10 bg-black/30 shrink-0">
-              {/* Step 1 Tab */}
-              <button
-                type="button"
-                onClick={() => setActiveStepTab(1)}
-                className={`p-4 flex items-center justify-center gap-2.5 text-xs font-mono-tech transition-all border-b-2 cursor-pointer ${
-                  activeStepTab === 1
-                    ? 'border-amber-400 text-amber-300 bg-white/[0.04]'
-                    : isStep1Complete
-                    ? 'border-emerald-500/50 text-emerald-400'
-                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                }`}
-              >
-                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-                  isStep1Complete 
-                    ? 'bg-emerald-500 text-black' 
-                    : activeStepTab === 1 
-                    ? 'bg-amber-400 text-black' 
-                    : 'bg-white/10 text-zinc-400'
-                }`}>
-                  {isStep1Complete ? <Check className="w-3 h-3" /> : '1'}
-                </div>
-                <span className="font-semibold hidden sm:inline">1. Convocation</span>
-                <span className="font-semibold sm:hidden">Convocation</span>
-              </button>
-
-              {/* Step 2 Tab */}
-              <button
-                type="button"
-                onClick={() => setActiveStepTab(2)}
-                className={`p-4 flex items-center justify-center gap-2.5 text-xs font-mono-tech transition-all border-b-2 cursor-pointer ${
-                  activeStepTab === 2
-                    ? 'border-amber-400 text-amber-300 bg-white/[0.04]'
-                    : isStep2Complete
-                    ? 'border-emerald-500/50 text-emerald-400'
-                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                }`}
-              >
-                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-                  isStep2Complete 
-                    ? 'bg-emerald-500 text-black' 
-                    : activeStepTab === 2 
-                    ? 'bg-amber-400 text-black' 
-                    : 'bg-white/10 text-zinc-400'
-                }`}>
-                  {isStep2Complete ? <Check className="w-3 h-3" /> : '2'}
-                </div>
-                <span className="font-semibold hidden sm:inline">2. Experience</span>
-                <span className="font-semibold sm:hidden">Experience</span>
-              </button>
-
-              {/* Step 3 Tab */}
-              <button
-                type="button"
-                onClick={() => setActiveStepTab(3)}
-                className={`p-4 flex items-center justify-center gap-2.5 text-xs font-mono-tech transition-all border-b-2 cursor-pointer ${
-                  activeStepTab === 3
-                    ? 'border-amber-400 text-amber-300 bg-white/[0.04]'
-                    : isStep3Complete
-                    ? 'border-emerald-500/50 text-emerald-400'
-                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                }`}
-              >
-                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-                  isStep3Complete 
-                    ? 'bg-emerald-500 text-black' 
-                    : activeStepTab === 3 
-                    ? 'bg-amber-400 text-black' 
-                    : 'bg-white/10 text-zinc-400'
-                }`}>
-                  {isStep3Complete ? <Check className="w-3 h-3" /> : '3'}
-                </div>
-                <span className="font-semibold hidden sm:inline">3. Pass Legacy</span>
-                <span className="font-semibold sm:hidden">Pass Legacy</span>
-              </button>
-            </div>
-
-            {/* =====================================================================
-                SCROLLABLE BODY CONTENT FOR EACH STEP
-                ===================================================================== */}
-            <div className="p-6 sm:p-8 flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-6">
-
-              {/* -----------------------------------------------------------------
-                  STEP 1: CONVOCATION DATE (REQUIRED)
-                  ----------------------------------------------------------------- */}
-              {activeStepTab === 1 && (
-                <div className="space-y-6 animate-fadeIn">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-amber-400 font-mono-tech text-xs uppercase font-semibold">
-                      <Calendar className="w-4 h-4" />
-                      <span>Step 1: Required Convocation Milestone</span>
-                    </div>
-                    <h4 className="font-syne font-bold text-xl sm:text-2xl text-white">
-                      When is your Department's Convocation?
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                      The Convocation Date permanently anchors your class milestone in the University Legacy Wall and sets your annual cohort reconnection anniversary.
-                    </p>
-                  </div>
-
-                  <div className="p-5 sm:p-6 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
-                    <label className="block text-xs font-mono-tech uppercase tracking-wider text-zinc-300 font-semibold">
-                      Convocation Date <span className="text-red-400">*</span>
-                    </label>
-
-                    <div className="relative max-w-md">
-                      <input
-                        type="date"
-                        value={convocationDate}
-                        onChange={(e) => setConvocationDate(e.target.value)}
-                        className="w-full px-4 py-3 rounded-xl bg-black/60 border border-white/20 text-white font-mono-tech text-sm focus:outline-none focus:border-amber-400 transition-colors"
-                        required
-                      />
-                    </div>
-
-                    <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-amber-400/5 border border-amber-400/20 text-xs font-body text-amber-200/90 leading-relaxed">
-                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                      <span>
-                        Convocation date is required before publishing. If the exact day has not yet been announced by senate, select the estimated or ceremonial month for Class of {currentSet.graduationYear}.
-                      </span>
-                    </div>
-
-                    {isStep1Complete ? (
-                      <div className="flex items-center gap-2 text-emerald-400 font-mono-tech text-xs pt-1">
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Convocation Date recorded: {convocationDate}</span>
-                      </div>
-                    ) : (
-                      <div className="text-zinc-500 font-mono-tech text-xs pt-1">
-                        Please provide your convocation date to complete Step 1.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex justify-end pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveStepTab(2)}
-                      disabled={!isStep1Complete}
-                      className={`px-6 py-2.5 rounded-full font-syne text-xs uppercase tracking-wider font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                        isStep1Complete
-                          ? 'bg-white hover:bg-zinc-200 text-black shadow'
-                          : 'bg-white/10 text-zinc-500 cursor-not-allowed'
-                      }`}
-                    >
-                      <span>Continue to Step 2</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* -----------------------------------------------------------------
-                  STEP 2: SHARE YOUR EXPERIENCE (REQUIRED)
-                  ----------------------------------------------------------------- */}
-              {activeStepTab === 2 && (
-                <div className="space-y-6 animate-fadeIn">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-amber-400 font-mono-tech text-xs uppercase font-semibold">
-                      <MessageSquare className="w-4 h-4" />
-                      <span>Step 2: Share Your Experience</span>
-                    </div>
-                    <h4 className="font-syne font-bold text-xl sm:text-2xl text-white">
-                      What was your experience creating your Class Album with KoHot?
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                      Tell us in your own words what organizing and preserving your classmates’ memories felt like.
-                    </p>
-                  </div>
-
-                  {/* Textarea */}
-                  <div className="space-y-2">
-                    <textarea
-                      rows={5}
-                      value={experienceText}
-                      onChange={(e) => setExperienceText(e.target.value)}
-                      placeholder="Share your honest reflections on the journey, collecting classmate portraits, organizing leadership memories, and establishing your permanent department record..."
-                      className="w-full p-4 rounded-2xl bg-black/60 border border-white/20 text-white font-body text-sm placeholder:text-zinc-600 focus:outline-none focus:border-amber-400 transition-colors leading-relaxed"
-                      required
-                    />
-                    <div className="flex justify-between items-center text-[11px] font-mono-tech text-zinc-500 px-1">
-                      <span>{experienceText.trim().length} characters</span>
-                      <span>{experienceText.trim().length < 10 ? 'Minimum 10 characters required' : '✓ Reflection recorded'}</span>
-                    </div>
-                  </div>
-
-                  {/* Explicit Choice: Public vs Private */}
-                  <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-mono-tech uppercase tracking-wider text-white font-semibold">
-                        Feature Permission Choice <span className="text-red-400">*</span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setShowLearnMoreModal(true)}
-                        className="text-[11px] font-mono-tech text-amber-400 hover:text-amber-300 underline inline-flex items-center gap-1 cursor-pointer"
-                      >
-                        <HelpCircle className="w-3 h-3" />
-                        <span>About Public Testimonials</span>
-                      </button>
-                    </div>
-
-                    <div className="space-y-3 pt-1">
-                      {/* Option 1: Public */}
-                      <label
-                        className={`flex items-start gap-3.5 p-3.5 rounded-xl border transition-all cursor-pointer ${
-                          permissionChoice === 'public'
-                            ? 'bg-amber-400/10 border-amber-400/50 text-white'
-                            : 'bg-black/40 border-white/10 text-zinc-300 hover:border-white/20'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="testimonial_permission"
-                          checked={permissionChoice === 'public'}
-                          onChange={() => setPermissionChoice('public')}
-                          className="mt-1 accent-amber-400 cursor-pointer"
-                        />
-                        <div className="space-y-0.5 text-xs font-body">
-                          <p className="font-semibold text-white">
-                            “Yes, you may feature my experience on the KoHot website.”
-                          </p>
-                          <p className="text-zinc-400 text-[11px] leading-relaxed">
-                            KoHot may feature your quote using your name, photo, class and university.
-                          </p>
-                        </div>
-                      </label>
-
-                      {/* Option 2: Private */}
-                      <label
-                        className={`flex items-start gap-3.5 p-3.5 rounded-xl border transition-all cursor-pointer ${
-                          permissionChoice === 'private'
-                            ? 'bg-white/10 border-white/40 text-white'
-                            : 'bg-black/40 border-white/10 text-zinc-300 hover:border-white/20'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="testimonial_permission"
-                          checked={permissionChoice === 'private'}
-                          onChange={() => setPermissionChoice('private')}
-                          className="mt-1 accent-amber-400 cursor-pointer"
-                        />
-                        <div className="space-y-0.5 text-xs font-body">
-                          <p className="font-semibold text-white">
-                            “No, please keep my response private.”
-                          </p>
-                          <p className="text-zinc-400 text-[11px] leading-relaxed">
-                            Your feedback is saved strictly for internal product refinement and will never be published publicly.
-                          </p>
-                        </div>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="flex justify-between items-center pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveStepTab(1)}
-                      className="px-4 py-2 rounded-full font-syne text-xs uppercase tracking-wider text-zinc-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      ← Back to Step 1
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setActiveStepTab(3)}
-                      disabled={!isStep2Complete}
-                      className={`px-6 py-2.5 rounded-full font-syne text-xs uppercase tracking-wider font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                        isStep2Complete
-                          ? 'bg-white hover:bg-zinc-200 text-black shadow'
-                          : 'bg-white/10 text-zinc-500 cursor-not-allowed'
-                      }`}
-                    >
-                      <span>Continue to Step 3</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* -----------------------------------------------------------------
-                  STEP 3: PASS THE LEGACY FORWARD (REQUIRED)
-                  ----------------------------------------------------------------- */}
-              {activeStepTab === 3 && (
-                <div className="space-y-6 animate-fadeIn">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-amber-400 font-mono-tech text-xs uppercase font-semibold">
-                      <Users className="w-4 h-4" />
-                      <span>Step 3: Pass the Legacy Forward</span>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <h4 className="font-syne font-bold text-xl sm:text-2xl text-white">
-                        Next Class Representative — {nextGraduationYear}
-                      </h4>
-
-                    </div>
-
-                    <p className="font-body text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                      Capture the immediate next-class representative as a backup and handover record for {currentSet.departmentName}.
-                    </p>
-                  </div>
-
-                  <div className="p-5 sm:p-6 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {/* Name (Required) */}
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-mono-tech uppercase tracking-wider text-zinc-300 font-semibold">
-                          Representative Full Name <span className="text-red-400">*</span>
-                        </label>
-                        <div className="relative">
-                          <User className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-                          <input
-                            type="text"
-                            value={nextRepName}
-                            onChange={(e) => setNextRepName(e.target.value)}
-                            placeholder="e.g. Chidinma Okafor"
-                            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/60 border border-white/20 text-white font-body text-sm placeholder:text-zinc-600 focus:outline-none focus:border-amber-400"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      {/* Phone / WhatsApp (Required) */}
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-mono-tech uppercase tracking-wider text-zinc-300 font-semibold">
-                          Phone / WhatsApp Number <span className="text-red-400">*</span>
-                        </label>
-                        <div className="relative">
-                          <Phone className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-                          <input
-                            type="tel"
-                            value={nextRepPhone}
-                            onChange={(e) => setNextRepPhone(e.target.value)}
-                            placeholder="e.g. +234 809 333 4455"
-                            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/60 border border-white/20 text-white font-mono-tech text-sm placeholder:text-zinc-600 focus:outline-none focus:border-amber-400"
-                            required
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                      {/* Automatically determined Graduating Year (Locked) */}
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-mono-tech uppercase tracking-wider text-zinc-300 font-semibold">
-                          Graduating Year (Next Cohort)
-                        </label>
-                        <div className="px-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-amber-400 font-mono-tech text-sm flex items-center justify-between">
-                          <span>Class of {nextGraduationYear}</span>
-                          <span className="text-[10px] text-zinc-500 uppercase">Auto-Determined</span>
-                        </div>
-                      </div>
-
-                      {/* Optional Email */}
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-mono-tech uppercase tracking-wider text-zinc-400">
-                          Email Address <span className="text-zinc-500 font-normal">(Optional)</span>
-                        </label>
-                        <div className="relative">
-                          <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-                          <input
-                            type="email"
-                            value={nextRepEmail}
-                            onChange={(e) => setNextRepEmail(e.target.value)}
-                            placeholder="rep@university.edu (optional)"
-                            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/60 border border-white/20 text-white font-body text-sm placeholder:text-zinc-600 focus:outline-none focus:border-amber-400"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Explanatory Policy Callout */}
-                    <div className="p-4 rounded-xl bg-white/[0.02] border border-white/10 space-y-1.5 text-xs font-body text-zinc-300 leading-relaxed">
-                      <div className="flex items-center gap-2 text-zinc-200 font-semibold font-mono-tech text-[11px] uppercase">
-                        <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                        <span>Legacy Record &amp; Privacy Safeguard</span>
-                      </div>
-                      <p className="text-zinc-400 text-[11px]">
-                        This contact is stored with the album so the next class can be identified as the next link in the department's legacy. This contact is <strong>not automatically granted admin rights</strong> and is <strong>not automatically emailed</strong>.
-                      </p>
-                    </div>
-
-                    {isStep3Complete ? (
-                      <div className="flex items-center gap-2 text-emerald-400 font-mono-tech text-xs pt-1">
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Next class representative recorded: {nextRepName} ({nextRepPhone})</span>
-                      </div>
-                    ) : (
-                      <div className="text-zinc-500 font-mono-tech text-xs pt-1">
-                        Please provide representative name and phone number to complete Step 3.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex justify-between items-center pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveStepTab(2)}
-                      className="px-4 py-2 rounded-full font-syne text-xs uppercase tracking-wider text-zinc-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      ← Back to Step 2
-                    </button>
-
-                    <div className="text-right">
-                      <span className="font-mono-tech text-[11px] text-zinc-400">
-                        {canPublish ? '✓ All 3 steps complete' : 'Complete required fields above to publish'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-            </div>
-
-            {/* =====================================================================
-                STICKY FOOTER WITH CANCEL & PUBLISH ALBUM
-                ===================================================================== */}
-            <div className="p-5 sm:p-6 border-t border-white/10 bg-black/60 shrink-0 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
+            )}
+            <div className="w-full flex flex-wrap items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-5 py-2.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white font-syne text-xs uppercase tracking-wider transition-colors cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 font-mono-tech text-xs font-medium transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
-                <span className="text-[11px] font-mono-tech text-zinc-500 hidden sm:inline">
-                  Draft saved automatically
-                </span>
               </div>
 
-              {/* Progress Summary & Publish Button */}
-              <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-                <div className="hidden md:flex items-center gap-2 font-mono-tech text-[11px]">
-                  <span className={isStep1Complete ? 'text-emerald-400' : 'text-zinc-500'}>
-                    1. Convocation {isStep1Complete ? '✓' : '•'}
-                  </span>
-                  <span className="text-zinc-600">/</span>
-                  <span className={isStep2Complete ? 'text-emerald-400' : 'text-zinc-500'}>
-                    2. Experience {isStep2Complete ? '✓' : '•'}
-                  </span>
-                  <span className="text-zinc-600">/</span>
-                  <span className={isStep3Complete ? 'text-emerald-400' : 'text-zinc-500'}>
-                    3. Legacy {isStep3Complete ? '✓' : '•'}
-                  </span>
-                </div>
+              <div className="flex items-center gap-2">
+                {activeStep < 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveStep((prev) => (prev === 1 ? 2 : 3))}
+                    className="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/15 text-slate-900 dark:text-white font-mono-tech text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Next step
+                  </button>
+                )}
 
+                {(activeStep === 3 || canPublish) && (
+                  <button
+                    id="publish-album-submit-btn"
+                    type="button"
+                    onClick={() => {
+                      if (!canPublish) {
+                        if (!isStep1Complete) setActiveStep(1);
+                        else if (!isStep3Complete) setActiveStep(3);
+                        return;
+                      }
+                      setConfirmPopupMode('publish');
+                    }}
+                    disabled={!canPublish}
+                    className={`px-5 py-2.5 rounded-xl font-mono-tech text-xs font-bold transition-colors ${
+                      canPublish
+                        ? 'bg-[#d4af37] hover:bg-[#e6c158] text-black cursor-pointer shadow-xs'
+                        : 'bg-slate-200 dark:bg-white/10 text-slate-500 dark:text-zinc-400 border border-slate-300 dark:border-white/10 cursor-not-allowed'
+                    }`}
+                  >
+                    {isCurrentlyPublished ? 'Update & Publish' : 'Publish album'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        }
+      >
+        <div className="space-y-5">
+          {/* Progress: thin 3-segment bar */}
+          <div className="grid grid-cols-3 gap-2">
+            {stepSegments.map((item) => {
+              const isCurrent = activeStep === item.step;
+              const isReached = activeStep >= item.step || item.done;
+              return (
                 <button
-                  id="final-publish-album-btn"
+                  key={item.step}
                   type="button"
-                  onClick={handleFinalPublish}
-                  disabled={!canPublish || isPublishing}
-                  className={`w-full sm:w-auto px-7 py-3 rounded-full font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl cursor-pointer ${
-                    canPublish && !isPublishing
-                      ? 'bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 hover:brightness-110 text-black shadow-amber-400/25 active:scale-95'
-                      : 'bg-white/10 text-zinc-500 cursor-not-allowed border border-white/5'
+                  onClick={() => setActiveStep(item.step)}
+                  className="text-left space-y-1.5 group cursor-pointer focus:outline-none"
+                >
+                  <div
+                    className={`h-1 w-full rounded-full transition-colors ${
+                      isCurrent
+                        ? 'bg-[#d4af37]'
+                        : item.done
+                        ? 'bg-emerald-500'
+                        : isReached
+                        ? 'bg-[#d4af37]/50'
+                        : 'bg-slate-200 dark:bg-white/10'
+                    }`}
+                  />
+                  <span
+                    className={`block font-mono-tech text-[11px] sm:text-xs whitespace-nowrap truncate transition-colors ${
+                      isCurrent
+                        ? 'text-slate-900 dark:text-white font-bold'
+                        : item.done
+                        ? 'text-emerald-700 dark:text-emerald-400 font-semibold'
+                        : 'text-slate-600 dark:text-zinc-400 group-hover:text-slate-900 dark:group-hover:text-white'
+                    }`}
+                  >
+                    {item.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* STEP 1: CONVOCATION DATE (Calendar Pop-up) */}
+          {activeStep === 1 && (
+            <div className="space-y-3 animate-fadeIn">
+              <div className="flex items-center justify-between gap-2">
+                <label className="block font-syne font-bold text-sm text-slate-900 dark:text-white">
+                  Convocation Date *
+                </label>
+                {formattedConvocationStr && (
+                  <span className="px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/25 font-mono-tech text-[11px] text-amber-700 dark:text-amber-300 font-semibold">
+                    {formattedConvocationStr}
+                  </span>
+                )}
+              </div>
+
+              <div
+                className="relative w-full cursor-pointer"
+                onClick={() => {
+                  try {
+                    (convocationDateInputRef.current as any)?.showPicker?.();
+                    convocationDateInputRef.current?.focus();
+                  } catch {
+                    convocationDateInputRef.current?.focus();
+                  }
+                }}
+              >
+                <div className="w-full px-4 py-2.5 rounded-xl bg-white dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs flex items-center justify-between pointer-events-none">
+                  <span>{nigerianDmyDisplay}</span>
+                  <Calendar className="w-4 h-4 text-slate-400 dark:text-zinc-400 shrink-0" />
+                </div>
+                <input
+                  ref={convocationDateInputRef}
+                  id="publish-convocation-date-picker"
+                  type="date"
+                  value={isoConvocationValue}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    const parts = val.split('-');
+                    if (parts.length === 3) {
+                      setConvocationYear(parseInt(parts[0], 10));
+                      setConvocationMonth(parseInt(parts[1], 10));
+                      setConvocationDay(parseInt(parts[2], 10));
+                    }
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    try {
+                      (e.currentTarget as any).showPicker?.();
+                    } catch {
+                      // fallback
+                    }
+                  }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2: EXPERIENCE (OPTIONAL) */}
+          {activeStep === 2 && (
+            <div className="space-y-3 animate-fadeIn">
+              <div className="space-y-1">
+                <label
+                  htmlFor="publish-experience-textarea"
+                  className="block font-syne font-bold text-sm text-slate-900 dark:text-white"
+                >
+                  Your experience with KoHot{' '}
+                  <span className="font-mono-tech text-xs font-normal text-slate-500 dark:text-zinc-400">
+                    (optional)
+                  </span>
+                </label>
+                <p className="font-body text-xs text-slate-600 dark:text-zinc-300">
+                  Share a short note on building your class album.
+                </p>
+              </div>
+
+              <textarea
+                id="publish-experience-textarea"
+                rows={4}
+                value={reviewMessage}
+                onChange={(e) => setReviewMessage(e.target.value)}
+                placeholder="How was your experience curating your class album on KoHot?"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 font-body text-xs sm:text-sm focus:outline-none focus:border-[#d4af37] resize-none"
+              />
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setVisibility('public')}
+                  className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    visibility === 'public'
+                      ? 'border-[#d4af37] bg-amber-50/70 dark:bg-[#d4af37]/10 text-slate-900 dark:text-white'
+                      : 'border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] text-slate-700 dark:text-zinc-300'
                   }`}
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>{isPublishing ? 'Publishing…' : 'Publish Album'}</span>
+                  <Globe className="w-4 h-4 text-[#d4af37] shrink-0" />
+                  <div className="min-w-0">
+                    <span className="block font-mono-tech text-xs font-semibold truncate">
+                      Feature publicly
+                    </span>
+                    <span className="block font-body text-[11px] text-slate-600 dark:text-zinc-400 truncate">
+                      Homepage &amp; showcase
+                    </span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setVisibility('private')}
+                  className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    visibility === 'private'
+                      ? 'border-[#d4af37] bg-amber-50/70 dark:bg-[#d4af37]/10 text-slate-900 dark:text-white'
+                      : 'border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] text-slate-700 dark:text-zinc-300'
+                  }`}
+                >
+                  <Lock className="w-4 h-4 text-slate-500 dark:text-zinc-400 shrink-0" />
+                  <div className="min-w-0">
+                    <span className="block font-mono-tech text-xs font-semibold truncate">
+                      Keep private
+                    </span>
+                    <span className="block font-body text-[11px] text-slate-600 dark:text-zinc-400 truncate">
+                      Internal feedback only
+                    </span>
+                  </div>
                 </button>
               </div>
             </div>
-          </>
-        )}
+          )}
 
-      </div>
-
-      {/* =========================================================================
-          LEARN MORE MODAL: ABOUT PUBLIC TESTIMONIALS
-          ========================================================================= */}
-      {showLearnMoreModal && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-          <div className="w-full max-w-lg rounded-3xl bg-[#0c0d14] border border-white/20 p-6 sm:p-7 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
-              <div className="flex items-center gap-2">
-                <HelpCircle className="w-5 h-5 text-amber-400" />
-                <h4 className="font-syne font-bold text-base text-white">
-                  About Public Testimonials
-                </h4>
+          {/* STEP 3: NEXT SET */}
+          {activeStep === 3 && (
+            <div className="space-y-3 animate-fadeIn">
+              <div className="space-y-1">
+                <label className="block font-syne font-bold text-sm text-slate-900 dark:text-white">
+                  Next set representative (Class of {nextGraduationYear}) *
+                </label>
+                <p className="font-body text-xs text-slate-600 dark:text-zinc-300">
+                  Pass the baton to the next graduating class in your department.
+                </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowLearnMoreModal(false)}
-                className="text-zinc-500 hover:text-white p-1 cursor-pointer"
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-mono-tech text-[11px] font-medium text-slate-700 dark:text-zinc-300 mb-1">
+                    Full name *
+                  </label>
+                  <input
+                    type="text"
+                    value={successorName}
+                    onChange={(e) => setSuccessorName(e.target.value)}
+                    placeholder="e.g. Chidinma Okafor"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-body text-xs focus:outline-none focus:border-[#d4af37]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-mono-tech text-[11px] font-medium text-slate-700 dark:text-zinc-300 mb-1">
+                    Phone / WhatsApp *
+                  </label>
+                  <input
+                    type="tel"
+                    value={successorPhone}
+                    onChange={(e) => setSuccessorPhone(e.target.value)}
+                    placeholder="e.g. +234 803 000 0000"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none focus:border-[#d4af37]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-mono-tech text-[11px] font-medium text-slate-700 dark:text-zinc-300 mb-1">
+                  Email address (optional)
+                </label>
+                <input
+                  type="email"
+                  value={successorEmail}
+                  onChange={(e) => setSuccessorEmail(e.target.value)}
+                  placeholder="e.g. rep2027@university.edu"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#0c0d14] border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs focus:outline-none focus:border-[#d4af37]"
+                />
+              </div>
+
+              {isStep3Complete && (
+                <div className="flex items-center gap-2 pt-1">
+                  <a
+                    href={whatsappDirectRelayUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-mono-tech text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
+                    <span>Send handover via WhatsApp</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleCopyRelayText}
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-mono-tech text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    {copiedRelayMessage ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedRelayMessage ? 'Copied' : 'Copy invite'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </UniversalModal>
+
+      {/* Separate Pop-up Card for Publish / Unpublish Confirmation */}
+      {confirmPopupMode !== 'none' && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-[10050] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setConfirmPopupMode('none')}
+        >
+          <div
+            id="publish-confirmation-popup-card"
+            className="w-full max-w-md rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-white/15 p-6 shadow-2xl space-y-4 text-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
+                  confirmPopupMode === 'unpublish'
+                    ? 'bg-red-500/15 border border-red-500/30 text-red-500'
+                    : 'bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37]'
+                }`}
               >
-                <X className="w-5 h-5" />
-              </button>
+                {confirmPopupMode === 'unpublish' ? (
+                  <AlertTriangle className="w-5 h-5" />
+                ) : (
+                  <Sparkles className="w-5 h-5" />
+                )}
+              </div>
+              <div>
+                <h3 className="font-syne font-bold text-base text-slate-900 dark:text-white">
+                  {confirmPopupMode === 'unpublish' ? 'Unpublish Album?' : 'Publish Class Album?'}
+                </h3>
+                <p className="font-mono-tech text-[11px] text-slate-500 dark:text-zinc-400">
+                  {currentSet.departmentName} · Class of {currentSet.graduationYear}
+                </p>
+              </div>
             </div>
 
-            <div className="space-y-4 font-body text-xs text-zinc-300 leading-relaxed">
-              <div className="p-4 rounded-2xl bg-amber-400/5 border border-amber-400/20 space-y-2">
-                <h5 className="font-syne font-bold text-sm text-amber-300 flex items-center gap-2">
-                  <Globe className="w-4 h-4" />
-                  If Public Permission is Granted
-                </h5>
-                <p>
-                  KoHot may feature your testimonial on our website and official communications using your name, profile photo, class year, and university.
-                </p>
-                <p className="text-zinc-400">
-                  We may lightly format your text for layout and typography without altering its substantive meaning.
-                </p>
-              </div>
+            <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+              {confirmPopupMode === 'unpublish'
+                ? "Your album will return to draft mode, will no longer be visible on the department's Legacy Wall (albums archive), and Save & Share actions will be paused until you publish again."
+                : 'Your class album will go live on the department Legacy Wall (albums archive) and Save & Share buttons on the album will become active.'}
+            </p>
 
-              <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2">
-                <h5 className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-emerald-400" />
-                  If Permission is Denied
-                </h5>
-                <p>
-                  Your feedback is kept completely private. It will be used solely for internal product improvement and never displayed on public pages or shared externally.
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-black/40 border border-white/5 font-mono-tech text-[11px] text-zinc-400">
-                Notice: KoHot does not dispatch automated testimonial follow-up emails. Your choice here is definitive and honored immediately.
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
                 type="button"
-                onClick={() => setShowLearnMoreModal(false)}
-                className="px-5 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-black font-syne text-xs uppercase tracking-wider font-bold transition-all cursor-pointer"
+                onClick={() => setConfirmPopupMode('none')}
+                className="px-4 py-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-zinc-300 font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
               >
-                Understood
+                Cancel
               </button>
+              {confirmPopupMode === 'unpublish' ? (
+                <button
+                  id="confirm-unpublish-album-btn"
+                  type="button"
+                  onClick={handleExecuteUnpublishConfirmed}
+                  className="px-5 py-2.5 rounded-full bg-red-600 hover:bg-red-500 text-white font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md"
+                >
+                  Confirm Unpublish
+                </button>
+              ) : (
+                <button
+                  id="confirm-publish-album-btn"
+                  type="button"
+                  onClick={handleExecutePublishConfirmed}
+                  className="px-5 py-2.5 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md"
+                >
+                  Confirm &amp; Publish
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
-
-  if (typeof document !== 'undefined') {
-    return createPortal(modalElement, document.body);
-  }
-  return modalElement;
 };

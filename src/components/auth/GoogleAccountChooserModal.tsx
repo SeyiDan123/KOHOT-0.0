@@ -71,6 +71,13 @@ export const GoogleAccountChooserModal: React.FC<GoogleAccountChooserModalProps>
       isHost: true,
     },
     {
+      name: 'Chiemeka Anthony Eze',
+      email: 'chiemeka.eze.2026@crownfield.edu.ng',
+      avatarBg: 'bg-[#d4af37] text-black',
+      initial: 'C',
+      badge: 'Album Admin',
+    },
+    {
       name: '9ja puffs',
       email: '9japuffs@gmail.com',
       avatarBg: 'bg-[#2563EB]',
