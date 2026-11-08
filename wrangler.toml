@@ -31,7 +31,7 @@ EMAIL_FROM = "KoHot <onboarding@resend.dev>"
 DAILY_SEND_CAP = "90"
 TEST_MODE = "true"
 TEST_EMAIL = "seyidan03@gmail.com"
-
+GOOGLE_CLIENT_ID = "688066019415-ccc1tondqp0795fkh67fmddim0324841.apps.googleusercontent.com"
 # Reminders are paused for now. Remove the # on the next two lines later.
 # [triggers]
 # crons = ["*/15 * * * *"]
