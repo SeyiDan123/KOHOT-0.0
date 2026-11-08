@@ -37,4 +37,4 @@ GOOGLE_CLIENT_ID = "688066019415-ccc1tondqp0795fkh67fmddim0324841.apps.googleuse
 # crons = ["*/15 * * * *"]
 
 # Secrets to add in Cloudflare later (not in this file):
-# PAYSTACK_SECRET_KEY, SESSION_SECRET, GOOGLE_CLIENT_ID, RESEND_API_KEY
+# PAYSTACK_SECRET_KEY, SESSION_SECRET, RESEND_API_KEY
