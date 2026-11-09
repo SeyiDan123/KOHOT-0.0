@@ -17,8 +17,13 @@ import {
   Trash2,
   Building2,
   Coins,
-  ArrowUpRight,
   X,
+  Pause,
+  Play,
+  Copy,
+  Tag,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import {
   ClassSet,
@@ -40,13 +45,21 @@ import {
   fetchAdminSettingsFromServer,
   saveAdminSettingsToServer,
   fetchSlotAllocationsFromServer,
-  saveSlotAllocationOnServer,
   grantFreeSlotsOnServer,
   updateAlbumSponsorOnServer,
   fetchFinancesLedgerFromServer,
   fetchFinancesSummaryFromServer,
   markTransactionRefundedOnServer,
   verifyPaystackPaymentOnServer,
+  OfferProgramme,
+  CohortAllocationItem,
+  fetchOfferProgrammesFromServer,
+  createOfferProgrammeOnServer,
+  updateOfferProgrammeOnServer,
+  deleteOfferProgrammeOnServer,
+  fetchCohortOffersFromServer,
+  bulkUpdateCohortOffersOnServer,
+  copyCohortOffersFromYearOnServer,
 } from '../../utils/apiClient';
 import { useFeedback } from '../common/FeedbackSystem';
 
@@ -60,6 +73,8 @@ interface MasterFinancesSectionProps {
 }
 
 type FinanceSubTab = 'overview' | 'transactions' | 'slots' | 'settings';
+type OffersSegment = 'cohorts' | 'programmes';
+type CohortFilterKind = 'all' | 'funding' | 'discount' | 'standard';
 
 export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   sets,
@@ -71,7 +86,8 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
 }) => {
   const { showSuccess, showError, showWarning } = useFeedback();
   const [subTab, setSubTab] = useState<FinanceSubTab>('overview');
-  const [isLoading, setIsLoading] = useState(false);
+  const [offersSegment, setOffersSegment] = useState<OffersSegment>('cohorts');
+  const [, setIsLoading] = useState(false);
 
   // Platform settings state
   const [studentFeeNairaInput, setStudentFeeNairaInput] = useState('500');
@@ -102,19 +118,45 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   const [refundNote, setRefundNote] = useState('');
   const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
 
-  // KoHot Slot Allocations state
+  // Legacy KoHot Slot Allocations state (merged into programmes/cohorts, used for overview metric fallback)
   const [allocations, setAllocations] = useState<SlotAllocationRecord[]>([]);
-  const [allocInstId, setAllocInstId] = useState<string>(universities[0]?.id || '');
-  const [allocDeptId, setAllocDeptId] = useState<string>(
-    universities[0]?.departments?.[0]?.id || ''
-  );
-  const [allocYear, setAllocYear] = useState<string>(String(new Date().getFullYear()));
-  const [allocQty, setAllocQty] = useState<string>('10');
-  const [allocNote, setAllocNote] = useState<string>('Sponsored by KoHot');
-  const [editingAlloc, setEditingAlloc] = useState<SlotAllocationRecord | null>(null);
-  const [editAllocQty, setEditAllocQty] = useState<string>('');
-  const [editAllocNote, setEditAllocNote] = useState<string>('');
-  const [isSavingAlloc, setIsSavingAlloc] = useState(false);
+
+  // Cohort Offers & Programmes state
+  const [programmes, setProgrammes] = useState<OfferProgramme[]>([]);
+  const [cohortInstId, setCohortInstId] = useState<string>(universities[0]?.id || 'unilorin');
+  const [cohortYear, setCohortYear] = useState<number>(new Date().getFullYear());
+  const [availableYears, setAvailableYears] = useState<number[]>([
+    new Date().getFullYear() - 1,
+    new Date().getFullYear(),
+    new Date().getFullYear() + 1,
+  ]);
+  const [isAddingYear, setIsAddingYear] = useState(false);
+  const [newYearInput, setNewYearInput] = useState('');
+  const [cohortAllocations, setCohortAllocations] = useState<CohortAllocationItem[]>([]);
+  const [cohortFilter, setCohortFilter] = useState<CohortFilterKind>('all');
+  const [cohortSearch, setCohortSearch] = useState('');
+  const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
+  const [assignProgrammeId, setAssignProgrammeId] = useState<string>('');
+  const [isApplyingBulk, setIsApplyingBulk] = useState(false);
+  const [lastBulkResultSummary, setLastBulkResultSummary] = useState<string | null>(null);
+  const [isCopyYearModalOpen, setIsCopyYearModalOpen] = useState(false);
+  const [isCopyingYear, setIsCopyingYear] = useState(false);
+
+  // Programme Create/Edit Modal state
+  const [isProgrammeModalOpen, setIsProgrammeModalOpen] = useState(false);
+  const [editingProgramme, setEditingProgramme] = useState<OfferProgramme | null>(null);
+  const [progKind, setProgKind] = useState<'funding' | 'discount'>('funding');
+  const [progName, setProgName] = useState('');
+  const [progDiscountPercent, setProgDiscountPercent] = useState('25');
+  const [progCoverageMode, setProgCoverageMode] = useState<'all' | 'per_album_cap'>('per_album_cap');
+  const [progCoverageCap, setProgCoverageCap] = useState('150');
+  const [progSponsorName, setProgSponsorName] = useState('KoHot');
+  const [progShowRecognition, setProgShowRecognition] = useState(true);
+  const [progValidFrom, setProgValidFrom] = useState('');
+  const [progValidTo, setProgValidTo] = useState('');
+  const [isSavingProgramme, setIsSavingProgramme] = useState(false);
+  const [deletingProgrammeTarget, setDeletingProgrammeTarget] = useState<OfferProgramme | null>(null);
+  const [isDeletingProgramme, setIsDeletingProgramme] = useState(false);
 
   // Per-Album Grant Free Slots & Edit Sponsor state
   const [grantAlbumTarget, setGrantAlbumTarget] = useState<ClassSet | null>(null);
@@ -131,6 +173,33 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   const [editSponsorNameInput, setEditSponsorNameInput] = useState<string>('');
 
   const liveSets = useMemo(() => sets.filter((s) => !s.deletedAt), [sets]);
+
+  const loadOffersData = async (instId = cohortInstId, year = cohortYear) => {
+    const [progRes, cohortRes] = await Promise.all([
+      fetchOfferProgrammesFromServer(),
+      fetchCohortOffersFromServer(instId, year),
+    ]);
+    if (progRes.programmes) {
+      setProgrammes(progRes.programmes);
+      const firstActive = progRes.programmes.find((p) => p.status === 'active');
+      if (firstActive && !assignProgrammeId) {
+        setAssignProgrammeId(firstActive.id);
+      }
+    }
+    if (cohortRes.allocations) {
+      setCohortAllocations(cohortRes.allocations);
+    }
+    if (cohortRes.availableYears && cohortRes.availableYears.length > 0) {
+      const mergedYears = Array.from(
+        new Set([
+          ...cohortRes.availableYears,
+          ...liveSets.map((s) => Number(s.graduationYear)).filter((y) => Number.isFinite(y)),
+          year,
+        ])
+      ).sort((a, b) => b - a);
+      setAvailableYears(mergedYears);
+    }
+  };
 
   const loadFinancesData = async () => {
     setIsLoading(true);
@@ -168,6 +237,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       if (summaryRes.summary) {
         setServerSummary(summaryRes.summary);
       }
+      await loadOffersData(cohortInstId, cohortYear);
     } finally {
       setIsLoading(false);
     }
@@ -177,17 +247,12 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     loadFinancesData();
   }, []);
 
-  // Keep department dropdown synced with selected institution
+  // Reload independent cohort offers when institution or graduation year changes
   useEffect(() => {
-    const selectedUni = universities.find((u) => u.id === allocInstId);
-    if (selectedUni && selectedUni.departments.length > 0) {
-      if (!selectedUni.departments.some((d) => d.id === allocDeptId)) {
-        setAllocDeptId(selectedUni.departments[0].id);
-      }
-    } else {
-      setAllocDeptId('');
-    }
-  }, [allocInstId, universities]);
+    setSelectedDeptIds([]);
+    setLastBulkResultSummary(null);
+    loadOffersData(cohortInstId, cohortYear);
+  }, [cohortInstId, cohortYear]);
 
   const unitFeeKobo = useMemo(() => {
     const parsedNaira = Number(studentFeeNairaInput);
@@ -245,7 +310,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     );
   }, [serverLedgerRows, transactions, sets, instCurrencies, unitFeeKobo]);
 
-  // Enrich allocations with live album match + used/remaining counts
   const enrichedAllocations: SlotAllocationRecord[] = useMemo(() => {
     return allocations.map((alloc) => {
       const matchedAlbum = liveSets.find(
@@ -328,7 +392,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       }
     }
 
-    // Granted slots from KoHot allocations + per-album KoHot sponsors
     const allocSlotsTotal = enrichedAllocations.reduce(
       (sum, a) => sum + (Number(a.quantity) || 0),
       0
@@ -400,7 +463,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     });
   }, [combinedLedgerRows, txSearch, txTypeFilter, txStatusFilter, txInstFilter, txDateFrom, txDateTo]);
 
-  // Export CSV with formula-injection protection (prefix = + - @ with ')
+  // Export CSV with formula-injection protection
   const handleExportCsv = () => {
     const headers = [
       'Type',
@@ -447,7 +510,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     showSuccess('CSV exported', `${filteredLedgerRows.length} ledger rows exported.`);
   };
 
-  // Re-verify pending row via server verify route (never marks paid from browser)
   const handleReverifyPendingRow = async (row: FinanceLedgerRow) => {
     if (!row.reference) return;
     setVerifyingRef(row.reference);
@@ -467,7 +529,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     }
   };
 
-  // Mark refunded with required note (refund itself is processed in Paystack)
   const handleConfirmMarkRefunded = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!refundTargetRow) return;
@@ -507,111 +568,357 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     }
   };
 
-  // Create new KoHot Slot Allocation
-  const handleCreateAllocation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!allocInstId || !allocDeptId) {
-      showError('Select department', 'Pick an institution and department from the directory.');
-      return;
-    }
-    const yearNum = Number(allocYear);
-    const qtyNum = Number(allocQty);
-    if (!Number.isFinite(yearNum) || yearNum < 1970 || yearNum > 2100) {
-      showError('Invalid year', 'Enter a valid graduation year.');
-      return;
-    }
-    if (!Number.isFinite(qtyNum) || qtyNum < 1 || Math.floor(qtyNum) !== qtyNum) {
-      showError('Invalid slot count', 'Enter at least 1 slot.');
-      return;
-    }
+  // =========================================================================
+  // COHORT OFFERS & PROGRAMMES COMPUTED DATA & HANDLERS
+  // =========================================================================
+  const selectedCohortUni = useMemo(
+    () => universities.find((u) => u.id === cohortInstId) || universities[0],
+    [universities, cohortInstId]
+  );
 
-    setIsSavingAlloc(true);
-    try {
-      const res = await saveSlotAllocationOnServer({
-        institutionId: allocInstId,
-        departmentId: allocDeptId,
-        graduationYear: yearNum,
-        quantity: qtyNum,
-        note: allocNote.trim() || 'Sponsored by KoHot',
-      });
-      if (!res.success) {
-        showError('Allocation failed', res.message || res.error || 'Could not save allocation.');
-        return;
+  const allocByDeptMap = useMemo(() => {
+    const map = new Map<string, CohortAllocationItem>();
+    for (const a of cohortAllocations) {
+      if (Number(a.graduationYear) === Number(cohortYear)) {
+        map.set(String(a.departmentId).toLowerCase(), a);
       }
+    }
+    return map;
+  }, [cohortAllocations, cohortYear]);
 
-      // If album already exists locally, credit its slot balance & add KoHot sponsor entry
+  const cohortDepartmentRows = useMemo(() => {
+    const depts = selectedCohortUni?.departments || [];
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const graduationCutoffIso = `${cohortYear}-12-31`;
+
+    return depts.map((dept) => {
+      const alloc = allocByDeptMap.get(dept.id.toLowerCase()) || null;
+      const prog = alloc?.programme || null;
       const matchedAlbum = liveSets.find(
         (s) =>
-          s.institutionId.toLowerCase() === allocInstId.toLowerCase() &&
-          s.departmentId.toLowerCase() === allocDeptId.toLowerCase() &&
-          Number(s.graduationYear) === yearNum
+          (s.institutionId || s.universityId || '').toLowerCase() ===
+            (selectedCohortUni?.id || '').toLowerCase() &&
+          s.departmentId.toLowerCase() === dept.id.toLowerCase() &&
+          Number(s.graduationYear) === Number(cohortYear)
       );
-      if (matchedAlbum) {
-        const nextBalance = (Number(matchedAlbum.profileSlotBalance) || 0) + qtyNum;
-        const nextCredited = (Number(matchedAlbum.totalSlotsCredited) || 0) + qtyNum;
-        onUpdateSet({
-          ...matchedAlbum,
-          profileSlotBalance: nextBalance,
-          totalSlotsCredited: nextCredited,
-        });
+
+      const albumState: 'no_album' | 'draft' | 'published' = !matchedAlbum
+        ? 'no_album'
+        : matchedAlbum.isPublished || matchedAlbum.lifecycleStatus === 'published'
+        ? 'published'
+        : 'draft';
+
+      const isActiveInDate =
+        prog &&
+        prog.status === 'active' &&
+        (!prog.validFrom || prog.validFrom <= todayIso) &&
+        (!prog.validTo || prog.validTo >= todayIso);
+
+      let effectiveKind: 'funding' | 'discount' | 'standard' = 'standard';
+      let effectivePriceKobo = unitFeeKobo;
+      if (prog && isActiveInDate) {
+        if (prog.kind === 'funding') {
+          effectiveKind = 'funding';
+          effectivePriceKobo = 0;
+        } else if (prog.kind === 'discount') {
+          effectiveKind = 'discount';
+          const pct = Math.min(99, Math.max(1, Number(prog.discountPercent) || 0));
+          effectivePriceKobo = Math.round((unitFeeKobo * (100 - pct)) / 100);
+        }
+      } else if (prog) {
+        // Assigned programme exists (may be paused or out of date)
+        effectiveKind = prog.kind;
       }
 
-      await loadFinancesData();
-      showSuccess(
-        matchedAlbum ? 'Allocation credited to album' : 'Allocation saved (Waiting for album)',
-        `${qtyNum} KoHot slots allocated.`
+      const expiresBeforeGrad = Boolean(
+        prog && prog.validTo && prog.validTo < graduationCutoffIso
       );
-    } finally {
-      setIsSavingAlloc(false);
+
+      return {
+        dept,
+        alloc,
+        programme: prog,
+        albumState,
+        matchedAlbum,
+        effectiveKind,
+        effectivePriceKobo,
+        isActiveInDate: Boolean(isActiveInDate),
+        expiresBeforeGrad,
+      };
+    });
+  }, [selectedCohortUni, allocByDeptMap, liveSets, cohortYear, unitFeeKobo]);
+
+  const cohortYearCounts = useMemo(() => {
+    let funding = 0;
+    let discount = 0;
+    let standard = 0;
+    for (const r of cohortDepartmentRows) {
+      if (r.programme?.kind === 'funding') funding += 1;
+      else if (r.programme?.kind === 'discount') discount += 1;
+      else standard += 1;
+    }
+    return {
+      funding,
+      discount,
+      standard,
+      total: cohortDepartmentRows.length,
+    };
+  }, [cohortDepartmentRows]);
+
+  const filteredCohortRows = useMemo(() => {
+    const q = cohortSearch.trim().toLowerCase();
+    return cohortDepartmentRows.filter((row) => {
+      const rowKind = row.programme ? row.programme.kind : 'standard';
+      if (cohortFilter !== 'all' && rowKind !== cohortFilter) return false;
+      if (q) {
+        const hay = `${row.dept.name} ${row.dept.faculty || ''} ${row.programme?.name || ''} ${row.programme?.sponsorName || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [cohortDepartmentRows, cohortFilter, cohortSearch]);
+
+  const toggleDeptSelection = (deptId: string) => {
+    setSelectedDeptIds((prev) =>
+      prev.includes(deptId) ? prev.filter((id) => id !== deptId) : [...prev, deptId]
+    );
+  };
+
+  const handleSelectAllFiltered = () => {
+    const filteredIds = filteredCohortRows.map((r) => r.dept.id);
+    const allFilteredSelected =
+      filteredIds.length > 0 && filteredIds.every((id) => selectedDeptIds.includes(id));
+    if (allFilteredSelected) {
+      setSelectedDeptIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedDeptIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
     }
   };
 
-  // Save edited KoHot Slot Allocation (increase appends; decrease only down to unused slots)
-  const handleSaveEditedAllocation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingAlloc) return;
-    const newQty = Number(editAllocQty);
-    const usedSlots = Number(editingAlloc.usedSlots) || 0;
-    if (!Number.isFinite(newQty) || Math.floor(newQty) !== newQty || newQty < usedSlots) {
-      showError(
-        'Cannot reduce below used slots',
-        `At least ${usedSlots} slot${usedSlots === 1 ? '' : 's'} have already been used.`
-      );
+  const handleBulkAssignOrRemove = async (action: 'assign' | 'remove') => {
+    if (selectedDeptIds.length === 0) return;
+    if (action === 'assign' && !assignProgrammeId) {
+      showError('Select programme', 'Choose an active Funding or Discount programme to assign.');
       return;
     }
-
-    setIsSavingAlloc(true);
+    setIsApplyingBulk(true);
+    setLastBulkResultSummary(null);
     try {
-      const delta = newQty - (Number(editingAlloc.quantity) || 0);
-      const res = await saveSlotAllocationOnServer({
-        id: editingAlloc.id,
-        institutionId: editingAlloc.institutionId,
-        departmentId: editingAlloc.departmentId,
-        graduationYear: editingAlloc.graduationYear,
-        quantity: newQty,
-        note: editAllocNote.trim() || 'Sponsored by KoHot',
+      const res = await bulkUpdateCohortOffersOnServer({
+        institutionId: cohortInstId,
+        graduationYear: cohortYear,
+        departmentIds: selectedDeptIds,
+        action,
+        programmeId: action === 'assign' ? assignProgrammeId : undefined,
       });
       if (!res.success) {
-        showError('Could not update allocation', res.message || res.error || 'Please try again.');
+        showError('Bulk update failed', res.error || 'Could not update cohort offers.');
         return;
       }
 
-      if (editingAlloc.albumId && delta !== 0) {
-        const matchedAlbum = liveSets.find((s) => s.id === editingAlloc.albumId);
-        if (matchedAlbum) {
-          onUpdateSet({
-            ...matchedAlbum,
-            profileSlotBalance: Math.max(0, (Number(matchedAlbum.profileSlotBalance) || 0) + delta),
-            totalSlotsCredited: Math.max(0, (Number(matchedAlbum.totalSlotsCredited) || 0) + delta),
-          });
+      const assignedProg = programmes.find((p) => p.id === assignProgrammeId);
+      const count = res.results?.length || selectedDeptIds.length;
+      const summaryMsg =
+        action === 'assign'
+          ? `Assigned "${assignedProg?.name || 'Programme'}" to ${count} department${count === 1 ? '' : 's'} (${cohortYear}).`
+          : `Removed offer from ${count} department${count === 1 ? '' : 's'} (${cohortYear}) — reverted to Standard.`;
+
+      setLastBulkResultSummary(summaryMsg);
+      onAddAuditLog?.({
+        id: `aud-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'settings_updated',
+        actorUserId: currentUserEmail,
+        actorRole: 'master_host',
+        targetId: `${cohortInstId}:${cohortYear}`,
+        details: summaryMsg,
+      });
+
+      showSuccess(action === 'assign' ? 'Offer assigned' : 'Offer removed', summaryMsg);
+      setSelectedDeptIds([]);
+      await loadOffersData(cohortInstId, cohortYear);
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  };
+
+  const handleConfirmCopyFromPreviousYear = async () => {
+    setIsCopyingYear(true);
+    try {
+      const fromYear = cohortYear - 1;
+      const res = await copyCohortOffersFromYearOnServer({
+        institutionId: cohortInstId,
+        fromYear,
+        toYear: cohortYear,
+      });
+      if (!res.success) {
+        showError('Could not copy offers', res.error || 'Please try again.');
+        return;
+      }
+      onAddAuditLog?.({
+        id: `aud-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'settings_updated',
+        actorUserId: currentUserEmail,
+        actorRole: 'master_host',
+        targetId: `${cohortInstId}:${cohortYear}`,
+        details: `Copied ${res.copiedCount || 0} cohort offers from ${fromYear} to ${cohortYear} for ${cohortInstId}.`,
+      });
+      showSuccess(
+        'Offers copied',
+        `Copied ${res.copiedCount || 0} department offer${res.copiedCount === 1 ? '' : 's'} from ${fromYear} to ${cohortYear}.`
+      );
+      setIsCopyYearModalOpen(false);
+      await loadOffersData(cohortInstId, cohortYear);
+    } finally {
+      setIsCopyingYear(false);
+    }
+  };
+
+  const openNewProgrammeModal = () => {
+    setEditingProgramme(null);
+    setProgKind('funding');
+    setProgName('');
+    setProgDiscountPercent('25');
+    setProgCoverageMode('per_album_cap');
+    setProgCoverageCap('150');
+    setProgSponsorName('KoHot');
+    setProgShowRecognition(true);
+    setProgValidFrom('');
+    setProgValidTo('');
+    setIsProgrammeModalOpen(true);
+  };
+
+  const openEditProgrammeModal = (prog: OfferProgramme) => {
+    setEditingProgramme(prog);
+    setProgKind(prog.kind);
+    setProgName(prog.name);
+    setProgDiscountPercent(String(prog.discountPercent ?? 25));
+    setProgCoverageMode(prog.coverageMode || 'per_album_cap');
+    setProgCoverageCap(String(prog.coverageCap ?? 150));
+    setProgSponsorName(prog.sponsorName || 'KoHot');
+    setProgShowRecognition(prog.showRecognition !== false);
+    setProgValidFrom(prog.validFrom ? prog.validFrom.slice(0, 10) : '');
+    setProgValidTo(prog.validTo ? prog.validTo.slice(0, 10) : '');
+    setIsProgrammeModalOpen(true);
+  };
+
+  const handleSaveProgrammeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = progName.trim();
+    if (!cleanName) {
+      showError('Name required', 'Enter a programme name.');
+      return;
+    }
+
+    const payload: any = {
+      name: cleanName,
+      kind: progKind,
+      sponsorName: progSponsorName.trim() || 'KoHot',
+      showRecognition: progShowRecognition,
+      validFrom: progValidFrom || null,
+      validTo: progValidTo || null,
+    };
+
+    if (progKind === 'discount') {
+      const pct = Number(progDiscountPercent);
+      if (!Number.isInteger(pct) || pct < 1 || pct > 99) {
+        showError('Invalid discount', 'Discount percentage must be a whole number from 1 to 99.');
+        return;
+      }
+      payload.discountPercent = pct;
+    } else {
+      payload.coverageMode = progCoverageMode;
+      if (progCoverageMode === 'per_album_cap') {
+        const cap = Number(progCoverageCap);
+        if (!Number.isInteger(cap) || cap < 1) {
+          showError('Invalid coverage cap', 'Enter a positive profile cap.');
+          return;
         }
+        payload.coverageCap = cap;
+      } else {
+        payload.coverageCap = null;
+      }
+    }
+
+    setIsSavingProgramme(true);
+    try {
+      const res = editingProgramme
+        ? await updateOfferProgrammeOnServer(editingProgramme.id, payload)
+        : await createOfferProgrammeOnServer(payload);
+
+      if (!res.success) {
+        showError('Could not save programme', res.error || 'Please check your inputs.');
+        return;
       }
 
-      await loadFinancesData();
-      setEditingAlloc(null);
-      showSuccess('Allocation updated', `Slot allocation updated to ${newQty} slots.`);
+      onAddAuditLog?.({
+        id: `aud-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'settings_updated',
+        actorUserId: currentUserEmail,
+        actorRole: 'master_host',
+        targetId: res.programme?.id || editingProgramme?.id || 'programmes',
+        details: `${editingProgramme ? 'Updated' : 'Created'} ${progKind} programme "${cleanName}"`,
+      });
+
+      showSuccess(
+        editingProgramme ? 'Programme updated' : 'Programme created',
+        `"${cleanName}" saved.`
+      );
+      setIsProgrammeModalOpen(false);
+      await loadOffersData(cohortInstId, cohortYear);
     } finally {
-      setIsSavingAlloc(false);
+      setIsSavingProgramme(false);
+    }
+  };
+
+  const handleToggleProgrammeStatus = async (prog: OfferProgramme) => {
+    const nextStatus = prog.status === 'active' ? 'paused' : 'active';
+    const res = await updateOfferProgrammeOnServer(prog.id, { status: nextStatus });
+    if (!res.success) {
+      showError('Update failed', res.error || 'Could not update status.');
+      return;
+    }
+    onAddAuditLog?.({
+      id: `aud-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      action: 'settings_updated',
+      actorUserId: currentUserEmail,
+      actorRole: 'master_host',
+      targetId: prog.id,
+      details: `${nextStatus === 'paused' ? 'Paused' : 'Resumed'} programme "${prog.name}"`,
+    });
+    showSuccess(
+      nextStatus === 'paused' ? 'Programme paused' : 'Programme resumed',
+      `"${prog.name}" is now ${nextStatus}.`
+    );
+    await loadOffersData(cohortInstId, cohortYear);
+  };
+
+  const handleConfirmDeleteProgramme = async () => {
+    if (!deletingProgrammeTarget) return;
+    setIsDeletingProgramme(true);
+    try {
+      const res = await deleteOfferProgrammeOnServer(deletingProgrammeTarget.id);
+      if (!res.success) {
+        showError('Cannot delete programme', res.error || 'Programme is currently in use.');
+        return;
+      }
+      onAddAuditLog?.({
+        id: `aud-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'settings_updated',
+        actorUserId: currentUserEmail,
+        actorRole: 'master_host',
+        targetId: deletingProgrammeTarget.id,
+        details: `Deleted unused programme "${deletingProgrammeTarget.name}"`,
+      });
+      showSuccess('Programme deleted', `"${deletingProgrammeTarget.name}" removed.`);
+      setDeletingProgrammeTarget(null);
+      await loadOffersData(cohortInstId, cohortYear);
+    } finally {
+      setIsDeletingProgramme(false);
     }
   };
 
@@ -817,7 +1124,10 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     setSubTab('transactions');
   };
 
-  const selectedUniForAlloc = universities.find((u) => u.id === allocInstId);
+  const activeProgrammes = useMemo(
+    () => programmes.filter((p) => p.status === 'active'),
+    [programmes]
+  );
 
   return (
     <div id="finances-module" className="p-4 sm:p-6 rounded-2xl bg-[#18181b] border border-white/12 shadow-xl space-y-5">
@@ -830,7 +1140,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
           <div className="min-w-0">
             <h2 className="font-syne font-bold text-base sm:text-lg text-white">Finances</h2>
             <p className="font-body text-xs text-zinc-400 truncate">
-              Confirmed revenue, Paystack ledger, KoHot slot allocations, and fee settings.
+              Confirmed revenue, Paystack ledger, cohort offers &amp; programmes, and Standard fee settings.
             </p>
           </div>
         </div>
@@ -840,7 +1150,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
             [
               { id: 'overview', label: 'Overview', icon: TrendingUp },
               { id: 'transactions', label: 'Transactions', icon: Coins },
-              { id: 'slots', label: 'Slots & Funding', icon: Gift },
+              { id: 'slots', label: 'Offers', icon: Gift },
               { id: 'settings', label: 'Settings', icon: Settings },
             ] as const
           ).map((tab) => {
@@ -871,7 +1181,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       {subTab === 'overview' && (
         <div className="space-y-5">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            {/* 1. Confirmed Revenue (This Month & All Time, Africa/Lagos) */}
             <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
@@ -892,7 +1201,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               </p>
             </div>
 
-            {/* 2. Student Payments */}
             <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-1.5">
               <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 block">
                 Student Payments
@@ -905,7 +1213,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               </p>
             </div>
 
-            {/* 3. Slot Purchases */}
             <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-1.5">
               <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 block">
                 Slot Purchases
@@ -918,7 +1225,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               </p>
             </div>
 
-            {/* 4. Refunds Due */}
             <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-1.5">
               <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 block">
                 Refunds Due
@@ -931,7 +1237,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               </p>
             </div>
 
-            {/* 5. Net Collected */}
             <div className="p-4 rounded-xl bg-[#08090e] border border-emerald-500/25 space-y-1.5">
               <span className="font-mono-tech text-[10px] uppercase tracking-wider text-emerald-400 block">
                 Net Collected
@@ -944,7 +1249,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               </p>
             </div>
 
-            {/* 6. KoHot-Sponsored Value (Programme Benefit, Never Revenue) */}
             <div className="p-4 rounded-xl bg-[#08090e] border border-[#d4af37]/30 space-y-1.5">
               <div className="flex items-center justify-between gap-1">
                 <span className="font-mono-tech text-[10px] uppercase tracking-wider text-[#d4af37]">
@@ -963,7 +1267,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
             </div>
           </div>
 
-          {/* Needs Attention List */}
           <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-syne font-bold text-sm text-white flex items-center gap-2">
@@ -1036,7 +1339,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
          ===================================================================== */}
       {subTab === 'transactions' && (
         <div className="space-y-4">
-          {/* Search, Filters & CSV Export Bar */}
           <div className="p-3.5 rounded-xl bg-[#08090e] border border-white/10 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
               <div className="relative lg:col-span-2">
@@ -1141,7 +1443,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
             </div>
           </div>
 
-          {/* Ledger Table */}
           {filteredLedgerRows.length === 0 ? (
             <div className="p-8 rounded-xl bg-[#08090e] border border-white/10 text-center space-y-1">
               <p className="font-syne font-bold text-sm text-white">No matching transactions</p>
@@ -1269,180 +1570,576 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       )}
 
       {/* =====================================================================
-          SUB-TAB 3: SLOTS & FUNDING
+          SUB-TAB 3: OFFERS (Segmented Control: Cohorts | Programmes)
          ===================================================================== */}
       {subTab === 'slots' && (
         <div className="space-y-6">
-          {/* 1. KoHot Allocations (Pick Institution, Department, Year — Album Need Not Exist Yet) */}
-          <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-4">
-            <div>
-              <h3 className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                <Gift className="w-4 h-4 text-[#d4af37]" />
-                <span>KoHot Slot Allocations</span>
-              </h3>
-              <p className="font-body text-xs text-zinc-400 mt-0.5">
-                Pre-allocate KoHot-sponsored slots for any institution, department, and graduation year (even before the album is created).
-              </p>
+          {/* Segmented Control: Cohorts | Programmes */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex items-center p-1 rounded-xl bg-[#08090e] border border-white/10">
+              <button
+                type="button"
+                onClick={() => setOffersSegment('cohorts')}
+                className={`px-4 py-1.5 rounded-lg font-mono-tech text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                  offersSegment === 'cohorts'
+                    ? 'bg-[#d4af37] text-black font-bold'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Cohorts
+              </button>
+              <button
+                type="button"
+                onClick={() => setOffersSegment('programmes')}
+                className={`px-4 py-1.5 rounded-lg font-mono-tech text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                  offersSegment === 'programmes'
+                    ? 'bg-[#d4af37] text-black font-bold'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Programmes ({programmes.length})
+              </button>
             </div>
 
-            <form onSubmit={handleCreateAllocation} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                  Institution
-                </label>
-                <select
-                  value={allocInstId}
-                  onChange={(e) => setAllocInstId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
+            <div className="flex items-center gap-2 text-xs font-mono-tech text-zinc-400">
+              <span>
+                Standard global price:{' '}
+                <strong className="text-white">{formatMoneyFromKobo(unitFeeKobo)}</strong> (automatic when no offer is assigned)
+              </span>
+              {offersSegment === 'programmes' && (
+                <button
+                  type="button"
+                  onClick={openNewProgrammeModal}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#d4af37] hover:bg-[#c5a028] text-black font-syne font-bold text-xs uppercase flex items-center gap-1.5 cursor-pointer"
                 >
-                  {universities.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ New programme</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* -----------------------------------------------------------------
+              VIEW A: COHORTS
+             ----------------------------------------------------------------- */}
+          {offersSegment === 'cohorts' && (
+            <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-4 relative">
+              {/* Pickers: Institution, Year (+ Year), and Copy from previous year */}
+              <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3 pb-3 border-b border-white/[0.08]">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="min-w-[230px]">
+                    <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                      Institution
+                    </label>
+                    <select
+                      value={cohortInstId}
+                      onChange={(e) => setCohortInstId(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
+                    >
+                      {universities.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.shortCode ? `${u.shortCode} — ${u.name}` : u.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                      Cohort Graduation Year
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={cohortYear}
+                        onChange={(e) => setCohortYear(Number(e.target.value))}
+                        className="px-3 py-2 rounded-lg bg-black/60 border border-white/10 font-mono-tech text-xs text-white focus:outline-none"
+                      >
+                        {availableYears.map((yr) => (
+                          <option key={yr} value={yr}>
+                            Class of {yr}
+                          </option>
+                        ))}
+                      </select>
+
+                      {!isAddingYear ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewYearInput(String(cohortYear + 1));
+                            setIsAddingYear(true);
+                          }}
+                          className="px-2.5 py-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 font-mono-tech text-[11px] text-white cursor-pointer"
+                        >
+                          + Year
+                        </button>
+                      ) : (
+                        <div className="inline-flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={1980}
+                            max={2100}
+                            value={newYearInput}
+                            onChange={(e) => setNewYearInput(e.target.value)}
+                            className="w-20 px-2 py-1.5 rounded-lg bg-black border border-white/20 font-mono-tech text-xs text-white"
+                            placeholder="Year"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const yr = Number(newYearInput);
+                              if (Number.isInteger(yr) && yr >= 1980 && yr <= 2100) {
+                                setAvailableYears((prev) =>
+                                  Array.from(new Set([...prev, yr])).sort((a, b) => b - a)
+                                );
+                                setCohortYear(yr);
+                                setIsAddingYear(false);
+                              } else {
+                                showError('Invalid year', 'Enter a year between 1980 and 2100.');
+                              }
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-[#d4af37] text-black font-mono-tech text-[11px] font-bold cursor-pointer"
+                          >
+                            Add
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsAddingYear(false)}
+                            className="p-1.5 text-zinc-400 hover:text-white cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCopyYearModalOpen(true)}
+                    className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 font-mono-tech text-[11px] flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5 text-[#d4af37]" />
+                    <span>Copy offers from {cohortYear - 1}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Four Summary Cards for Selected Year */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <div className="p-3 rounded-xl bg-emerald-500/[0.06] border border-emerald-500/25">
+                  <span className="font-mono-tech text-[10px] uppercase text-emerald-400 block">
+                    Funding
+                  </span>
+                  <p className="font-syne font-bold text-lg text-emerald-300 mt-0.5">
+                    {cohortYearCounts.funding}
+                  </p>
+                  <span className="font-body text-[11px] text-zinc-400">
+                    Covered department{cohortYearCounts.funding === 1 ? '' : 's'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-amber-500/[0.06] border border-amber-500/25">
+                  <span className="font-mono-tech text-[10px] uppercase text-amber-400 block">
+                    Discount
+                  </span>
+                  <p className="font-syne font-bold text-lg text-amber-300 mt-0.5">
+                    {cohortYearCounts.discount}
+                  </p>
+                  <span className="font-body text-[11px] text-zinc-400">
+                    Percentage-off department{cohortYearCounts.discount === 1 ? '' : 's'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/[0.02] border border-white/10">
+                  <span className="font-mono-tech text-[10px] uppercase text-zinc-400 block">
+                    Standard (automatic)
+                  </span>
+                  <p className="font-syne font-bold text-lg text-white mt-0.5">
+                    {cohortYearCounts.standard}
+                  </p>
+                  <span className="font-body text-[11px] text-zinc-400">
+                    Pays {formatMoneyFromKobo(unitFeeKobo)}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/[0.02] border border-white/10">
+                  <span className="font-mono-tech text-[10px] uppercase text-zinc-400 block">
+                    Departments
+                  </span>
+                  <p className="font-syne font-bold text-lg text-white mt-0.5">
+                    {cohortYearCounts.total}
+                  </p>
+                  <span className="font-body text-[11px] text-zinc-400">
+                    In {selectedCohortUni?.shortCode || selectedCohortUni?.name}
+                  </span>
+                </div>
+              </div>
+
+              {/* Filter Chips & Search */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      { id: 'all', label: `All (${cohortYearCounts.total})` },
+                      { id: 'funding', label: `Funding (${cohortYearCounts.funding})` },
+                      { id: 'discount', label: `Discount (${cohortYearCounts.discount})` },
+                      { id: 'standard', label: `Standard (${cohortYearCounts.standard})` },
+                    ] as const
+                  ).map((chip) => (
+                    <button
+                      key={chip.id}
+                      type="button"
+                      onClick={() => setCohortFilter(chip.id)}
+                      className={`px-3 py-1 rounded-full font-mono-tech text-[11px] border transition-colors cursor-pointer ${
+                        cohortFilter === chip.id
+                          ? 'bg-white text-black border-white font-bold'
+                          : 'bg-black/40 text-zinc-400 border-white/10 hover:text-white'
+                      }`}
+                    >
+                      {chip.label}
+                    </button>
                   ))}
-                </select>
-              </div>
 
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                  Department
-                </label>
-                <select
-                  value={allocDeptId}
-                  onChange={(e) => setAllocDeptId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
-                >
-                  {(selectedUniForAlloc?.departments || []).map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                  <button
+                    type="button"
+                    onClick={handleSelectAllFiltered}
+                    className="px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 font-mono-tech text-[10px] text-zinc-300 cursor-pointer ml-1"
+                  >
+                    Select all ({filteredCohortRows.length} in filtered list)
+                  </button>
+                </div>
 
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                  Graduation Year
-                </label>
-                <input
-                  type="number"
-                  min={1980}
-                  max={2040}
-                  value={allocYear}
-                  onChange={(e) => setAllocYear(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                  Slots &amp; Note
-                </label>
-                <div className="flex gap-1.5">
-                  <input
-                    type="number"
-                    min={1}
-                    max={1000}
-                    value={allocQty}
-                    onChange={(e) => setAllocQty(e.target.value)}
-                    placeholder="Slots"
-                    className="w-20 px-2.5 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
-                  />
+                <div className="relative w-full sm:w-64">
+                  <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
-                    value={allocNote}
-                    onChange={(e) => setAllocNote(e.target.value)}
-                    placeholder="Optional note"
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
+                    value={cohortSearch}
+                    onChange={(e) => setCohortSearch(e.target.value)}
+                    placeholder="Search department or offer..."
+                    className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none focus:border-white/30"
                   />
                 </div>
               </div>
 
-              <div className="flex items-end">
-                <button
-                  type="submit"
-                  disabled={isSavingAlloc}
-                  className="w-full px-4 py-2 rounded-lg bg-[#d4af37] hover:bg-[#c5a028] text-black font-syne font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  Allocate Slots
-                </button>
-              </div>
-            </form>
+              {lastBulkResultSummary && (
+                <div className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-300">
+                  <span className="font-mono-tech">{lastBulkResultSummary}</span>
+                  <button
+                    type="button"
+                    onClick={() => setLastBulkResultSummary(null)}
+                    className="text-emerald-300/70 hover:text-emerald-200 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
 
-            {/* Allocations List */}
-            {enrichedAllocations.length > 0 && (
-              <div className="overflow-x-auto rounded-xl border border-white/10">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-white/10 bg-black/40 font-mono-tech text-[10px] uppercase text-zinc-400">
-                      <th className="py-2 px-3">Institution &amp; Department</th>
-                      <th className="py-2 px-3">Year</th>
-                      <th className="py-2 px-3">Status</th>
-                      <th className="py-2 px-3">Allocated</th>
-                      <th className="py-2 px-3">Used</th>
-                      <th className="py-2 px-3">Remaining</th>
-                      <th className="py-2 px-3">Note</th>
-                      <th className="py-2 px-3 text-right">Edit</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/[0.06]">
-                    {enrichedAllocations.map((alloc) => (
-                      <tr key={alloc.id} className="hover:bg-white/[0.02]">
-                        <td className="py-2.5 px-3">
-                          <p className="font-syne font-semibold text-white text-xs">
-                            {alloc.institutionName}
-                          </p>
-                          <p className="font-body text-[11px] text-zinc-400">
-                            {alloc.departmentName}
-                          </p>
-                        </td>
-                        <td className="py-2.5 px-3 font-mono-tech text-xs text-zinc-300">
-                          {alloc.graduationYear}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <span
-                            className={`px-2 py-0.5 rounded-full border font-mono-tech text-[10px] uppercase ${
-                              alloc.status === 'credited'
-                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                            }`}
-                          >
-                            {alloc.status === 'credited' ? 'Credited' : 'Waiting for album'}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 font-mono-tech font-bold text-white">
-                          {alloc.quantity}
-                        </td>
-                        <td className="py-2.5 px-3 font-mono-tech text-zinc-300">
-                          {alloc.usedSlots ?? 0}
-                        </td>
-                        <td className="py-2.5 px-3 font-mono-tech text-emerald-400 font-semibold">
-                          {alloc.remainingSlots ?? alloc.quantity}
-                        </td>
-                        <td className="py-2.5 px-3 text-zinc-400 text-xs truncate max-w-[160px]">
-                          {alloc.note || '—'}
-                        </td>
-                        <td className="py-2.5 px-3 text-right">
+              {/* Sticky Bulk Action Bar when rows are selected */}
+              {selectedDeptIds.length > 0 && (
+                <div className="sticky top-2 z-20 p-3 rounded-xl bg-[#14151a]/95 backdrop-blur-md border border-[#d4af37]/50 shadow-2xl flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="px-2.5 py-1 rounded-lg bg-[#d4af37]/20 border border-[#d4af37]/40 font-mono-tech text-xs font-bold text-[#d4af37]">
+                      {selectedDeptIds.length} selected
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSelectAllFiltered}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 font-mono-tech text-[11px] text-zinc-200 cursor-pointer"
+                    >
+                      Select all ({filteredCohortRows.length} filtered)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDeptIds([])}
+                      className="text-zinc-400 hover:text-white font-mono-tech text-[11px] cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={assignProgrammeId}
+                      onChange={(e) => setAssignProgrammeId(e.target.value)}
+                      className="px-3 py-1.5 rounded-lg bg-black border border-white/15 text-xs text-white focus:outline-none"
+                    >
+                      <option value="">Choose active programme...</option>
+                      {activeProgrammes.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          [{p.kind === 'funding' ? 'Funding' : `Discount ${p.discountPercent}%`}] {p.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      disabled={isApplyingBulk || !assignProgrammeId}
+                      onClick={() => handleBulkAssignOrRemove('assign')}
+                      className="px-3.5 py-1.5 rounded-lg bg-[#d4af37] hover:bg-[#c5a028] text-black font-syne font-bold text-xs uppercase cursor-pointer disabled:opacity-50"
+                    >
+                      Assign offer
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isApplyingBulk}
+                      onClick={() => handleBulkAssignOrRemove('remove')}
+                      className="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-mono-tech text-xs cursor-pointer disabled:opacity-50"
+                    >
+                      Remove offer
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Directory Department Rows */}
+              <div className="divide-y divide-white/[0.06] rounded-xl border border-white/10 bg-black/30 max-h-[480px] overflow-y-auto">
+                {filteredCohortRows.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-zinc-400">
+                    No departments match the current filter.
+                  </div>
+                ) : (
+                  filteredCohortRows.map((row) => {
+                    const isChecked = selectedDeptIds.includes(row.dept.id);
+                    const prog = row.programme;
+
+                    return (
+                      <div
+                        key={row.dept.id}
+                        onClick={() => toggleDeptSelection(row.dept.id)}
+                        className={`px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors cursor-pointer ${
+                          isChecked ? 'bg-[#d4af37]/[0.08]' : 'hover:bg-white/[0.02]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
                           <button
                             type="button"
-                            onClick={() => {
-                              setEditingAlloc(alloc);
-                              setEditAllocQty(String(alloc.quantity));
-                              setEditAllocNote(alloc.note || '');
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleDeptSelection(row.dept.id);
                             }}
-                            className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono-tech text-[10px] inline-flex items-center gap-1 cursor-pointer"
+                            className="text-zinc-400 hover:text-white shrink-0 cursor-pointer"
+                          >
+                            {isChecked ? (
+                              <CheckSquare className="w-4 h-4 text-[#d4af37]" />
+                            ) : (
+                              <Square className="w-4 h-4" />
+                            )}
+                          </button>
+
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-syne font-semibold text-xs sm:text-sm text-white truncate">
+                                {row.dept.name}
+                              </span>
+
+                              {/* Small Album Status Badge */}
+                              <span
+                                className={`px-2 py-0.5 rounded font-mono-tech text-[9px] uppercase border ${
+                                  row.albumState === 'published'
+                                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                    : row.albumState === 'draft'
+                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                    : 'bg-white/[0.03] text-zinc-500 border-white/10'
+                                }`}
+                              >
+                                {row.albumState === 'published'
+                                  ? 'Published'
+                                  : row.albumState === 'draft'
+                                  ? 'Draft'
+                                  : 'No album'}
+                              </span>
+                            </div>
+                            {row.dept.faculty && (
+                              <p className="font-body text-[11px] text-zinc-500 truncate">
+                                {row.dept.faculty}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Effective Price Colored Tag + Expiry Warning */}
+                        <div className="flex flex-wrap items-center gap-2 sm:justify-end shrink-0">
+                          {row.expiresBeforeGrad && prog && (
+                            <span
+                              className="px-2 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 font-mono-tech text-[10px] flex items-center gap-1"
+                              title={`Assigned programme expires on ${prog.validTo}, before Cohort ${cohortYear} graduates`}
+                            >
+                              <AlertTriangle className="w-3 h-3" />
+                              <span>Expires {prog.validTo} (before graduation)</span>
+                            </span>
+                          )}
+
+                          {prog && prog.status === 'paused' && (
+                            <span className="px-2 py-0.5 rounded bg-zinc-700/40 border border-zinc-600 text-zinc-300 font-mono-tech text-[10px]">
+                              Paused (Standard {formatMoneyFromKobo(unitFeeKobo)} applies)
+                            </span>
+                          )}
+
+                          {prog?.kind === 'funding' ? (
+                            <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/35 text-emerald-300 font-mono-tech text-[11px] font-semibold">
+                              Funding · {prog.name} (
+                              {prog.coverageMode === 'all'
+                                ? 'All profiles'
+                                : `${prog.coverageCap} profiles`}{' '}
+                              · {prog.sponsorName || 'KoHot'})
+                            </span>
+                          ) : prog?.kind === 'discount' ? (
+                            <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-300 font-mono-tech text-[11px] font-semibold">
+                              Discount {prog.discountPercent}% ·{' '}
+                              {formatMoneyFromKobo(
+                                Math.round(
+                                  (unitFeeKobo * (100 - (Number(prog.discountPercent) || 0))) / 100
+                                )
+                              )}{' '}
+                              <span className="line-through text-zinc-500 ml-1">
+                                {formatMoneyFromKobo(unitFeeKobo)}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-lg bg-transparent border border-white/15 text-zinc-300 font-mono-tech text-[11px]">
+                              Standard {formatMoneyFromKobo(unitFeeKobo)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* -----------------------------------------------------------------
+              VIEW B: PROGRAMMES
+             ----------------------------------------------------------------- */}
+          {offersSegment === 'programmes' && (
+            <div className="space-y-3">
+              {programmes.length === 0 ? (
+                <div className="p-8 rounded-xl bg-[#08090e] border border-white/10 text-center space-y-2">
+                  <p className="font-syne font-bold text-sm text-white">No programmes created yet</p>
+                  <p className="font-body text-xs text-zinc-400">
+                    All departments automatically pay the Standard price ({formatMoneyFromKobo(unitFeeKobo)}). Create a Funding or Discount programme to assign cohort offers.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {programmes.map((prog) => {
+                    const isFunding = prog.kind === 'funding';
+                    const isUnused = (Number(prog.usedCohortsCount) || 0) === 0;
+                    const keyValueLabel = isFunding
+                      ? prog.coverageMode === 'all'
+                        ? 'Covers all profiles'
+                        : `Covers ${prog.coverageCap || 0} profiles`
+                      : `${prog.discountPercent}% off (${formatMoneyFromKobo(
+                          Math.round((unitFeeKobo * (100 - (Number(prog.discountPercent) || 0))) / 100)
+                        )})`;
+
+                    return (
+                      <div
+                        key={prog.id}
+                        className="p-4 rounded-xl bg-[#08090e] border border-white/10 flex flex-col justify-between gap-3"
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className={`px-2 py-0.5 rounded font-mono-tech text-[10px] uppercase font-bold border ${
+                                  isFunding
+                                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                    : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                }`}
+                              >
+                                {isFunding ? 'Funding' : 'Discount'}
+                              </span>
+                              <h4 className="font-syne font-bold text-sm text-white">
+                                {prog.name}
+                              </h4>
+                            </div>
+
+                            <span
+                              className={`px-2 py-0.5 rounded-full font-mono-tech text-[10px] uppercase border ${
+                                prog.status === 'active'
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                                  : 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30'
+                              }`}
+                            >
+                              {prog.status}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono-tech text-xs">
+                            <span className="text-[#d4af37] font-semibold">{keyValueLabel}</span>
+                            <span className="text-zinc-300">
+                              Sponsor: <strong>{prog.sponsorName || 'KoHot'}</strong>
+                              {prog.showRecognition ? ' (Recognised)' : ' (Hidden)'}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] font-mono-tech text-zinc-400">
+                            <span>
+                              Valid:{' '}
+                              {prog.validFrom || prog.validTo
+                                ? `${prog.validFrom || 'Any'} → ${prog.validTo || 'Ongoing'}`
+                                : 'Always in-date'}
+                            </span>
+                            <span className="text-zinc-300">
+                              used by {prog.usedDepartmentsCount || 0} department
+                              {prog.usedDepartmentsCount === 1 ? '' : 's'} in{' '}
+                              {prog.usedCohortsCount || 0} cohort
+                              {prog.usedCohortsCount === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/[0.06]">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleProgrammeStatus(prog)}
+                            className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 font-mono-tech text-[11px] text-zinc-200 inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            {prog.status === 'active' ? (
+                              <>
+                                <Pause className="w-3 h-3 text-amber-400" />
+                                <span>Pause</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-3 h-3 text-emerald-400" />
+                                <span>Resume</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openEditProgrammeModal(prog)}
+                            className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 font-mono-tech text-[11px] text-zinc-200 inline-flex items-center gap-1 cursor-pointer"
                           >
                             <Edit3 className="w-3 h-3 text-[#d4af37]" />
                             <span>Edit</span>
                           </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+
+                          {isUnused && (
+                            <button
+                              type="button"
+                              onClick={() => setDeletingProgrammeTarget(prog)}
+                              className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 font-mono-tech text-[11px] text-rose-300 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 2. Per-Album Slot Balance & Sponsors */}
           <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-3">
@@ -1451,7 +2148,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                 Per-Album Slot Balance &amp; Sponsors ({liveSets.length})
               </h3>
               <p className="font-body text-xs text-zinc-400 mt-0.5">
-                Grant free slots (reason required) or edit/remove public sponsor names. KoHot credit is Host-only.
+                Grant free slots (reason required) or edit/remove public sponsor names. Funding coverage reuses slot_ledger grant rows so approvals and sponsor footers stay synced.
               </p>
             </div>
 
@@ -1566,14 +2263,14 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                 Platform Fee &amp; Lifecycle Thresholds
               </h3>
               <p className="font-body text-xs text-zinc-400 mt-0.5">
-                Every change is validated and recorded in the Host audit log. Student fee is stored in kobo ({Number(studentFeeNairaInput || 0) * 100} kobo).
+                Standard Price is the single global price (student_fee_kobo). A department with no offer pays Standard in every institution and every year.
               </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
               <div>
                 <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                  Student Fee (₦ NGN · stored in kobo)
+                  Standard Price / Student Fee (₦ NGN)
                 </label>
                 <input
                   type="number"
@@ -1674,7 +2371,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
             </div>
           </div>
 
-          {/* Currency per Institution (default NGN) */}
           <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-3">
             <div>
               <h3 className="font-syne font-bold text-sm text-white flex items-center gap-2">
@@ -1733,6 +2429,296 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       )}
 
       {/* =====================================================================
+          MODAL: CREATE / EDIT PROGRAMME
+         ===================================================================== */}
+      {isProgrammeModalOpen && (
+        <div
+          className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setIsProgrammeModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-[#14151a] border border-white/15 p-5 space-y-4 text-white shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="font-syne font-bold text-base">
+                {editingProgramme ? 'Edit Programme' : 'New Programme'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsProgrammeModalOpen(false)}
+                className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveProgrammeSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Programme Kind *
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setProgKind('funding')}
+                    className={`py-2 px-3 rounded-xl border font-mono-tech text-xs uppercase cursor-pointer ${
+                      progKind === 'funding'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold'
+                        : 'bg-black/40 border-white/10 text-zinc-400'
+                    }`}
+                  >
+                    Funding (Free / Covered)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProgKind('discount')}
+                    className={`py-2 px-3 rounded-xl border font-mono-tech text-xs uppercase cursor-pointer ${
+                      progKind === 'discount'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
+                        : 'bg-black/40 border-white/10 text-zinc-400'
+                    }`}
+                  >
+                    Discount (1–99% Off)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Programme Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={progName}
+                  onChange={(e) => setProgName(e.target.value)}
+                  placeholder={
+                    progKind === 'funding'
+                      ? 'e.g. KoHot Campus Grant 150'
+                      : 'e.g. Early Bird 25% Off'
+                  }
+                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                />
+              </div>
+
+              {progKind === 'discount' ? (
+                <div>
+                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                    Discount Percentage (1 to 99%) *
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={99}
+                    required
+                    value={progDiscountPercent}
+                    onChange={(e) => setProgDiscountPercent(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                  />
+                  <span className="font-mono-tech text-[10px] text-zinc-400 mt-1 block">
+                    Effective price:{' '}
+                    {formatMoneyFromKobo(
+                      Math.round(
+                        (unitFeeKobo * (100 - Math.min(99, Math.max(1, Number(progDiscountPercent) || 0)))) /
+                          100
+                      )
+                    )}{' '}
+                    (Standard: {formatMoneyFromKobo(unitFeeKobo)})
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                      Coverage Limit Mode *
+                    </label>
+                    <select
+                      value={progCoverageMode}
+                      onChange={(e) => setProgCoverageMode(e.target.value as 'all' | 'per_album_cap')}
+                      className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                    >
+                      <option value="per_album_cap">Per-album profile cap (then Standard)</option>
+                      <option value="all">Covers all profiles in album</option>
+                    </select>
+                  </div>
+
+                  {progCoverageMode === 'per_album_cap' && (
+                    <div>
+                      <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                        Coverage Cap (Profiles per Album) *
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={5000}
+                        required
+                        value={progCoverageCap}
+                        onChange={(e) => setProgCoverageCap(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                    Sponsor Name
+                  </label>
+                  <input
+                    type="text"
+                    value={progSponsorName}
+                    onChange={(e) => setProgSponsorName(e.target.value)}
+                    placeholder="KoHot"
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                  />
+                </div>
+                <div className="flex items-end pb-1">
+                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={progShowRecognition}
+                      onChange={(e) => setProgShowRecognition(e.target.checked)}
+                      className="rounded accent-[#d4af37]"
+                    />
+                    <span className="font-mono-tech text-[11px] text-zinc-300">
+                      Show sponsor recognition
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                    Valid From (Optional)
+                  </label>
+                  <input
+                    type="date"
+                    value={progValidFrom}
+                    onChange={(e) => setProgValidFrom(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                    Valid To (Optional)
+                  </label>
+                  <input
+                    type="date"
+                    value={progValidTo}
+                    onChange={(e) => setProgValidTo(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsProgrammeModalOpen(false)}
+                  className="px-3.5 py-2 rounded-xl bg-white/5 text-zinc-300 font-mono-tech text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingProgramme}
+                  className="px-4 py-2 rounded-xl bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingProgramme ? 'Saving...' : 'Save Programme'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL: CONFIRM DELETE UNUSED PROGRAMME
+         ===================================================================== */}
+      {deletingProgrammeTarget && (
+        <div
+          className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setDeletingProgrammeTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl bg-[#14151a] border border-white/15 p-5 space-y-4 text-white shadow-2xl"
+          >
+            <h3 className="font-syne font-bold text-base">Delete unused programme?</h3>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Are you sure you want to permanently delete{' '}
+              <strong className="text-white">{deletingProgrammeTarget.name}</strong>? This programme is not assigned to any cohort.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingProgrammeTarget(null)}
+                className="px-3.5 py-2 rounded-xl bg-white/5 text-zinc-300 font-mono-tech text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingProgramme}
+                onClick={handleConfirmDeleteProgramme}
+                className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-syne font-bold text-xs uppercase cursor-pointer"
+              >
+                Delete Programme
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL: CONFIRM COPY OFFERS FROM PREVIOUS YEAR
+         ===================================================================== */}
+      {isCopyYearModalOpen && (
+        <div
+          className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setIsCopyYearModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-[#14151a] border border-white/15 p-5 space-y-4 text-white shadow-2xl"
+          >
+            <h3 className="font-syne font-bold text-base">
+              Copy offers from {cohortYear - 1} to {cohortYear}?
+            </h3>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              This will copy all assigned department offers for{' '}
+              <strong className="text-white">
+                {selectedCohortUni?.shortCode || selectedCohortUni?.name}
+              </strong>{' '}
+              from Class of <strong className="text-white">{cohortYear - 1}</strong> into Class of{' '}
+              <strong className="text-white">{cohortYear}</strong>. Departments without an offer remain on Standard price.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsCopyYearModalOpen(false)}
+                className="px-3.5 py-2 rounded-xl bg-white/5 text-zinc-300 font-mono-tech text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isCopyingYear}
+                onClick={handleConfirmCopyFromPreviousYear}
+                className="px-4 py-2 rounded-xl bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer disabled:opacity-50"
+              >
+                {isCopyingYear ? 'Copying...' : `Confirm Copy to ${cohortYear}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
           MODAL: MARK TRANSACTION REFUNDED (WITH REQUIRED NOTE)
          ===================================================================== */}
       {refundTargetRow && (
@@ -1787,82 +2773,6 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                   className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-syne font-bold text-xs uppercase cursor-pointer"
                 >
                   Confirm Refunded
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* =====================================================================
-          MODAL: EDIT KOHOT ALLOCATION
-         ===================================================================== */}
-      {editingAlloc && (
-        <div
-          className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setEditingAlloc(null)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-2xl bg-[#14151a] border border-white/15 p-5 space-y-4 text-white shadow-2xl"
-          >
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h3 className="font-syne font-bold text-base">Edit KoHot Allocation</h3>
-              <button
-                type="button"
-                onClick={() => setEditingAlloc(null)}
-                className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <form onSubmit={handleSaveEditedAllocation} className="space-y-3 text-xs">
-              <p className="text-zinc-400">
-                {editingAlloc.institutionName} · {editingAlloc.departmentName} (Class of{' '}
-                {editingAlloc.graduationYear})
-              </p>
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                  Slots Quantity (Min allowed: {editingAlloc.usedSlots ?? 0} used)
-                </label>
-                <input
-                  type="number"
-                  min={editingAlloc.usedSlots ?? 0}
-                  max={1000}
-                  required
-                  value={editAllocQty}
-                  onChange={(e) => setEditAllocQty(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
-                />
-                <span className="text-[10px] text-zinc-500 block mt-1">
-                  Increasing appends slots to the ledger; decreasing is allowed only down to unused slots.
-                </span>
-              </div>
-              <div>
-                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
-                  Note (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={editAllocNote}
-                  onChange={(e) => setEditAllocNote(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
-                />
-              </div>
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setEditingAlloc(null)}
-                  className="px-3.5 py-2 rounded-xl bg-white/5 text-zinc-300 font-mono-tech text-xs cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingAlloc}
-                  className="px-4 py-2 rounded-xl bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer"
-                >
-                  Save Changes
                 </button>
               </div>
             </form>

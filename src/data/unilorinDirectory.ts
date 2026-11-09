@@ -1,4 +1,5 @@
 import { DepartmentItem, UniversityDirectoryItem } from '../types';
+import { createUniversityDeptCrest } from './nigerianUniversitiesDirectory';
 
 // High-fidelity symbolic imagery tailored to academic disciplines (not generic graduation photos)
 const SYMBOLIC_HERO_IMAGES = {
@@ -27,20 +28,12 @@ const SYMBOLIC_HERO_IMAGES = {
   PSYCHOLOGY: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=1600&auto=format&fit=crop&q=80', // Mind, human perception, neural synapses & cognition
 };
 
-// University of Ilorin (UNILORIN) Official Crest & Badge Representation
-export const UNILORIN_CREST_URL = 'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=200&auto=format&fit=crop&q=80';
+// University of Ilorin (UNILORIN) Official Online Crest & Badge Representation
+export const UNILORIN_CREST_URL = 'https://upload.wikimedia.org/wikipedia/commons/1/11/WUGN_University_Of_Ilorin_logo.png';
 
-// Helper to generate symbolic department crest badge with authentic UNILORIN heraldic colors (Navy Blue #002147 & Gold #D4AF37)
+// Helper to generate distinct discipline-specific department crest badge on crisp white background for UNILORIN
 export const createDeptBadge = (code: string): string => {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
-    <rect width="100" height="100" rx="20" fill="#001833" />
-    <circle cx="50" cy="50" r="42" fill="none" stroke="#d4af37" stroke-width="2.5" stroke-dasharray="4,2" />
-    <path d="M50 16 L76 30 L76 60 Q50 86 50 86 Q24 60 24 30 Z" fill="#002b5c" stroke="#d4af37" stroke-width="2" />
-    <circle cx="50" cy="46" r="14" fill="#001833" stroke="#e6c158" stroke-width="1.5" />
-    <text x="50" y="50" font-family="'Space Grotesk', monospace, sans-serif" font-size="10" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">${code.slice(0, 4)}</text>
-    <path d="M38 72 L62 72" stroke="#d4af37" stroke-width="1.5" stroke-linecap="round" />
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  return createUniversityDeptCrest('UNILORIN', code, '#001833', '#002b5c');
 };
 
 export const UNILORIN_DEPARTMENTS: DepartmentItem[] = [

@@ -185,16 +185,27 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
     return list;
   }, [universities]);
 
-  // Check if viewing a specific unlisted department accessed via direct link or navigation from an album
-  const isDirectSharedDept = Boolean(controlledDeptId && controlledDeptId !== 'dept-crownfield-public-law');
+  // Check if viewing a specific department Legacy Wall (any department other than the Crownfield demo wall)
+  const isDirectSharedDept = Boolean(
+    (controlledDeptId && controlledDeptId !== 'dept-crownfield-public-law' && !controlledDeptId.toLowerCase().includes('crownfield')) ||
+    (controlledUniId && controlledUniId !== 'crownfield')
+  );
 
   const targetSharedUni = useMemo<UniversityDirectoryItem>(() => {
     if (!isDirectSharedDept) return CROWNFIELD_UNIVERSITY;
-    const foundUni = universities.find(
-      (u) => u.id === controlledUniId || u.departments?.some((d) => d.id === controlledDeptId)
+    const foundByDept = controlledDeptId
+      ? universities.find((u) => u.departments?.some((d) => d.id === controlledDeptId))
+      : undefined;
+    if (foundByDept) return foundByDept;
+    const foundByUni = controlledUniId
+      ? universities.find((u) => u.id === controlledUniId || u.shortCode.toLowerCase() === controlledUniId.toLowerCase())
+      : undefined;
+    if (foundByUni) return foundByUni;
+    const matchingSet = sets.find(
+      (s) =>
+        (controlledDeptId && s.departmentId === controlledDeptId) ||
+        (controlledUniId && (s.institutionId === controlledUniId || s.universityId === controlledUniId))
     );
-    if (foundUni) return foundUni;
-    const matchingSet = sets.find((s) => s.departmentId === controlledDeptId);
     if (matchingSet) {
       const fallbackDept: DepartmentItem = {
         id: matchingSet.departmentId,
@@ -202,10 +213,10 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
         name: matchingSet.departmentName,
         code: matchingSet.departmentName.slice(0, 3).toUpperCase(),
         faculty: matchingSet.faculty || 'Faculty of Sciences',
-        heroImageUrl: '',
+        heroImageUrl: matchingSet.bannerImageUrl || '',
         caption: matchingSet.classSlogan || `Official Department Legacy Wall for ${matchingSet.departmentName}`,
         legacy_status: 'established',
-        logoUrl: matchingSet.departmentLogoUrl,
+        logoUrl: matchingSet.departmentLogoUrl || matchingSet.institutionLogoUrl,
         connectedClassAlbumIds: [matchingSet.id],
       };
       return {
@@ -223,9 +234,17 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
 
   const targetSharedDept = useMemo<DepartmentItem>(() => {
     if (!isDirectSharedDept) return CROWNFIELD_UNIVERSITY.departments[0];
+    const matchingSet = sets.find((s) => controlledDeptId && s.departmentId === controlledDeptId);
     const foundDept = targetSharedUni.departments?.find((d) => d.id === controlledDeptId);
-    if (foundDept) return foundDept;
-    const matchingSet = sets.find((s) => s.departmentId === controlledDeptId);
+    if (foundDept) {
+      if (matchingSet?.departmentLogoUrl && matchingSet.departmentLogoUrl !== foundDept.logoUrl) {
+        return {
+          ...foundDept,
+          logoUrl: matchingSet.departmentLogoUrl,
+        };
+      }
+      return foundDept;
+    }
     if (matchingSet) {
       return {
         id: matchingSet.departmentId,
@@ -233,10 +252,10 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
         name: matchingSet.departmentName,
         code: matchingSet.departmentName.slice(0, 3).toUpperCase(),
         faculty: matchingSet.faculty || 'Faculty of Sciences',
-        heroImageUrl: '',
+        heroImageUrl: matchingSet.bannerImageUrl || '',
         caption: matchingSet.classSlogan || `Official Department Legacy Wall for ${matchingSet.departmentName}`,
         legacy_status: 'established',
-        logoUrl: matchingSet.departmentLogoUrl,
+        logoUrl: matchingSet.departmentLogoUrl || targetSharedUni.logoUrl,
         connectedClassAlbumIds: [matchingSet.id],
       };
     }
@@ -257,10 +276,9 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
   };
 
   const isCrownfieldPublicLaw =
-    !controlledDeptId ||
+    !isDirectSharedDept ||
     controlledDeptId === 'dept-crownfield-public-law' ||
-    controlledDeptId.toLowerCase().includes('crownfield') ||
-    controlledUniId === 'crownfield' ||
+    Boolean(controlledDeptId && controlledDeptId.toLowerCase().includes('crownfield')) ||
     targetSharedUni.id === 'crownfield';
 
   useEffect(() => {
@@ -435,18 +453,16 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
 
   return (
     <div id="department-directory-page" className={`min-h-screen ${isLightMode ? 'bg-slate-50 text-slate-900' : 'bg-[#121214] text-white'} selection:bg-[#d4af37]/30 flex flex-col relative animate-entrance`}>
-      {/* Bottom Toggle Switcher for Logged-in Album Admin (2 toggles: Manage | Preview) or Host (3 toggles: Main | Manage | Preview) */}
-      {isAlbumAdmin && (
+      {/* Bottom Toggle Switcher for Master Host when viewing Legacy Wall */}
+      {currentUser?.role === 'master_host' && (
         <AlbumAdminSwitcher
           activeMode="preview"
-          showMainButton={Boolean(currentUser?.role === 'master_host' && showMainButton)}
+          showMainButton={Boolean(showMainButton)}
           showManageButton={true}
           onMainDashboard={onMainDashboard}
           onManageAlbum={onOpenDashboard}
           onPreviewAlbum={() => {
-            if (currentUser?.role === 'class_rep' && currentUser.assignedSetId) {
-              onSelectSet(currentUser.assignedSetId);
-            } else if (timelineSets[0]) {
+            if (timelineSets[0]) {
               onSelectSet(timelineSets[0].id);
             }
           }}
@@ -460,58 +476,36 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
           : 'bg-[#121214]/95 border-zinc-800 text-white'
       }`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 relative z-10">
-          {/* KoHot logo text: non-clickable static badge for Album Admin & Host so they cannot hop out to the website */}
-          {isAlbumAdmin ? (
-            <div
-              id="legacy-wall-top-kohot-badge"
-              className={`flex items-center gap-2.5 select-none ${
-                isLightMode ? 'text-slate-900' : 'text-white'
-              }`}
-            >
-              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center shadow-xs ${
-                isLightMode ? 'bg-slate-100 border-slate-200' : 'bg-white/10 border-white/20'
-              }`}>
-                <div className={`w-2.5 h-2.5 rotate-45 ${
-                  isLightMode ? 'bg-slate-900' : 'bg-white'
-                }`} />
-              </div>
-              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase ${
-                isLightMode ? 'text-slate-900' : 'text-white'
-              }`}>
-                KoHot
-              </span>
+          {/* Clickable KoHot text logo at top-left corner to land on the website */}
+          <button
+            id="legacy-wall-top-kohot-btn"
+            type="button"
+            onClick={() => {
+              if (onBackToLanding) {
+                onBackToLanding();
+              } else {
+                window.location.hash = '#home';
+              }
+              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+            }}
+            className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
+              isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
+            }`}
+            title="Return to KoHot Website"
+          >
+            <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
+              isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
+            }`}>
+              <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
+                isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
+              }`} />
             </div>
-          ) : (
-            <button
-              id="legacy-wall-top-kohot-btn"
-              type="button"
-              onClick={() => {
-                if (onBackToLanding) {
-                  onBackToLanding();
-                } else {
-                  window.location.hash = '#home';
-                }
-                window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-              }}
-              className={`flex items-center gap-2.5 transition-colors cursor-pointer group select-none ${
-                isLightMode ? 'text-slate-900 hover:text-[#d4af37]' : 'text-white hover:text-[#d4af37]'
-              }`}
-              title="Return to KoHot Website"
-            >
-              <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-colors shadow-xs ${
-                isLightMode ? 'bg-slate-100 border-slate-200 group-hover:border-[#d4af37]' : 'bg-white/10 border-white/20 group-hover:border-[#d4af37]'
-              }`}>
-                <div className={`w-2.5 h-2.5 rotate-45 transition-colors ${
-                  isLightMode ? 'bg-slate-900 group-hover:bg-[#d4af37]' : 'bg-white group-hover:bg-[#d4af37]'
-                }`} />
-              </div>
-              <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
-                isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
-              }`}>
-                KoHot
-              </span>
-            </button>
-          )}
+            <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
+              isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
+            }`}>
+              KoHot
+            </span>
+          </button>
 
           <div className="ml-auto flex items-center gap-2.5">
             {/* Context-aware Light/Dark Mode Switcher (Left of Admin Login, on the Right) */}
@@ -571,23 +565,9 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
         <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center flex flex-col items-center justify-center relative z-10">
           <div className="space-y-3 max-w-2xl flex flex-col items-center">
             
-            {/* Department and University Logos Together (Equal size & same square frame) */}
+            {/* University and Department Logos Together (First = University Logo, Second = Department Logo, both on white background) */}
             <div className="flex items-center justify-center gap-3 animate-slide-up-fade">
-              {/* Department Logo (Square frame) */}
-              {currentDepartment.logoUrl ? (
-                <img
-                  src={currentDepartment.logoUrl}
-                  alt={currentDepartment.name}
-                  referrerPolicy="no-referrer"
-                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl object-contain bg-white p-1 border-2 border-amber-500/40 shadow-md shrink-0"
-                />
-              ) : (
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-amber-500/20 border-2 border-amber-500/40 text-white font-syne font-black text-sm flex items-center justify-center shadow-md shrink-0">
-                  {currentDepartment.code || 'DEP'}
-                </div>
-              )}
-
-              {/* University Logo (Same size and same square frame as department logo) */}
+              {/* 1st Logo: University Logo (Square frame on white background) */}
               {currentUniversity.logoUrl ? (
                 <img
                   src={currentUniversity.logoUrl}
@@ -596,8 +576,22 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                   className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl object-contain bg-white p-1 border-2 border-amber-500/40 shadow-md shrink-0"
                 />
               ) : (
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-amber-500/20 border-2 border-amber-500/40 text-white font-syne font-black text-sm flex items-center justify-center shadow-md shrink-0">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-white border-2 border-amber-500/40 text-slate-900 font-syne font-black text-sm flex items-center justify-center shadow-md shrink-0">
                   {currentUniversity.shortCode}
+                </div>
+              )}
+
+              {/* 2nd Logo: Department Logo (Same size & square frame on white background) */}
+              {currentDepartment.logoUrl ? (
+                <img
+                  src={currentDepartment.logoUrl}
+                  alt={currentDepartment.name}
+                  referrerPolicy="no-referrer"
+                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl object-contain bg-white p-1 border-2 border-amber-500/40 shadow-md shrink-0"
+                />
+              ) : (
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-white border-2 border-amber-500/40 text-slate-900 font-syne font-black text-sm flex items-center justify-center shadow-md shrink-0">
+                  {currentDepartment.code || 'DEP'}
                 </div>
               )}
             </div>

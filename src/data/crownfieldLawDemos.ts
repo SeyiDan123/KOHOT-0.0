@@ -6,7 +6,7 @@ export const CROWNFIELD_UNIVERSITY: UniversityDirectoryItem = {
   name: 'Crownfield University',
   shortCode: 'CU',
   location: 'Victoria Island, Lagos',
-  logoUrl: 'https://images.unsplash.com/photo-1592280771190-3e2e4d571952?w=160&auto=format&fit=crop&q=80',
+  logoUrl: `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120"><rect width="120" height="120" rx="24" fill="#0B132B"/><circle cx="60" cy="60" r="50" fill="none" stroke="#D4AF37" stroke-width="2.5"/><path d="M60 16 L94 30 L94 66 Q60 102 60 102 Q26 66 26 30 Z" fill="#1C2541" stroke="#D4AF37" stroke-width="2.5"/><path d="M44 46 L52 34 L60 44 L68 34 L76 46 Z" fill="#D4AF37"/><text x="60" y="66" font-family="Georgia, serif" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">CU</text><path d="M42 78 L78 78" stroke="#D4AF37" stroke-width="2" stroke-linecap="round"/></svg>`)}`,
   officialWebsite: 'https://crownfield.edu.ng',
   motto: 'Lex et Veritas, Justitia Omnibus',
   departments: [
@@ -16,7 +16,7 @@ export const CROWNFIELD_UNIVERSITY: UniversityDirectoryItem = {
       name: 'Department of Public Law',
       code: 'PUB-LAW',
       faculty: 'Faculty of Law',
-      logoUrl: 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=160&auto=format&fit=crop&q=80',
+      logoUrl: `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect width="100" height="100" rx="20" fill="#0B132B"/><circle cx="50" cy="50" r="42" fill="none" stroke="#D4AF37" stroke-width="2" stroke-dasharray="4,2"/><path d="M50 14 L78 28 L78 58 Q50 86 50 86 Q22 58 22 28 Z" fill="#1C2541" stroke="#D4AF37" stroke-width="2"/><path d="M50 28 L50 56 M36 36 L64 36 M36 36 L32 46 L40 46 Z M64 36 L60 46 L68 46 Z M42 56 L58 56" stroke="#D4AF37" stroke-width="2" fill="none" stroke-linecap="round"/><text x="50" y="71" font-family="Georgia, serif" font-size="9" font-weight="bold" fill="#FFFFFF" text-anchor="middle" letter-spacing="0.8">LAW</text></svg>`)}`,
       heroImageUrl: 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=1600&auto=format&fit=crop&q=80',
       caption: 'Fostering judicial courage, constitutional acumen, and transformative legal scholarship across Africa. Home to generations of Senior Advocates, jurists, and reformative legal pioneers.',
       officialPortal: 'https://law.crownfield.edu.ng',
@@ -833,9 +833,10 @@ function getCohortSeedsByYear(year: number): StudentSeed[] {
   return COHORT_2026_STUDENTS;
 }
 
-function getSecondPortraitOfSamePerson(photoUrl: string): string {
+function getSecondPortraitOfSamePerson(photoUrl: string, _gender: 'M' | 'F' = 'M'): string {
   const baseUrl = photoUrl.split('?')[0];
-  return `${baseUrl}?w=600&auto=format&fit=crop&q=80`;
+  // Generate a distinct close-up studio portrait shot of the exact same person (horizontally flipped angle, close-up face focal framing, warm studio contrast)
+  return `${baseUrl}?w=720&h=900&auto=format&fit=crop&crop=faces,focalpoint&fp-x=0.5&fp-y=0.34&fp-z=1.48&flip=h&con=14&exp=3&q=85`;
 }
 
 function generateStudentsForSet(setId: string, year: number): StudentProfile[] {
@@ -850,8 +851,8 @@ function generateStudentsForSet(setId: string, year: number): StudentProfile[] {
     leaderOrder: seed.position ? idx + 1 : undefined,
     photoUrl: seed.photoUrl,
     rawPhotoUrl: seed.photoUrl,
-    secondaryPhotoUrl: getSecondPortraitOfSamePerson(seed.photoUrl),
-    rawSecondaryPhotoUrl: getSecondPortraitOfSamePerson(seed.photoUrl),
+    secondaryPhotoUrl: getSecondPortraitOfSamePerson(seed.photoUrl, seed.gender),
+    rawSecondaryPhotoUrl: getSecondPortraitOfSamePerson(seed.photoUrl, seed.gender),
     studentAwards:
       idx === 0
         ? [

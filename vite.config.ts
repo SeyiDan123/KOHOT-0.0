@@ -164,6 +164,8 @@ function createDevStorage() {
       'slot_ledger',
       'slot_purchases',
       'slot_allocations',
+      'programmes',
+      'cohort_allocations',
     ];
     for (const t of tables) {
       if (!Array.isArray(dbData[t])) {
@@ -333,6 +335,8 @@ function createDevStorage() {
             newRow[col] = new Date().toISOString();
           } else if (vExpr.startsWith("'") && vExpr.endsWith("'")) {
             newRow[col] = vExpr.slice(1, -1);
+          } else if (vExpr.toUpperCase() === 'NULL') {
+            newRow[col] = null;
           } else if (!isNaN(Number(vExpr))) {
             newRow[col] = Number(vExpr);
           } else {
@@ -347,6 +351,23 @@ function createDevStorage() {
           if (dupIdem !== -1) {
             if (isIgnore) return { success: true };
             throw new Error('UNIQUE constraint failed: slot_ledger.idempotency_key');
+          }
+        }
+        // Check UNIQUE(institution_id, department_id, graduation_year) on cohort_allocations
+        if (table === 'cohort_allocations') {
+          const dupCohort = rows.findIndex(
+            (r) =>
+              String(r.institution_id).toLowerCase() === String(newRow.institution_id).toLowerCase() &&
+              String(r.department_id).toLowerCase() === String(newRow.department_id).toLowerCase() &&
+              Number(r.graduation_year) === Number(newRow.graduation_year)
+          );
+          if (dupCohort !== -1) {
+            if (isIgnore) return { success: true };
+            if (isReplace || qUpper.includes('ON CONFLICT')) {
+              rows[dupCohort] = { ...rows[dupCohort], ...newRow, updated_at: new Date().toISOString() };
+              saveDb(dbData);
+              return { success: true };
+            }
           }
         }
         const existingIdx = rows.findIndex((r) => newRow[pkCol] !== undefined && String(r[pkCol]) === String(newRow[pkCol]));

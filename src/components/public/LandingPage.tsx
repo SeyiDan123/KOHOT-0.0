@@ -413,7 +413,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           SECTION 4: THE LEGACY, IN THEIR WORDS (TESTIMONIALS - ONLY SHOWN IF ENABLED)
           ========================================================================= */}
       {contentOverride?.showTestimonialsSection !== false && (
-        <TestimonialsCarousel />
+        <TestimonialsCarousel contentOverride={contentOverride} />
       )}
 
       {/* =========================================================================

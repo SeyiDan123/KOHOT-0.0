@@ -393,6 +393,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
             }}
           >
             <GlazedImage
+              key={isSecondaryPhotoActive ? 'active-secondary' : 'active-primary'}
               src={
                 isSecondaryPhotoActive && student.secondaryPhotoUrl
                   ? student.secondaryPhotoUrl
@@ -421,6 +422,7 @@ export const StudentDetailModal: React.FC<StudentDetailModalProps> = ({
               title="Tap to switch between first and second photo"
             >
               <GlazedImage
+                key={isSecondaryPhotoActive ? 'thumb-primary' : 'thumb-secondary'}
                 src={
                   isSecondaryPhotoActive
                     ? student.photoUrl || student.rawPhotoUrl || ''

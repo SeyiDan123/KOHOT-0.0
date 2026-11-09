@@ -186,8 +186,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     return null;
   }, [universities, currentSet.departmentId, currentSet.departmentName]);
 
-  const effectiveDeptLogo = directoryRef?.dept.logoUrl || currentSet.departmentLogoUrl;
-  const effectiveUniLogo = directoryRef?.uni.logoUrl || currentSet.institutionLogoUrl;
+  const effectiveDeptLogo = currentSet.departmentLogoUrl || directoryRef?.dept.logoUrl;
+  const effectiveUniLogo = currentSet.institutionLogoUrl || directoryRef?.uni.logoUrl;
 
   // Detect if entry is from physical Legacy Plaque QR code
   const isPlaqueMode = useMemo(() => {
@@ -649,13 +649,36 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     return [...list].sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
   }, [currentSet.memories, selectedMemoryCategory]);
 
-  const handleShareAlbum = () => {
+  const handleShareAlbum = async () => {
     if (!isAlbumPublished) {
       setIsPublishModalOpen(true);
       return;
     }
-    setIsCopied(false);
-    setIsShareModalOpen(true);
+    const albumUrl = getAlbumUrl(currentSet);
+    const shareTitle = `${currentSet.classSetName} — ${currentSet.departmentName} (Class of ${currentSet.graduationYear})`;
+    const shareText = `Explore the official Class of ${currentSet.graduationYear} digital legacy album for ${currentSet.departmentName}, ${currentSet.institutionName}.`;
+
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: shareTitle,
+          text: shareText,
+          url: albumUrl,
+        });
+        return;
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          return;
+        }
+      }
+    }
+
+    const copied = await copyUrlToClipboard(albumUrl);
+    if (copied) {
+      setIsCopied(true);
+      showSuccess('Album link copied to clipboard.', 'Share it with your classmates and alumni.');
+      setTimeout(() => setIsCopied(false), 2500);
+    }
   };
 
   const handleCopyShareLink = async () => {
@@ -786,30 +809,53 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           : 'bg-[#060709]/85 border-white/[0.08] text-white'
       }`}>
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4 relative">
-          {/* Left: All Albums navigation */}
+          {/* Left: Manage (when in Admin Preview mode) or All Albums (for public visitors) */}
           <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
-            {/* All Albums Navigation (Leads to the Legacy Wall of the Department) */}
-            <button
-              id="back-to-home-btn"
-              onClick={onBackToGrid}
-              className={`flex items-center gap-2 transition-colors cursor-pointer group shrink-0 ${
-                isLightMode ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-300 hover:text-white'
-              }`}
-              title="Return to All Albums (Department Legacy Wall)"
-            >
-              <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full border flex items-center justify-center transition-all shrink-0 ${
-                isLightMode 
-                  ? 'bg-slate-100 group-hover:bg-slate-200 border-slate-300 text-slate-800' 
-                  : 'bg-white/5 group-hover:bg-white/10 border-white/10 text-zinc-300 group-hover:text-white'
-              }`}>
-                <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 group-hover:-translate-x-0.5 transition-transform" />
-              </div>
-              <span className={`font-syne font-bold text-xs sm:text-sm tracking-wide transition-colors ${
-                isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
-              }`}>
-                All Albums
-              </span>
-            </button>
+            {onManageAlbum ? (
+              <button
+                id="back-to-manage-btn"
+                onClick={handleManageAlbumWithScroll}
+                className={`flex items-center gap-2 transition-colors cursor-pointer group shrink-0 ${
+                  isLightMode ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-300 hover:text-white'
+                }`}
+                title="Return to Album Admin Dashboard"
+              >
+                <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full border flex items-center justify-center transition-all shrink-0 ${
+                  isLightMode 
+                    ? 'bg-slate-100 group-hover:bg-slate-200 border-slate-300 text-slate-800' 
+                    : 'bg-white/5 group-hover:bg-white/10 border-white/10 text-zinc-300 group-hover:text-white'
+                }`}>
+                  <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 group-hover:-translate-x-0.5 transition-transform" />
+                </div>
+                <span className={`font-syne font-bold text-xs sm:text-sm tracking-wide transition-colors ${
+                  isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
+                }`}>
+                  Manage
+                </span>
+              </button>
+            ) : (
+              <button
+                id="back-to-home-btn"
+                onClick={onBackToGrid}
+                className={`flex items-center gap-2 transition-colors cursor-pointer group shrink-0 ${
+                  isLightMode ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-300 hover:text-white'
+                }`}
+                title="Return to All Albums (Department Legacy Wall)"
+              >
+                <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full border flex items-center justify-center transition-all shrink-0 ${
+                  isLightMode 
+                    ? 'bg-slate-100 group-hover:bg-slate-200 border-slate-300 text-slate-800' 
+                    : 'bg-white/5 group-hover:bg-white/10 border-white/10 text-zinc-300 group-hover:text-white'
+                }`}>
+                  <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 group-hover:-translate-x-0.5 transition-transform" />
+                </div>
+                <span className={`font-syne font-bold text-xs sm:text-sm tracking-wide transition-colors ${
+                  isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
+                }`}>
+                  All Albums
+                </span>
+              </button>
+            )}
           </div>
 
           {/* Right: Light Mode Toggle, Save & Share Buttons */}

@@ -13,7 +13,7 @@ import {
   INITIAL_UNIVERSITIES, 
   calculateTotalImages 
 } from '../../data/initialData';
-import { CROWNFIELD_PUBLIC_LAW_SETS } from '../../data/crownfieldLawDemos';
+import { CROWNFIELD_PUBLIC_LAW_SETS, CROWNFIELD_UNIVERSITY } from '../../data/crownfieldLawDemos';
 import { Layer1ClassRepDashboard } from './Layer1ClassRepDashboard';
 import { getTheme, applyTheme, toggleTheme, ThemeMode } from '../../utils/theme';
 import { isPublicAppUrlConfigured, PRODUCTION_ORIGIN } from '../../utils/urlHelper';
@@ -307,14 +307,14 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       });
     }
 
-    // Sort: Current institutions (isPriority) at the top, then by orderNumber/existing order
+    // Sort: Priority/tagged institutions (isPriority) at the top, then alphabetically by name
     return [...list].sort((a, b) => {
       const aPriority = a.isPriority ? 1 : 0;
       const bPriority = b.isPriority ? 1 : 0;
       if (aPriority !== bPriority) {
         return bPriority - aPriority;
       }
-      return (a.orderNumber || 99) - (b.orderNumber || 99);
+      return a.name.localeCompare(b.name);
     });
   }, [universities, directoryUniFilter, directorySearchTerm]);
   
@@ -1230,207 +1230,107 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
         </div>
 
         {/* =========================================================================
-            0. ALBUM DEMOS SECTION (COMPACT CARDS, ALL ACTIONS PRESERVED)
+            0. ALBUM DEMOS SECTION (MINIMALIST MINI CARDS: UNIVERSITY + DEPT + MANAGE)
             ========================================================================= */}
         {activeTab === 'album_demos' && (
           <div id="album-demos-module" className="space-y-4 animate-fadeIn">
-            {/* Compact 2-Column Grid of Demo Album Cards: 2026, 2025, 2024, 2023 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
               {[
-                { year: 2026, defaultId: 'crownfield-law-2026', name: 'Apex — Class of 2026', slogan: 'At the Pinnacle of Honor', status: 'Valedictory Graduating Set' },
-                { year: 2025, defaultId: 'crownfield-law-2025', name: 'Frontiers — Class of 2025', slogan: 'Breaking Boundaries, Shaping Horizons', status: 'Judicial Reform Pioneers' },
-                { year: 2024, defaultId: 'crownfield-law-2024', name: 'Phoenix — Class of 2024', slogan: 'Rising with Tenacity, Reigning in Justice', status: 'Bar Advocacy Cohort' },
-                { year: 2023, defaultId: 'crownfield-law-2023', name: 'Trailblazers — Class of 2023', slogan: 'First to Dare, First to Lead', status: 'Founding Class (Legacy Anchor)' },
+                { year: 2026, defaultId: 'crownfield-law-2026', name: 'Apex — Class of 2026' },
+                { year: 2025, defaultId: 'crownfield-law-2025', name: 'Frontiers — Class of 2025' },
+                { year: 2024, defaultId: 'crownfield-law-2024', name: 'Phoenix — Class of 2024' },
+                { year: 2023, defaultId: 'crownfield-law-2023', name: 'Trailblazers — Class of 2023' },
               ].map((meta) => {
                 const liveSet = sets.find((s) => s.id === meta.defaultId) || CROWNFIELD_PUBLIC_LAW_SETS.find((s) => s.id === meta.defaultId);
                 if (!liveSet) return null;
+
+                const uniLogo = liveSet.institutionLogoUrl || CROWNFIELD_UNIVERSITY.logoUrl;
+                const deptLogo = liveSet.departmentLogoUrl || CROWNFIELD_UNIVERSITY.departments[0]?.logoUrl;
 
                 return (
                   <div
                     key={liveSet.id}
                     id={`demo-card-${liveSet.id}`}
-                    className={`rounded-2xl border overflow-hidden transition-all shadow-md flex flex-col justify-between ${
+                    className={`rounded-2xl border p-4 transition-all shadow-sm flex flex-col justify-between gap-4 ${
                       isLightMode
                         ? 'bg-white border-slate-200 text-slate-900 hover:border-slate-300'
                         : 'bg-[#18181b] border-white/10 text-white hover:border-white/25'
                     }`}
                   >
-                    {/* Compact Card Top: Banner preview with Year & Slogan */}
-                    <div className="relative h-28 w-full bg-zinc-900 overflow-hidden">
-                      <img
-                        src={liveSet.bannerImageUrl}
-                        alt={liveSet.classSetName}
-                        className="w-full h-full object-cover object-center filter brightness-75 hover:scale-105 transition-transform duration-700"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/45 to-transparent" />
-                      <div className="absolute top-2.5 left-3 right-3 flex items-center justify-between gap-2">
-                        <span className="px-2.5 py-0.5 rounded-full bg-black/65 backdrop-blur-md text-[#d4af37] border border-[#d4af37]/40 text-[10px] font-mono-tech font-bold">
+                    <div className="space-y-3">
+                      {/* Logos: First University Logo, then Department Logo on white background */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-10 h-10 rounded-xl bg-white p-1 border border-amber-500/40 shadow-sm flex items-center justify-center shrink-0"
+                            title={liveSet.institutionName}
+                          >
+                            <img
+                              src={uniLogo}
+                              alt={liveSet.institutionName}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
+                          <div
+                            className="w-10 h-10 rounded-xl bg-white p-1 border border-amber-500/40 shadow-sm flex items-center justify-center shrink-0"
+                            title={liveSet.departmentName}
+                          >
+                            <img
+                              src={deptLogo}
+                              alt={liveSet.departmentName}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
+                        </div>
+
+                        <span className="px-2.5 py-0.5 rounded-full bg-[#d4af37]/15 text-[#d4af37] border border-[#d4af37]/30 text-[10px] font-mono-tech font-bold shrink-0">
                           Class of {liveSet.graduationYear}
                         </span>
-                        <span className="px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-md text-white text-[10px] font-mono-tech font-semibold truncate">
-                          {meta.status}
-                        </span>
                       </div>
-                      <div className="absolute bottom-2.5 left-3 right-3">
-                        <h3 className="font-syne font-bold text-base text-white tracking-tight drop-shadow-md truncate">
+
+                      {/* University Name, Department Name, and Class Set Name */}
+                      <div className="space-y-1">
+                        <p className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 truncate">
+                          {liveSet.institutionName}
+                        </p>
+                        <p className={`font-syne font-bold text-xs truncate ${isLightMode ? 'text-slate-700' : 'text-zinc-200'}`}>
+                          {liveSet.departmentName.toUpperCase().startsWith('DEPARTMENT')
+                            ? liveSet.departmentName
+                            : `Department of ${liveSet.departmentName}`}
+                        </p>
+                        <h3 className="font-syne font-extrabold text-sm tracking-tight truncate pt-0.5">
                           {liveSet.classSetName}
                         </h3>
-                        <p className="font-body text-[11px] text-white/80 italic line-clamp-1">
-                          “{liveSet.classSlogan}”
-                        </p>
                       </div>
                     </div>
 
-                    {/* Compact Content Details & Actions */}
-                    <div className="p-3.5 sm:p-4 space-y-3 flex-1 flex flex-col justify-between">
-                      <div className="space-y-2">
-                        {/* Compact 4-Metric Pill Strip */}
-                        <div className="grid grid-cols-4 gap-1.5 text-center">
-                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.students?.length || 20}</p>
-                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Students</p>
-                          </div>
-                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.awards?.length || 6}</p>
-                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Awards</p>
-                          </div>
-                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.memories?.length || 4}</p>
-                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Memories</p>
-                          </div>
-                          <div className={`py-1.5 px-1 rounded-lg border ${isLightMode ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
-                            <p className="font-mono-tech font-bold text-xs text-[#d4af37]">{liveSet.students?.filter((s) => Boolean((s.myStory || s.bio || '').trim())).length || 4}</p>
-                            <p className="font-mono-tech text-[9px] text-zinc-400 uppercase">Stories</p>
-                          </div>
-                        </div>
-
-                        {/* Compact Metadata Summary Line */}
-                        <div className={`px-3 py-2 rounded-xl border text-[11px] flex flex-wrap items-center justify-between gap-x-3 gap-y-1 ${
-                          isLightMode ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-white/5 border-white/10 text-zinc-300'
-                        }`}>
-                          <span className="truncate">
-                            <span className="text-zinc-400">Rep:</span> <span className="font-mono-tech font-medium">{liveSet.classRepName}</span>
-                          </span>
-                          <span className="font-mono-tech text-zinc-400">{liveSet.convocationDate}</span>
-                          <span className="font-mono-tech text-emerald-400 font-bold text-[10px]">Live</span>
-                        </div>
-                      </div>
-
-                      {/* Action Buttons Preserved: Edit Demo Album, View Album, Legacy Wall, Unpublish, Delete */}
-                      <div className="space-y-1.5 pt-1">
-                        <button
-                          type="button"
-                          id={`edit-demo-${liveSet.id}-btn`}
-                          onClick={() => {
-                            setEditingDemoSetId(null);
-                            try {
-                              sessionStorage.setItem(
-                                'kohot_host_return_spot',
-                                JSON.stringify({
-                                  tab: 'album_demos',
-                                  elementId: `demo-card-${liveSet.id}`,
-                                  scrollY: window.scrollY,
-                                })
-                              );
-                            } catch {}
-                            if (onEditDemoAlbum) {
-                              onEditDemoAlbum(liveSet.id);
-                            } else {
-                              setEditingDemoSetId(liveSet.id);
-                            }
-                          }}
-                          className="w-full py-2 px-3 rounded-xl bg-[#d4af37] hover:bg-amber-400 text-black font-syne font-bold text-[11px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>Edit Demo Album (Album Admin Dashboard)</span>
-                        </button>
-
-                        <div className="grid grid-cols-4 gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingDemoSetId(null);
-                              try {
-                                sessionStorage.setItem(
-                                  'kohot_host_return_spot',
-                                  JSON.stringify({
-                                    tab: 'album_demos',
-                                    elementId: `demo-card-${liveSet.id}`,
-                                    scrollY: window.scrollY,
-                                  })
-                                );
-                              } catch {}
-                              onViewDepartmentAlbum(liveSet.id);
-                            }}
-                            className={`py-1.5 px-2 rounded-lg border text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer ${
-                              isLightMode
-                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
-                                : 'bg-white/10 hover:bg-white/20 text-white border-white/15'
-                            }`}
-                          >
-                            <ExternalLink className="w-3 h-3 shrink-0" />
-                            <span className="truncate">View Album</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              try {
-                                sessionStorage.setItem(
-                                  'kohot_host_return_spot',
-                                  JSON.stringify({
-                                    tab: 'album_demos',
-                                    elementId: `demo-card-${liveSet.id}`,
-                                    scrollY: window.scrollY,
-                                  })
-                                );
-                              } catch {}
-                              if (onViewDepartmentLegacyWall) {
-                                onViewDepartmentLegacyWall('dept-crownfield-public-law', 'crownfield');
-                              } else {
-                                onViewDepartmentAlbum(liveSet.id);
-                              }
-                            }}
-                            className={`py-1.5 px-2 rounded-lg border text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer ${
-                              isLightMode
-                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
-                                : 'bg-white/10 hover:bg-white/20 text-white border-white/15'
-                            }`}
-                          >
-                            <Layers className="w-3 h-3 shrink-0" />
-                            <span className="truncate">Legacy Wall</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleHostToggleUnpublish(liveSet.id)}
-                            className={`py-1.5 px-2 rounded-lg border text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer ${
-                              liveSet.isUnpublished
-                                ? 'bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border-amber-400/30 font-bold'
-                                : isLightMode
-                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
-                                : 'bg-white/5 hover:bg-white/10 text-zinc-300 border-white/10'
-                            }`}
-                          >
-                            {liveSet.isUnpublished ? (
-                              <Eye className="w-3 h-3 text-amber-400 shrink-0" />
-                            ) : (
-                              <EyeOff className="w-3 h-3 text-zinc-400 shrink-0" />
-                            )}
-                            <span className="truncate">{liveSet.isUnpublished ? 'Republish' : 'Unpublish'}</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleStartDeleteAlbum(liveSet, false)}
-                            className="py-1.5 px-2 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-mono-tech uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3 h-3 text-red-400 shrink-0" />
-                            <span className="truncate">Delete</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <button
+                      type="button"
+                      id={`edit-demo-${liveSet.id}-btn`}
+                      onClick={() => {
+                        setEditingDemoSetId(null);
+                        try {
+                          sessionStorage.setItem(
+                            'kohot_host_return_spot',
+                            JSON.stringify({
+                              tab: 'album_demos',
+                              elementId: `demo-card-${liveSet.id}`,
+                              scrollY: window.scrollY,
+                            })
+                          );
+                        } catch {}
+                        if (onEditDemoAlbum) {
+                          onEditDemoAlbum(liveSet.id);
+                        } else {
+                          setEditingDemoSetId(liveSet.id);
+                        }
+                      }}
+                      className="w-full py-2 px-3 rounded-xl bg-[#d4af37] hover:bg-amber-400 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                    >
+                      <span>Manage</span>
+                    </button>
                   </div>
                 );
               })}
@@ -1529,11 +1429,18 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                   className="px-3 py-2 rounded-xl bg-[#0e1017] border border-white/12 text-white font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none cursor-pointer shrink-0"
                 >
                   <option value="all">All Institutions ({universities.length})</option>
-                  {universities.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.shortCode} - {u.name}
-                    </option>
-                  ))}
+                  {[...universities]
+                    .sort((a, b) => {
+                      const aPriority = a.isPriority ? 1 : 0;
+                      const bPriority = b.isPriority ? 1 : 0;
+                      if (aPriority !== bPriority) return bPriority - aPriority;
+                      return a.name.localeCompare(b.name);
+                    })
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.isPriority ? '★ ' : ''}{u.name} ({u.shortCode})
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -3507,6 +3414,8 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             ========================================================================= */}
         {activeTab === 'testimonials' && (
           <MasterTestimonialsSection
+            sets={liveSets}
+            universities={universities}
             contentOverride={contentOverride}
             onUpdateContentOverride={(partial) => onUpdateContentOverride({ ...contentOverride, ...partial })}
           />

@@ -257,24 +257,68 @@ export async function requestGoogleSignupToken(
   }
 }
 
+export interface ResolvedCohortPricing {
+  kind: 'standard' | 'funding' | 'discount';
+  standardPriceKobo: number;
+  listPriceKobo?: number;
+  effectivePriceKobo: number;
+  discountPercent: number;
+  discountKobo: number;
+  programmeId: string | null;
+  programmeName: string | null;
+  sponsorName: string | null;
+  showRecognition: boolean;
+  coverageMode: 'all' | 'per_album_cap' | null;
+  coverageCap: number;
+  coverageUsed: number;
+  coverageRemaining: number;
+  isCovered: boolean;
+  coverageExhausted: boolean;
+  validFrom: string | null;
+  validTo: string | null;
+  expiresBeforeGraduation: boolean;
+  institutionId?: string;
+  departmentId?: string;
+  graduationYear?: number;
+  albumId?: string | null;
+}
+
 /**
- * GET /api/config - Public payment & fee configuration
+ * GET /api/config - Public payment & fee configuration (optionally with cohort pricing resolution)
  */
-export async function fetchPublicPaymentConfig(): Promise<{
+export async function fetchPublicPaymentConfig(params?: {
+  albumId?: string;
+  institutionId?: string;
+  departmentId?: string;
+  graduationYear?: number;
+}): Promise<{
   paystackPublicKey: string;
   mode: 'live' | 'test' | 'unconfigured';
   studentFeeKobo: number;
   slotFeeKobo: number;
+  resolvedPricing?: ResolvedCohortPricing | null;
 }> {
   try {
-    const res = await fetch('/api/config', { credentials: 'include' });
+    const qs = new URLSearchParams();
+    if (params?.albumId) qs.set('albumId', params.albumId);
+    if (params?.institutionId) qs.set('institutionId', params.institutionId);
+    if (params?.departmentId) qs.set('departmentId', params.departmentId);
+    if (params?.graduationYear) qs.set('graduationYear', String(params.graduationYear));
+    const url = qs.toString() ? `/api/config?${qs.toString()}` : '/api/config';
+    const res = await fetch(url, { credentials: 'include' });
     if (res.ok) {
       const data = await res.json();
+      const stdKobo = Number(data.studentFeeKobo) || 50000;
+      const effKobo =
+        data.resolvedPricing && typeof data.resolvedPricing.effectivePriceKobo === 'number'
+          ? Number(data.resolvedPricing.effectivePriceKobo)
+          : stdKobo;
       return {
         paystackPublicKey: (data.paystackPublicKey || '').trim(),
         mode: data.mode || 'unconfigured',
-        studentFeeKobo: Number(data.studentFeeKobo) || 50000,
-        slotFeeKobo: Number(data.slotFeeKobo) || 50000,
+        studentFeeKobo: stdKobo,
+        slotFeeKobo: effKobo > 0 ? effKobo : stdKobo,
+        resolvedPricing: data.resolvedPricing || null,
       };
     }
   } catch {}
@@ -283,6 +327,51 @@ export async function fetchPublicPaymentConfig(): Promise<{
     mode: 'unconfigured',
     studentFeeKobo: 50000,
     slotFeeKobo: 50000,
+    resolvedPricing: null,
+  };
+}
+
+/**
+ * GET /api/pricing/resolve - Resolve server-side cohort pricing
+ */
+export async function resolveCohortPricingFromServer(params: {
+  albumId?: string;
+  institutionId?: string;
+  departmentId?: string;
+  graduationYear?: number;
+}): Promise<ResolvedCohortPricing> {
+  try {
+    const qs = new URLSearchParams();
+    if (params.albumId) qs.set('albumId', params.albumId);
+    if (params.institutionId) qs.set('institutionId', params.institutionId);
+    if (params.departmentId) qs.set('departmentId', params.departmentId);
+    if (params.graduationYear) qs.set('graduationYear', String(params.graduationYear));
+    const res = await fetch(`/api/pricing/resolve?${qs.toString()}`, { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.pricing) return data.pricing as ResolvedCohortPricing;
+    }
+  } catch {}
+  const fallbackFee = getLocalPlatformSettingsFallback().student_fee_kobo || 50000;
+  return {
+    kind: 'standard',
+    standardPriceKobo: fallbackFee,
+    effectivePriceKobo: fallbackFee,
+    discountPercent: 0,
+    discountKobo: 0,
+    programmeId: null,
+    programmeName: null,
+    sponsorName: null,
+    showRecognition: false,
+    coverageMode: null,
+    coverageCap: 0,
+    coverageUsed: 0,
+    coverageRemaining: 0,
+    isCovered: false,
+    coverageExhausted: false,
+    validFrom: null,
+    validTo: null,
+    expiresBeforeGraduation: false,
   };
 }
 
@@ -1237,6 +1326,7 @@ export async function fetchAlbumSlotBalanceOnServer(albumId: string): Promise<{
   ledger: any[];
   purchases: any[];
   settings?: Record<string, string>;
+  pricing?: ResolvedCohortPricing;
 }> {
   try {
     const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/slots/balance`, {
@@ -1252,6 +1342,7 @@ export async function fetchAlbumSlotBalanceOnServer(albumId: string): Promise<{
         ledger: Array.isArray(data.ledger) ? data.ledger : [],
         purchases: Array.isArray(data.purchases) ? data.purchases : [],
         settings: data.settings,
+        pricing: data.pricing,
       };
     }
   } catch {}
@@ -1811,6 +1902,292 @@ export async function fetchPublicDirectoryFromServer(): Promise<{
     enabled: Boolean(fallbackSettings.public_directory_enabled),
     albums: [],
   };
+}
+
+// ============================================================================
+// HOST COHORT OFFERS & PROGRAMMES MANAGER API HELPERS
+// ============================================================================
+
+export interface OfferProgramme {
+  id: string;
+  name: string;
+  kind: 'funding' | 'discount';
+  discountPercent: number | null;
+  coverageMode: 'all' | 'per_album_cap' | null;
+  coverageCap: number | null;
+  sponsorName: string;
+  showRecognition: boolean;
+  validFrom: string | null;
+  validTo: string | null;
+  status: 'active' | 'paused';
+  usedDepartmentsCount: number;
+  usedCohortsCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CohortAllocationItem {
+  id: string;
+  institutionId: string;
+  departmentId: string;
+  graduationYear: number;
+  programmeId: string;
+  programme: OfferProgramme | null;
+  assignedBy?: string;
+  assignedAt?: string;
+  note?: string;
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const token = localStorage.getItem('kohot_session_token') || '';
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  } catch {}
+  return headers;
+}
+
+export async function fetchOfferProgrammesFromServer(): Promise<{
+  success: boolean;
+  programmes: OfferProgramme[];
+  standardPriceKobo: number;
+}> {
+  try {
+    const res = await fetch('/api/admin/offers/programmes', {
+      headers: getAuthHeaders(),
+      credentials: 'include',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        programmes: Array.isArray(data.programmes) ? data.programmes : [],
+        standardPriceKobo: Number(data.standardPriceKobo) || 50000,
+      };
+    }
+  } catch {}
+  return {
+    success: false,
+    programmes: [],
+    standardPriceKobo: getLocalPlatformSettingsFallback().student_fee_kobo || 50000,
+  };
+}
+
+export async function createOfferProgrammeOnServer(payload: {
+  name: string;
+  kind: 'funding' | 'discount';
+  discountPercent?: number | null;
+  coverageMode?: 'all' | 'per_album_cap' | null;
+  coverageCap?: number | null;
+  sponsorName?: string;
+  showRecognition?: boolean;
+  validFrom?: string | null;
+  validTo?: string | null;
+}): Promise<{
+  success: boolean;
+  programme?: OfferProgramme;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/offers/programmes', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.programme) {
+      return { success: true, programme: data.programme };
+    }
+    return { success: false, error: data.error || 'Could not create programme.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while creating programme.' };
+  }
+}
+
+export async function updateOfferProgrammeOnServer(
+  id: string,
+  payload: Partial<{
+    name: string;
+    kind: 'funding' | 'discount';
+    discountPercent: number | null;
+    coverageMode: 'all' | 'per_album_cap' | null;
+    coverageCap: number | null;
+    sponsorName: string;
+    showRecognition: boolean;
+    validFrom: string | null;
+    validTo: string | null;
+    status: 'active' | 'paused';
+  }>
+): Promise<{
+  success: boolean;
+  programme?: OfferProgramme;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/admin/offers/programmes/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.programme) {
+      return { success: true, programme: data.programme };
+    }
+    return { success: false, error: data.error || 'Could not update programme.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while updating programme.' };
+  }
+}
+
+export async function deleteOfferProgrammeOnServer(id: string): Promise<{
+  success: boolean;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch(`/api/admin/offers/programmes/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      return { success: true };
+    }
+    return {
+      success: false,
+      error: data.error || 'Could not delete programme.',
+      message: data.message || data.error,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while deleting programme.' };
+  }
+}
+
+export async function fetchCohortOffersFromServer(
+  paramsOrInstId?: { institutionId?: string; year?: number } | string,
+  yearArg?: number
+): Promise<{
+  success: boolean;
+  allocations: CohortAllocationItem[];
+  albums: Array<{
+    id: string;
+    institutionId: string;
+    departmentId: string;
+    graduationYear: number;
+    status: 'draft' | 'published';
+  }>;
+  availableYears: number[];
+  standardPriceKobo: number;
+}> {
+  try {
+    const params =
+      typeof paramsOrInstId === 'string'
+        ? { institutionId: paramsOrInstId, year: yearArg }
+        : paramsOrInstId || {};
+    const qs = new URLSearchParams();
+    if (params.institutionId) qs.set('institutionId', params.institutionId);
+    if (params.year) qs.set('year', String(params.year));
+    const res = await fetch(`/api/admin/offers/cohorts?${qs.toString()}`, {
+      headers: getAuthHeaders(),
+      credentials: 'include',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        allocations: Array.isArray(data.allocations) ? data.allocations : [],
+        albums: Array.isArray(data.albums) ? data.albums : [],
+        availableYears: Array.isArray(data.availableYears) ? data.availableYears : [new Date().getFullYear()],
+        standardPriceKobo: Number(data.standardPriceKobo) || 50000,
+      };
+    }
+  } catch {}
+  return {
+    success: false,
+    allocations: [],
+    albums: [],
+    availableYears: [new Date().getFullYear(), 2026, 2025, 2024],
+    standardPriceKobo: getLocalPlatformSettingsFallback().student_fee_kobo || 50000,
+  };
+}
+
+export async function bulkUpdateCohortOffersOnServer(payload: {
+  institutionId: string;
+  graduationYear: number;
+  departmentIds: string[];
+  action: 'assign' | 'remove';
+  programmeId?: string;
+  note?: string;
+}): Promise<{
+  success: boolean;
+  count?: number;
+  results?: Array<{
+    departmentId: string;
+    status: 'assigned' | 'removed' | 'unchanged';
+    programmeId: string | null;
+    programmeName: string | null;
+    effectiveKind: 'funding' | 'discount' | 'standard';
+  }>;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/offers/cohorts/bulk', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return {
+        success: true,
+        count: data.count,
+        results: data.results,
+      };
+    }
+    return { success: false, error: data.error || 'Bulk update failed.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error during bulk update.' };
+  }
+}
+
+export async function copyCohortOffersFromYearOnServer(payload: {
+  institutionId: string;
+  fromYear: number;
+  toYear: number;
+}): Promise<{
+  success: boolean;
+  copiedCount?: number;
+  results?: Array<{ departmentId: string; programmeId: string; programmeName: string }>;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/offers/cohorts/copy-year', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return {
+        success: true,
+        copiedCount: data.copiedCount,
+        results: data.results,
+      };
+    }
+    return {
+      success: false,
+      error: data.error || 'Could not copy offers.',
+      message: data.message || data.error,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while copying offers.' };
+  }
 }
 
 

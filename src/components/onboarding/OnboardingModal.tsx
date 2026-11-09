@@ -132,13 +132,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   const lockedRelayYear = inviteContext ? inviteContext.targetYear : undefined;
 
-  // Sorted institutions: Priority ones first, then regular order
+  // Sorted institutions: Priority ones first, then alphabetically by name
   const sortedInstitutions = useMemo(() => {
     return [...universities].sort((a, b) => {
       const aPriority = a.isPriority ? 1 : 0;
       const bPriority = b.isPriority ? 1 : 0;
       if (aPriority !== bPriority) return bPriority - aPriority;
-      return (a.orderNumber || 99) - (b.orderNumber || 99);
+      return a.name.localeCompare(b.name);
     });
   }, [universities]);
 
@@ -595,6 +595,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       institutionLogoUrl: currentUni.logoUrl,
       departmentId: selectedDepartmentId,
       departmentName: selectedDepartmentName,
+      departmentLogoUrl: currentDeptItem?.logoUrl || currentUni.logoUrl,
       faculty: currentDeptItem?.faculty || 'General Faculty',
       graduationYear: Number(graduationYear),
       classSetName: effectiveSetName,
@@ -695,7 +696,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         return;
       }
 
-      const persistedAlbum = serverRes.album || newAlbumSet;
+      const persistedAlbum: ClassSet = serverRes.album
+        ? {
+            ...newAlbumSet,
+            ...serverRes.album,
+            institutionId: serverRes.album.institutionId || newAlbumSet.institutionId,
+            institutionName: serverRes.album.institutionName || newAlbumSet.institutionName,
+            institutionLogoUrl: serverRes.album.institutionLogoUrl || newAlbumSet.institutionLogoUrl,
+            departmentId: serverRes.album.departmentId || newAlbumSet.departmentId,
+            departmentName: serverRes.album.departmentName || newAlbumSet.departmentName,
+            departmentLogoUrl: serverRes.album.departmentLogoUrl || newAlbumSet.departmentLogoUrl,
+          }
+        : newAlbumSet;
       const persistedUser = serverRes.user || effectiveAdmin;
 
       const freeTx: FinancialTransaction = {
@@ -931,27 +943,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                                 />
                               </svg>
                               <span>Sign up with Google</span>
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={activeOAuthProvider !== null}
-                          onClick={() => handleOAuthVerify('apple')}
-                          className="w-full py-3.5 px-5 rounded-xl bg-[var(--kh-surface)] hover:bg-[var(--kh-bg)] active:scale-[0.99] border border-[var(--kh-border)] text-[var(--kh-text)] font-syne font-bold text-sm tracking-tight flex items-center justify-center gap-3 transition-all shadow-xs cursor-pointer disabled:opacity-60"
-                        >
-                          {activeOAuthProvider === 'apple' ? (
-                            <>
-                              <Loader2 className="w-5 h-5 text-[var(--kh-text)] animate-spin shrink-0" />
-                              <span>Connecting to Apple...</span>
-                            </>
-                          ) : (
-                            <>
-                              <svg className="w-5 h-5 fill-current shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                                <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z" />
-                              </svg>
-                              <span>Continue with Apple</span>
                             </>
                           )}
                         </button>

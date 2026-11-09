@@ -479,14 +479,60 @@ export default function App() {
       }
 
       if (instRes.success && instRes.institutions.length > 0) {
-        setUniversities(instRes.institutions);
+        const baseUnis = getStoredUniversities();
+        const d1Map = new Map(instRes.institutions.map((u) => [u.id, u]));
+        const mergedUnis: UniversityDirectoryItem[] = baseUnis.map((baseUni) => {
+          const d1Uni = d1Map.get(baseUni.id);
+          if (!d1Uni) return baseUni;
+          d1Map.delete(baseUni.id);
+          const baseDeptMap = new Map(baseUni.departments.map((d) => [d.id, d]));
+          const d1Depts = Array.isArray(d1Uni.departments) ? d1Uni.departments : [];
+          // Merge D1 department state (connected albums, plaque status, custom uploaded logos) without re-adding old cloned departments
+          for (const dept of d1Depts) {
+            const existing = baseDeptMap.get(dept.id);
+            const hasCustomLogo =
+              dept.logoUrl &&
+              !String(dept.logoUrl).includes('images.unsplash.com') &&
+              !String(dept.logoUrl).startsWith('data:image/svg+xml');
+            if (existing) {
+              baseDeptMap.set(dept.id, {
+                ...existing,
+                ...dept,
+                name: existing.name || dept.name,
+                faculty: existing.faculty || dept.faculty,
+                heroImageUrl: existing.heroImageUrl || dept.heroImageUrl,
+                logoUrl: hasCustomLogo ? dept.logoUrl : existing.logoUrl,
+              });
+            } else if (Array.isArray(dept.connectedClassAlbumIds) && dept.connectedClassAlbumIds.length > 0) {
+              baseDeptMap.set(dept.id, {
+                ...dept,
+                logoUrl: hasCustomLogo ? dept.logoUrl : baseUni.logoUrl,
+              });
+            }
+          }
+          const cleanUniLogo =
+            d1Uni.logoUrl && !String(d1Uni.logoUrl).includes('images.unsplash.com')
+              ? d1Uni.logoUrl
+              : undefined;
+          return {
+            ...baseUni,
+            ...d1Uni,
+            logoUrl: baseUni.logoUrl || cleanUniLogo,
+            departments: Array.from(baseDeptMap.values()),
+            faculties: baseUni.faculties && baseUni.faculties.length > 0 ? baseUni.faculties : d1Uni.faculties,
+          };
+        });
+        for (const extraUni of d1Map.values()) {
+          mergedUnis.push(extraUni);
+        }
+        setUniversities(mergedUnis);
       }
 
       if (siteRes.success && siteRes.content) {
         setContentOverride((prev) => ({ ...prev, ...siteRes.content }));
       }
 
-      if (testRes.success) {
+      if (testRes.success && Array.isArray(testRes.testimonials) && testRes.testimonials.length > 0) {
         saveStoredTestimonials(testRes.testimonials);
       }
 
@@ -713,8 +759,14 @@ export default function App() {
       });
     }
 
-    // If the album is published/active, ensure its department in the university directory links it so it appears on the department's Legacy Wall
-    if ((updatedSet.isPublished || updatedSet.published || updatedSet.activationStatus === 'active') && !updatedSet.isUnpublished && !updatedSet.unpublished && !updatedSet.deletedAt) {
+    // Sync departmentLogoUrl (even in draft mode) and published/active status to the department in universities directory
+    const isPublishedOrActive =
+      (updatedSet.isPublished || updatedSet.published || updatedSet.activationStatus === 'active') &&
+      !updatedSet.isUnpublished &&
+      !updatedSet.unpublished &&
+      !updatedSet.deletedAt;
+
+    if (isPublishedOrActive || Boolean(updatedSet.departmentLogoUrl)) {
       let uniChanged = false;
       const updatedUnis = universities.map((u) => {
         if (u.id !== updatedSet.institutionId && u.id !== updatedSet.universityId) return u;
@@ -733,19 +785,23 @@ export default function App() {
                 d.name.toLowerCase().trim() === (updatedSet.departmentName || '').toLowerCase().trim()
               ) {
                 const connected = d.connectedClassAlbumIds || [];
-                if (!connected.includes(updatedSet.id)) {
+                const needsConnect = isPublishedOrActive && !connected.includes(updatedSet.id);
+                const needsLogoUpdate =
+                  Boolean(updatedSet.departmentLogoUrl) && d.logoUrl !== updatedSet.departmentLogoUrl;
+                if (needsConnect || needsLogoUpdate) {
                   uniChanged = true;
                   return {
                     ...d,
-                    legacy_status: 'established' as const,
-                    connectedClassAlbumIds: [...connected, updatedSet.id],
+                    logoUrl: updatedSet.departmentLogoUrl || d.logoUrl,
+                    legacy_status: isPublishedOrActive ? ('established' as const) : d.legacy_status,
+                    connectedClassAlbumIds: needsConnect ? [...connected, updatedSet.id] : connected,
                   };
                 }
               }
               return d;
             }),
           };
-        } else if (updatedSet.departmentId && updatedSet.departmentName) {
+        } else if (isPublishedOrActive && updatedSet.departmentId && updatedSet.departmentName) {
           uniChanged = true;
           const newDept: DepartmentItem = {
             id: updatedSet.departmentId,
@@ -1001,6 +1057,19 @@ export default function App() {
         );
       } catch {}
     } else if (user.role === 'class_rep' && user.assignedSetId) {
+      const repSet = sets.find(
+        (s) =>
+          s.id === user.assignedSetId ||
+          (user.email && s.classRepEmail?.toLowerCase().trim() === user.email.toLowerCase().trim())
+      );
+      if (repSet) {
+        if (repSet.institutionId || repSet.universityId) {
+          setSelectedUniversityId(repSet.institutionId || repSet.universityId!);
+        }
+        if (repSet.departmentId) {
+          setSelectedDepartmentId(repSet.departmentId);
+        }
+      }
       setCurrentUser(user);
       setAlbumOriginView('layer1_rep');
       setSelectedSetId(user.assignedSetId);
@@ -1014,18 +1083,46 @@ export default function App() {
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = async (explicitSet?: ClassSet) => {
+    const wasClassRep = currentUser?.role === 'class_rep' || Boolean(explicitSet);
+    const repSet =
+      explicitSet ||
+      (currentUser?.assignedSetId && sets.find((s) => s.id === currentUser.assignedSetId)) ||
+      (currentUser?.email &&
+        sets.find((s) => s.classRepEmail?.toLowerCase().trim() === currentUser.email.toLowerCase().trim())) ||
+      (selectedSetId && sets.find((s) => s.id === selectedSetId)) ||
+      null;
+    const targetDeptId = repSet?.departmentId || selectedDepartmentId;
+    const targetUniId = repSet?.institutionId || repSet?.universityId || selectedUniversityId;
+
     try {
       localStorage.removeItem('kohot_current_user');
       localStorage.removeItem('kohot_active_dashboard_state');
     } catch {}
+
+    setCurrentUser(null);
+
+    if (wasClassRep) {
+      if (targetUniId) setSelectedUniversityId(targetUniId);
+      if (targetDeptId) setSelectedDepartmentId(targetDeptId);
+      setAlbumOriginView('albums_grid');
+      setActiveView('albums_grid');
+      window.history.pushState(
+        null,
+        '',
+        targetDeptId ? `#department/${targetDeptId}` : '#legacy-wall'
+      );
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    } else {
+      setAlbumOriginView('landing');
+      setActiveView('landing');
+      window.history.pushState(null, '', '#home');
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
+
     try {
       await logoutSession();
     } catch {}
-    setCurrentUser(null);
-    setAlbumOriginView('landing');
-    setActiveView('landing');
-    window.history.pushState(null, '', '#home');
   };
 
   // Registration of new set via strictly unalterable directory
@@ -1473,9 +1570,6 @@ export default function App() {
             }}
             onLogout={handleLogout}
             onBackToLanding={() => {
-              if (currentUser?.role === 'master_host' || currentUser?.role === 'class_rep') {
-                return;
-              }
               setInviteContext(null);
               setActiveView('landing');
               window.history.pushState(null, '', '#home');
@@ -1534,7 +1628,7 @@ export default function App() {
                     setAlbumOriginView(currentUser.role === 'master_host' ? 'layer0_master' : 'layer1_rep');
                     setActiveView('department_album');
                   }}
-                  onSwitchRole={() => handleLogout()}
+                  onSwitchRole={() => handleLogout(activeSetForRep)}
                   onBackToLanding={() => {
                     if (currentUser.role === 'master_host') {
                       setActiveView('layer0_master');

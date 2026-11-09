@@ -57,6 +57,7 @@ import {
   submitStudentProfileOnServer,
   fetchInviteUploadTokenFromServer,
   fetchPublicPaymentConfig,
+  ResolvedCohortPricing,
 } from '../../utils/apiClient';
 import { PaystackModal } from '../common/PaystackModal';
 
@@ -114,6 +115,8 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [inviteToken, setInviteToken] = useState('');
   const [studentFeeNgn, setStudentFeeNgn] = useState<number>(500);
+  const [standardFeeNgn, setStandardFeeNgn] = useState<number>(500);
+  const [resolvedPricing, setResolvedPricing] = useState<ResolvedCohortPricing | null>(null);
   const [compressionInfo, setCompressionInfo] = useState<CompressionResult | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isCompressingSecondary, setIsCompressingSecondary] = useState(false);
@@ -302,9 +305,21 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
     fetchInviteUploadTokenFromServer(currentSet.id).then((t) => {
       if (t) setInviteToken(t);
     });
-    fetchPublicPaymentConfig().then((cfg) => {
+    fetchPublicPaymentConfig({
+      albumId: currentSet.id,
+      institutionId: currentSet.institutionId || currentSet.universityId,
+      departmentId: currentSet.departmentId,
+      graduationYear: currentSet.graduationYear,
+    }).then((cfg) => {
       if (cfg.studentFeeKobo > 0) {
-        setStudentFeeNgn(Math.round(cfg.studentFeeKobo / 100));
+        const stdNgn = Math.round(cfg.studentFeeKobo / 100);
+        setStandardFeeNgn(stdNgn);
+        setStudentFeeNgn(stdNgn);
+      }
+      if (cfg.resolvedPricing) {
+        setResolvedPricing(cfg.resolvedPricing);
+        setStandardFeeNgn(Math.round((cfg.resolvedPricing.standardPriceKobo || cfg.resolvedPricing.listPriceKobo || cfg.studentFeeKobo || 50000) / 100));
+        setStudentFeeNgn(Math.round((cfg.resolvedPricing.effectivePriceKobo ?? cfg.studentFeeKobo ?? 50000) / 100));
       }
     });
 
@@ -769,19 +784,27 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                 {!(entryMode === 'edit' && selectedEditStudent) && (
                   <span
                     className={`px-3 py-1 rounded-full text-[11px] font-mono-tech uppercase font-bold border ${
-                      submissionPaymentStatus === 'paid'
+                      submissionPaymentStatus === 'paid' ||
+                      (resolvedPricing?.kind === 'funding' && resolvedPricing.isCovered)
                         ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
                         : 'bg-amber-500/15 border-amber-500/30 text-amber-800 dark:text-amber-300'
                     }`}
                   >
-                    Payment: {submissionPaymentStatus === 'paid' ? 'Paid' : `Unpaid (₦${studentFeeNgn.toLocaleString()})`}
+                    {resolvedPricing?.kind === 'funding' && resolvedPricing.isCovered
+                      ? `Free, sponsored by ${resolvedPricing.sponsorName || 'KoHot'}`
+                      : submissionPaymentStatus === 'paid'
+                      ? 'Payment: Paid'
+                      : `Payment: Unpaid (₦${studentFeeNgn.toLocaleString()})`}
                   </span>
                 )}
               </div>
             </div>
 
             <div className="pt-2 flex flex-col items-center gap-3 w-full max-w-xs mx-auto">
-              {!(entryMode === 'edit' && selectedEditStudent) && submissionPaymentStatus !== 'paid' && activeSubmissionId && (
+              {!(entryMode === 'edit' && selectedEditStudent) &&
+                submissionPaymentStatus !== 'paid' &&
+                !(resolvedPricing?.kind === 'funding' && resolvedPricing.isCovered) &&
+                activeSubmissionId && (
                 <button
                   type="button"
                   onClick={() => setIsPaystackOpen(true)}
@@ -2222,43 +2245,87 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                   </div>
                 ) : (
                   <>
-                    {/* Student Fee Notice (Price from settings, never slot counts) */}
-                    <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 flex items-center justify-between text-xs">
+                    {/* Student Fee Notice (Server-resolved price) */}
+                    <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 flex items-center justify-between gap-3 text-xs">
                       <span className="font-mono-tech text-slate-600 dark:text-slate-400">
                         Student Profile Publishing Fee
                       </span>
-                      <span className="font-syne font-bold text-sm text-emerald-600 dark:text-emerald-400">
-                        ₦{studentFeeNgn.toLocaleString()}
-                      </span>
+                      {resolvedPricing?.kind === 'funding' && resolvedPricing.isCovered ? (
+                        <div className="flex items-center gap-2">
+                          <span className="line-through font-mono-tech text-xs text-slate-400">
+                            ₦{standardFeeNgn.toLocaleString()}
+                          </span>
+                          <span className="font-syne font-bold text-sm text-emerald-600 dark:text-emerald-400">
+                            Free, sponsored by {resolvedPricing.sponsorName || 'KoHot'}
+                          </span>
+                        </div>
+                      ) : resolvedPricing?.kind === 'discount' ? (
+                        <div className="flex items-center gap-2">
+                          <span className="line-through font-mono-tech text-xs text-slate-400">
+                            ₦{standardFeeNgn.toLocaleString()}
+                          </span>
+                          <span className="font-syne font-bold text-sm text-amber-600 dark:text-amber-400">
+                            ₦{studentFeeNgn.toLocaleString()} ({resolvedPricing.discountPercent}% off)
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="font-syne font-bold text-sm text-emerald-600 dark:text-emerald-400">
+                          ₦{studentFeeNgn.toLocaleString()}
+                        </span>
+                      )}
                     </div>
 
-                    {/* Step 2 Actions: Pay now at the top, Submit Anyway + short subtext underneath */}
+                    {/* Step 2 Actions */}
                     <div className="space-y-3 pt-2">
-                      <button
-                        id="step2-pay-now-btn"
-                        type="button"
-                        disabled={isSubmittingServer}
-                        onClick={() => handleSubmit(true)}
-                        className="w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-syne font-bold text-sm uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 active:scale-98"
-                      >
-                        <span>Pay now (₦{studentFeeNgn.toLocaleString()})</span>
-                      </button>
+                      {resolvedPricing?.kind === 'funding' && resolvedPricing.isCovered ? (
+                        <button
+                          id="step2-submit-funded-btn"
+                          type="button"
+                          disabled={isSubmittingServer}
+                          onClick={() => handleSubmit(false)}
+                          className="w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-syne font-bold text-sm uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 active:scale-98"
+                        >
+                          <span>
+                            {isSubmittingServer
+                              ? 'Submitting...'
+                              : `Submit Profile (Free, sponsored by ${resolvedPricing.sponsorName || 'KoHot'})`}
+                          </span>
+                          <Send className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            id="step2-pay-now-btn"
+                            type="button"
+                            disabled={isSubmittingServer}
+                            onClick={() => handleSubmit(true)}
+                            className="w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-syne font-bold text-sm uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 active:scale-98"
+                          >
+                            {resolvedPricing?.kind === 'discount' && (
+                              <span className="line-through font-mono-tech text-xs text-emerald-200/80">
+                                ₦{standardFeeNgn.toLocaleString()}
+                              </span>
+                            )}
+                            <span>Pay now (₦{studentFeeNgn.toLocaleString()})</span>
+                          </button>
 
-                      <button
-                        id="step2-submit-anyway-btn"
-                        type="button"
-                        disabled={isSubmittingServer}
-                        onClick={() => handleSubmit(false)}
-                        className="w-full py-3 px-5 rounded-2xl bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-300 dark:border-neutral-700 text-slate-900 dark:text-white transition-all cursor-pointer shadow-xs flex flex-col items-center justify-center gap-1 active:scale-98"
-                      >
-                        <span className="font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-1.5">
-                          <span>{isSubmittingServer ? 'Submitting...' : 'Submit Anyway'}</span>
-                          <Send className="w-3.5 h-3.5" />
-                        </span>
-                        <span className="font-mono-tech text-[11px] text-amber-700 dark:text-amber-400 font-medium leading-snug text-center">
-                          Only if paid to admin or sponsored — else rejected by admin.
-                        </span>
-                      </button>
+                          <button
+                            id="step2-submit-anyway-btn"
+                            type="button"
+                            disabled={isSubmittingServer}
+                            onClick={() => handleSubmit(false)}
+                            className="w-full py-3 px-5 rounded-2xl bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-300 dark:border-neutral-700 text-slate-900 dark:text-white transition-all cursor-pointer shadow-xs flex flex-col items-center justify-center gap-1 active:scale-98"
+                          >
+                            <span className="font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-1.5">
+                              <span>{isSubmittingServer ? 'Submitting...' : 'Submit Anyway'}</span>
+                              <Send className="w-3.5 h-3.5" />
+                            </span>
+                            <span className="font-mono-tech text-[11px] text-amber-700 dark:text-amber-400 font-medium leading-snug text-center">
+                              Only if paid to admin or sponsored — else rejected by admin.
+                            </span>
+                          </button>
+                        </>
+                      )}
 
                       <button
                         type="button"

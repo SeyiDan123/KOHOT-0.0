@@ -1133,6 +1133,481 @@ export default {
       } catch {}
     };
 
+    let offersSchemaEnsured = false;
+    const ensureCohortOffersSchema = async () => {
+      if (!env.DB || offersSchemaEnsured) return;
+      offersSchemaEnsured = true;
+      try {
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS programmes (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('funding', 'discount')),
+            discount_percent INTEGER CHECK(discount_percent IS NULL OR (discount_percent >= 1 AND discount_percent <= 99)),
+            coverage_mode TEXT CHECK(coverage_mode IS NULL OR coverage_mode IN ('all', 'per_album_cap')),
+            coverage_cap INTEGER,
+            sponsor_name TEXT DEFAULT '',
+            show_recognition INTEGER NOT NULL DEFAULT 1,
+            valid_from TEXT,
+            valid_to TEXT,
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )`
+        ).run();
+      } catch {}
+      try {
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS cohort_allocations (
+            id TEXT PRIMARY KEY,
+            institution_id TEXT NOT NULL,
+            department_id TEXT NOT NULL,
+            graduation_year INTEGER NOT NULL,
+            programme_id TEXT NOT NULL,
+            assigned_by TEXT,
+            assigned_at TEXT NOT NULL DEFAULT (datetime('now')),
+            note TEXT DEFAULT '',
+            UNIQUE(institution_id, department_id, graduation_year)
+          )`
+        ).run();
+      } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN programme_id TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN list_price_kobo INTEGER`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN discount_kobo INTEGER DEFAULT 0`).run(); } catch {}
+
+      // Merge any existing slot_allocations (KoHot slots) into programmes + cohort_allocations so existing rows keep working
+      try {
+        const legacyRes = await env.DB.prepare(`SELECT * FROM slot_allocations`).all();
+        const legacyRows = legacyRes?.results || [];
+        if (legacyRows.length > 0) {
+          const existingProgsRes = await env.DB.prepare(`SELECT * FROM programmes`).all();
+          const existingProgs = existingProgsRes?.results || [];
+          const existingCohortRes = await env.DB.prepare(`SELECT * FROM cohort_allocations`).all();
+          const existingCohorts = existingCohortRes?.results || [];
+
+          for (const row of legacyRows) {
+            const qty = Math.max(0, Number(row.quantity) || 0);
+            if (qty <= 0) continue;
+            const instId = String(row.institution_id || '').trim();
+            const deptId = String(row.department_id || '').trim();
+            const gradYear = Number(row.graduation_year) || new Date().getFullYear();
+            if (!instId || !deptId) continue;
+
+            const alreadyMapped = existingCohorts.some(
+              (c: any) =>
+                String(c.institution_id).toLowerCase() === instId.toLowerCase() &&
+                String(c.department_id).toLowerCase() === deptId.toLowerCase() &&
+                Number(c.graduation_year) === gradYear
+            );
+            if (alreadyMapped) continue;
+
+            const progId = `prog-kohot-alloc-${qty}`;
+            if (!existingProgs.some((p: any) => p.id === progId)) {
+              await env.DB.prepare(
+                `INSERT OR IGNORE INTO programmes (id, name, kind, discount_percent, coverage_mode, coverage_cap, sponsor_name, show_recognition, valid_from, valid_to, status, created_at, updated_at)
+                 VALUES (?, ?, 'funding', NULL, 'per_album_cap', ?, 'KoHot', 1, NULL, NULL, 'active', datetime('now'), datetime('now'))`
+              ).bind(progId, `KoHot Funded Access (${qty} profiles)`, qty).run();
+              existingProgs.push({ id: progId });
+            }
+
+            const callocId = `calloc-${instId}-${deptId}-${gradYear}`;
+            await env.DB.prepare(
+              `INSERT OR IGNORE INTO cohort_allocations (id, institution_id, department_id, graduation_year, programme_id, assigned_by, assigned_at, note)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`
+            ).bind(
+              callocId,
+              instId,
+              deptId,
+              gradYear,
+              progId,
+              String(row.created_by || 'system'),
+              String(row.note || 'Merged from KoHot slot allocation')
+            ).run();
+            existingCohorts.push({
+              id: callocId,
+              institution_id: instId,
+              department_id: deptId,
+              graduation_year: gradYear,
+              programme_id: progId,
+            });
+          }
+        }
+      } catch {}
+    };
+
+    // Syncs a Funding programme's coverage grant into slot_ledger & albumData.sponsors for an existing album
+    const syncAlbumFundingGrant = async (
+      albumRow: any,
+      allocId: string,
+      programme: any | null,
+      targetCap: number,
+      unitValueKobo: number
+    ) => {
+      if (!env.DB || !albumRow || !albumRow.id) return;
+      const albumId = String(albumRow.id);
+      const sponsorName = programme ? String(programme.sponsor_name || 'KoHot').trim() || 'KoHot' : 'KoHot';
+      const showRecognition = programme
+        ? Boolean(Number(programme.show_recognition) !== 0 && programme.show_recognition !== false)
+        : false;
+
+      const ledgerRes = await env.DB.prepare(`SELECT * FROM slot_ledger WHERE album_id = ?`).bind(albumId).all();
+      const ledgerRows = ledgerRes?.results || [];
+      const grantRows = ledgerRows.filter(
+        (l: any) =>
+          l.allocation_id === allocId ||
+          l.kind === 'kohot_allocation' ||
+          l.kind === 'kohot_allocation_adjustment'
+      );
+      const currentGranted = grantRows.reduce((acc: number, r: any) => acc + (Number(r.delta) || 0), 0);
+      const totalUsed = ledgerRows.reduce(
+        (acc: number, r: any) => acc + (Number(r.delta) < 0 ? Math.abs(Number(r.delta)) : 0),
+        0
+      );
+
+      if (programme && programme.kind === 'funding' && targetCap > 0) {
+        if (grantRows.length === 0) {
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+             VALUES (?, ?, ?, 'kohot_allocation', ?, ?, ?, ?, 'system', datetime('now'))`
+          ).bind(
+            `sled-calloc-${allocId}`,
+            albumId,
+            targetCap,
+            allocId,
+            sponsorName,
+            unitValueKobo,
+            `calloc:${allocId}`
+          ).run();
+        } else {
+          // Ensure sponsor_name is up to date on existing grant rows
+          for (const gr of grantRows) {
+            if (gr.sponsor_name !== sponsorName) {
+              await env.DB.prepare(`UPDATE slot_ledger SET sponsor_name = ? WHERE id = ?`)
+                .bind(sponsorName, gr.id)
+                .run();
+            }
+          }
+          const deltaDiff = targetCap - currentGranted;
+          if (deltaDiff !== 0) {
+            await env.DB.prepare(
+              `INSERT INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+               VALUES (?, ?, ?, 'kohot_allocation_adjustment', ?, ?, ?, ?, 'system', datetime('now'))`
+            ).bind(
+              `sled-cadj-${allocId}-${Date.now()}`,
+              albumId,
+              deltaDiff,
+              allocId,
+              sponsorName,
+              unitValueKobo,
+              `calloc-adj:${allocId}:${Date.now()}`
+            ).run();
+          }
+        }
+
+        // Sync sponsor entry into albumRow.data_json so sponsor footer & funded counts keep working
+        try {
+          const albumData = JSON.parse(albumRow.data_json || '{}');
+          const sponsors = Array.isArray(albumData.sponsors) ? [...albumData.sponsors] : [];
+          const existingIdx = sponsors.findIndex(
+            (s: any) => s.id === allocId || s.isKoHotCredit === true || s.reference?.startsWith('KOHOT-ALLOC')
+          );
+          const sponsorEntry = {
+            id: allocId,
+            sponsorName,
+            DisplayLabel: `Sponsored by ${sponsorName}`,
+            quantity: targetCap,
+            amountPaid: 0,
+            reference: `KOHOT-ALLOC-${albumRow.graduation_year || new Date().getFullYear()}`,
+            date: new Date().toISOString().split('T')[0],
+            showSponsorNameOnAlbum: showRecognition,
+            isKoHotCredit: true,
+          };
+          if (existingIdx !== -1) {
+            sponsors[existingIdx] = { ...sponsors[existingIdx], ...sponsorEntry };
+          } else {
+            sponsors.unshift(sponsorEntry);
+          }
+          albumData.sponsors = sponsors;
+          await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+            .bind(JSON.stringify(albumData), albumId)
+            .run();
+        } catch {}
+      } else if (currentGranted > 0) {
+        // Removing funding or switching to discount: remove unused funded grant slots
+        const removable = Math.max(0, currentGranted - totalUsed);
+        if (removable > 0) {
+          await env.DB.prepare(
+            `INSERT INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+             VALUES (?, ?, ?, 'kohot_allocation_adjustment', ?, ?, ?, ?, 'system', datetime('now'))`
+          ).bind(
+            `sled-crem-${allocId}-${Date.now()}`,
+            albumId,
+            -removable,
+            allocId,
+            sponsorName,
+            unitValueKobo,
+            `calloc-rem:${allocId}:${Date.now()}`
+          ).run();
+        }
+        try {
+          const albumData = JSON.parse(albumRow.data_json || '{}');
+          if (Array.isArray(albumData.sponsors)) {
+            albumData.sponsors = albumData.sponsors.filter(
+              (s: any) => s.id !== allocId && !s.isKoHotCredit
+            );
+            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+              .bind(JSON.stringify(albumData), albumId)
+              .run();
+          }
+        } catch {}
+      }
+    };
+
+    // ============================================================================
+    // SINGLE SERVER-SIDE PRICING PRECEDENCE FUNCTION (resolveCohortPricing)
+    // Precedence:
+    // 1. Active, in-date Funding allocation for (institution_id, department_id, graduation_year)
+    //    (covered while coverage remains; once coverage is used up -> Standard)
+    // 2. Else active, in-date Discount allocation (Standard * (1 - rate), whole kobo)
+    // 3. Else Standard (student_fee_kobo in platform_settings)
+    // ============================================================================
+    const resolveCohortPricing = async (params: {
+      institutionId?: string;
+      departmentId?: string;
+      graduationYear?: number;
+      albumId?: string;
+    }) => {
+      await ensureCohortOffersSchema();
+      const settings = await getPlatformSettingsMap(env);
+      const standardPriceKobo = Number(settings.student_fee_kobo) || 50000;
+      const defaultCap = Number(settings.profile_cap_default) || 200;
+
+      let institutionId = String(params.institutionId || '').trim();
+      let departmentId = String(params.departmentId || '').trim();
+      let graduationYear = Number(params.graduationYear) || 0;
+      let albumId = String(params.albumId || '').trim();
+      let matchedAlbum: any = null;
+
+      if (env.DB) {
+        const setsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
+        const allSets = setsRes?.results || [];
+        if (albumId) {
+          matchedAlbum = allSets.find((s: any) => String(s.id) === albumId && s.status !== 'deleted') || null;
+        }
+        if (matchedAlbum) {
+          let parsed: any = {};
+          try { parsed = JSON.parse(matchedAlbum.data_json || '{}'); } catch {}
+          if (!institutionId) institutionId = String(matchedAlbum.institution_id || parsed.institutionId || parsed.universityId || '');
+          if (!departmentId) departmentId = String(matchedAlbum.department_id || parsed.departmentId || '');
+          if (!graduationYear) graduationYear = Number(matchedAlbum.graduation_year || parsed.graduationYear) || 0;
+        } else if (institutionId && departmentId && graduationYear) {
+          matchedAlbum =
+            allSets.find(
+              (s: any) =>
+                String(s.institution_id).toLowerCase() === institutionId.toLowerCase() &&
+                String(s.department_id).toLowerCase() === departmentId.toLowerCase() &&
+                Number(s.graduation_year) === graduationYear &&
+                s.status !== 'deleted'
+            ) || null;
+          if (matchedAlbum && !albumId) {
+            albumId = String(matchedAlbum.id);
+          }
+        }
+      }
+
+      // Demo set fallback for Crownfield Law sets
+      if (albumId && (!institutionId || !departmentId || !graduationYear)) {
+        const lowerAlbum = albumId.toLowerCase();
+        if (lowerAlbum.includes('crownfield-law')) {
+          if (!institutionId) institutionId = 'uni-crownfield';
+          if (!departmentId) departmentId = 'dept-crownfield-law';
+          const yrMatch = lowerAlbum.match(/(20\d{2})$/);
+          if (!graduationYear && yrMatch) graduationYear = Number(yrMatch[1]);
+        }
+      }
+      if (!graduationYear) graduationYear = new Date().getFullYear();
+
+      const standardResult = {
+        kind: 'standard' as 'standard' | 'funding' | 'discount',
+        standardPriceKobo,
+        effectivePriceKobo: standardPriceKobo,
+        discountPercent: 0,
+        discountKobo: 0,
+        programmeId: null as string | null,
+        programmeName: null as string | null,
+        sponsorName: null as string | null,
+        showRecognition: false,
+        coverageMode: null as 'all' | 'per_album_cap' | null,
+        coverageCap: 0,
+        coverageUsed: 0,
+        coverageRemaining: 0,
+        isCovered: false,
+        coverageExhausted: false,
+        validFrom: null as string | null,
+        validTo: null as string | null,
+        expiresBeforeGraduation: false,
+        institutionId,
+        departmentId,
+        graduationYear,
+        albumId: albumId || null,
+      };
+
+      if (!env.DB || !institutionId || !departmentId || !graduationYear) {
+        return standardResult;
+      }
+
+      const allocRes = await env.DB.prepare(`SELECT * FROM cohort_allocations`).all();
+      const allocRow = (allocRes?.results || []).find(
+        (a: any) =>
+          String(a.institution_id).toLowerCase() === institutionId.toLowerCase() &&
+          String(a.department_id).toLowerCase() === departmentId.toLowerCase() &&
+          Number(a.graduation_year) === graduationYear
+      );
+
+      if (!allocRow || !allocRow.programme_id) {
+        return standardResult;
+      }
+
+      const progRow = await env.DB.prepare(`SELECT * FROM programmes WHERE id = ?`)
+        .bind(String(allocRow.programme_id))
+        .first();
+
+      if (!progRow) {
+        return standardResult;
+      }
+
+      const todayLagos = new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 10);
+      const validFrom = progRow.valid_from ? String(progRow.valid_from).slice(0, 10) : null;
+      const validTo = progRow.valid_to ? String(progRow.valid_to).slice(0, 10) : null;
+      const isStatusActive = String(progRow.status || 'active') === 'active';
+      const isAfterStart = !validFrom || todayLagos >= validFrom;
+      const isBeforeEnd = !validTo || todayLagos <= validTo;
+      const isInDateAndActive = isStatusActive && isAfterStart && isBeforeEnd;
+      const expiresBeforeGraduation = Boolean(validTo && validTo < `${graduationYear}-12-31`);
+
+      if (!isInDateAndActive) {
+        return {
+          ...standardResult,
+          expiresBeforeGraduation,
+          validFrom,
+          validTo,
+        };
+      }
+
+      // 1. Active, in-date FUNDING allocation
+      if (progRow.kind === 'funding') {
+        const coverageMode: 'all' | 'per_album_cap' =
+          progRow.coverage_mode === 'all' ? 'all' : 'per_album_cap';
+        const cap =
+          coverageMode === 'all'
+            ? defaultCap
+            : Math.max(1, Math.floor(Number(progRow.coverage_cap) || defaultCap));
+        const sponsorName = String(progRow.sponsor_name || 'KoHot').trim() || 'KoHot';
+        const showRecognition = Boolean(
+          Number(progRow.show_recognition) !== 0 && progRow.show_recognition !== false
+        );
+
+        let usedSlots = 0;
+        if (matchedAlbum) {
+          await syncAlbumFundingGrant(matchedAlbum, String(allocRow.id), progRow, cap, standardPriceKobo);
+          const ledgerRes = await env.DB.prepare(`SELECT delta FROM slot_ledger WHERE album_id = ?`)
+            .bind(matchedAlbum.id)
+            .all();
+          const allLedger = ledgerRes?.results || [];
+          usedSlots = allLedger
+            .filter((l: any) => Number(l.delta) < 0)
+            .reduce((acc: number, l: any) => acc + Math.abs(Number(l.delta)), 0);
+        }
+
+        const coverageUsed = Math.min(cap, usedSlots);
+        const coverageRemaining = Math.max(0, cap - coverageUsed);
+
+        if (coverageRemaining > 0) {
+          return {
+            kind: 'funding' as const,
+            standardPriceKobo,
+            effectivePriceKobo: 0,
+            discountPercent: 100,
+            discountKobo: standardPriceKobo,
+            programmeId: String(progRow.id),
+            programmeName: String(progRow.name),
+            sponsorName,
+            showRecognition,
+            coverageMode,
+            coverageCap: cap,
+            coverageUsed,
+            coverageRemaining,
+            isCovered: true,
+            coverageExhausted: false,
+            validFrom,
+            validTo,
+            expiresBeforeGraduation,
+            institutionId,
+            departmentId,
+            graduationYear,
+            albumId: albumId || null,
+          };
+        }
+
+        // Coverage is used up -> falls back to Standard!
+        return {
+          ...standardResult,
+          programmeId: String(progRow.id),
+          programmeName: String(progRow.name),
+          sponsorName,
+          showRecognition,
+          coverageMode,
+          coverageCap: cap,
+          coverageUsed: cap,
+          coverageRemaining: 0,
+          isCovered: false,
+          coverageExhausted: true,
+          validFrom,
+          validTo,
+          expiresBeforeGraduation,
+        };
+      }
+
+      // 2. Active, in-date DISCOUNT allocation (Standard x (1 - rate), whole kobo)
+      if (progRow.kind === 'discount') {
+        const rate = Math.min(99, Math.max(1, Math.floor(Number(progRow.discount_percent) || 0)));
+        const effectivePriceKobo = Math.round((standardPriceKobo * (100 - rate)) / 100);
+        const discountKobo = Math.max(0, standardPriceKobo - effectivePriceKobo);
+        const sponsorName = progRow.sponsor_name ? String(progRow.sponsor_name).trim() : null;
+        const showRecognition = Boolean(
+          Number(progRow.show_recognition) !== 0 && progRow.show_recognition !== false
+        );
+
+        return {
+          kind: 'discount' as const,
+          standardPriceKobo,
+          effectivePriceKobo,
+          discountPercent: rate,
+          discountKobo,
+          programmeId: String(progRow.id),
+          programmeName: String(progRow.name),
+          sponsorName,
+          showRecognition,
+          coverageMode: null,
+          coverageCap: 0,
+          coverageUsed: 0,
+          coverageRemaining: 0,
+          isCovered: false,
+          coverageExhausted: false,
+          validFrom,
+          validTo,
+          expiresBeforeGraduation,
+          institutionId,
+          departmentId,
+          graduationYear,
+          albumId: albumId || null,
+        };
+      }
+
+      // 3. Else Standard
+      return standardResult;
+    };
+
     // 0. Short Invite Redirect Endpoint: GET /i/:code -> 302 redirect to full invite link
     if (path.startsWith('/i/') && (request.method === 'GET' || request.method === 'HEAD')) {
       const code = decodeURIComponent(path.slice(3).split('/')[0] || '').trim();
@@ -1696,12 +2171,50 @@ export default {
         : paystackPublicKey.startsWith('pk_test_')
         ? 'test'
         : 'unconfigured';
+      const albumIdParam = url.searchParams.get('albumId') || '';
+      const instParam = url.searchParams.get('institutionId') || '';
+      const deptParam = url.searchParams.get('departmentId') || '';
+      const yearParam = Number(url.searchParams.get('graduationYear') || 0) || undefined;
+      const resolvedPricing =
+        albumIdParam || (instParam && deptParam)
+          ? await resolveCohortPricing({
+              albumId: albumIdParam || undefined,
+              institutionId: instParam || undefined,
+              departmentId: deptParam || undefined,
+              graduationYear: yearParam,
+            })
+          : null;
       return new Response(
         JSON.stringify({
           paystackPublicKey,
           mode,
           settings,
           studentFeeKobo: Number(settings.student_fee_kobo) || 50000,
+          resolvedPricing,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // 0k-2. Public Cohort Pricing Resolution Endpoint (GET /api/pricing/resolve)
+    if (path === '/api/pricing/resolve' && request.method === 'GET') {
+      const albumId = url.searchParams.get('albumId') || undefined;
+      const institutionId = url.searchParams.get('institutionId') || undefined;
+      const departmentId = url.searchParams.get('departmentId') || undefined;
+      const graduationYear = Number(url.searchParams.get('graduationYear') || 0) || undefined;
+      const pricing = await resolveCohortPricing({
+        albumId,
+        institutionId,
+        departmentId,
+        graduationYear,
+      });
+      return new Response(
+        JSON.stringify({
+          success: true,
+          pricing,
         }),
         {
           status: 200,
@@ -2852,8 +3365,8 @@ export default {
         });
 
         await env.DB.prepare(
-          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, datetime('now'))`
+          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, ?, ?, ?, datetime('now'))`
         )
           .bind(
             txRow?.id || `tx-${reference}`,
@@ -2865,6 +3378,9 @@ export default {
             pskAmountKobo,
             subPayload.fullName || payerEmail,
             payerEmail,
+            txRow?.programme_id || meta.programme_id || null,
+            Number(txRow?.list_price_kobo || meta.list_price_kobo) || pskAmountKobo,
+            Number(txRow?.discount_kobo || meta.discount_kobo) || 0,
             completedMeta
           )
           .run();
@@ -2959,8 +3475,8 @@ export default {
         });
 
         await env.DB.prepare(
-          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, datetime('now'))`
+          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, ?, ?, ?, datetime('now'))`
         )
           .bind(
             txRow?.id || `tx-${reference}`,
@@ -2972,6 +3488,9 @@ export default {
             pskAmountKobo,
             sponsorName || payerEmail,
             payerEmail,
+            txRow?.programme_id || meta.programme_id || null,
+            Number(txRow?.list_price_kobo || meta.list_price_kobo) || pskAmountKobo,
+            Number(txRow?.discount_kobo || meta.discount_kobo) || 0,
             completedMeta
           )
           .run();
@@ -3047,20 +3566,40 @@ export default {
       let albumData: any = {};
       try { albumData = JSON.parse(albumRow.data_json || '{}'); } catch {}
 
-      const settings = await getPlatformSettingsMap(env);
-      const feeKobo = Number(settings.student_fee_kobo) || 50000;
-
-      const institutionName = String(albumData.institutionName || albumData.universityName || albumRow.institution_id || '');
-      const departmentName = String(albumData.departmentName || albumRow.department_id || '');
+      const institutionId = String(albumRow.institution_id || albumData.institutionId || albumData.universityId || '');
+      const departmentId = String(albumRow.department_id || albumData.departmentId || '');
+      const institutionName = String(albumData.institutionName || albumData.universityName || institutionId || '');
+      const departmentName = String(albumData.departmentName || departmentId || '');
       const setYear = Number(albumData.graduationYear || albumRow.graduation_year || new Date().getFullYear());
 
+      // Single server-side pricing precedence resolution
+      const pricing = await resolveCohortPricing({
+        albumId,
+        institutionId,
+        departmentId,
+        graduationYear: setYear,
+      });
+
       const reference = `KHR-${paymentType === 'slots' ? 'SLT' : 'STD'}-${Date.now()}-${generateRandomHexToken(6)}`;
-      let amountKobo = feeKobo;
+      let amountKobo = pricing.effectivePriceKobo > 0 ? pricing.effectivePriceKobo : pricing.standardPriceKobo;
+      let listPriceKobo = pricing.standardPriceKobo;
+      let discountKobo = pricing.discountKobo;
+      const programmeId = pricing.programmeId;
       let payerEmail = '';
       let payerName = '';
       let metadata: any = {};
 
       if (paymentType === 'student') {
+        if (pricing.kind === 'funding' && pricing.isCovered) {
+          return new Response(
+            JSON.stringify({
+              error: 'covered_by_funding',
+              message: `This cohort is covered by ${pricing.sponsorName || pricing.programmeName || 'a funding offer'}. No payment is required.`,
+              pricing,
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
         const submissionId = String(body.submissionId || '').trim();
         if (!submissionId) {
           return new Response(JSON.stringify({ error: 'submissionId is required for student payment.' }), {
@@ -3088,7 +3627,9 @@ export default {
         }
         let subPayload: any = {};
         try { subPayload = JSON.parse(subRow.payload_json || '{}'); } catch {}
-        amountKobo = feeKobo;
+        amountKobo = pricing.effectivePriceKobo;
+        listPriceKobo = pricing.standardPriceKobo;
+        discountKobo = pricing.discountKobo;
         payerEmail = String(subRow.email || body.email || '').trim().toLowerCase();
         payerName = String(subPayload.fullName || payerEmail);
         metadata = {
@@ -3098,6 +3639,9 @@ export default {
           set_year: setYear,
           album_id: albumId,
           submission_id: submissionId,
+          programme_id: programmeId,
+          list_price_kobo: listPriceKobo,
+          discount_kobo: discountKobo,
         };
       } else {
         // type === 'slots': require admin session with ownership of albumId
@@ -3121,7 +3665,10 @@ export default {
           .trim()
           .slice(0, 60);
         const purchaseId = `spurch-${reference}`;
-        amountKobo = quantity * feeKobo;
+        const unitEffectiveKobo = pricing.effectivePriceKobo > 0 ? pricing.effectivePriceKobo : pricing.standardPriceKobo;
+        amountKobo = quantity * unitEffectiveKobo;
+        listPriceKobo = quantity * pricing.standardPriceKobo;
+        discountKobo = Math.max(0, listPriceKobo - amountKobo);
         payerEmail = sessionUser.email.toLowerCase();
         payerName = sponsorName || sessionUser.fullName || payerEmail;
         metadata = {
@@ -3133,12 +3680,15 @@ export default {
           purchase_id: purchaseId,
           quantity,
           sponsor_name: sponsorName || 'Class Sponsor',
+          programme_id: programmeId,
+          list_price_kobo: listPriceKobo,
+          discount_kobo: discountKobo,
         };
       }
 
       await env.DB.prepare(
-        `INSERT INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'pending', ?, ?, ?, datetime('now'))`
+        `INSERT INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'pending', ?, ?, ?, ?, ?, ?, datetime('now'))`
       )
         .bind(
           `tx-${reference}`,
@@ -3150,6 +3700,9 @@ export default {
           amountKobo,
           payerName,
           payerEmail,
+          programmeId,
+          listPriceKobo,
+          discountKobo,
           JSON.stringify(metadata)
         )
         .run();
@@ -3159,6 +3712,10 @@ export default {
           success: true,
           reference,
           amountKobo,
+          listPriceKobo,
+          discountKobo,
+          programmeId,
+          pricing,
           email: payerEmail,
           publicKey: paystackPublicKey,
           metadata,
@@ -3784,59 +4341,87 @@ ${message}
         const newAlbumId = String(albumPayload.id || `set-${institutionId}-${departmentId}-${graduationYear}-${Date.now()}`);
         const nowIso = new Date().toISOString();
 
-        // Rule 4 & 8: Check for a KoHot slot allocation matching institution, department, and graduation year, and credit once
+        // Check for an active Cohort Funding offer or legacy KoHot slot allocation matching (institution, department, graduationYear)
+        const cohortPricing = await resolveCohortPricing({
+          institutionId,
+          departmentId,
+          graduationYear,
+        });
+
         let creditedSlots = 0;
         let creditedAllocationId: string | null = null;
-        const allocRows = await env.DB.prepare(
-          `SELECT * FROM slot_allocations WHERE institution_id = ? AND department_id = ? AND graduation_year = ?`
-        ).bind(institutionId, departmentId, graduationYear).all();
-        const waitingAlloc = (allocRows?.results || []).find((a: any) => a.status === 'waiting' && Number(a.quantity) > 0);
+        let creditedSponsorName = 'KoHot';
+        let creditedShowRecognition = true;
 
-        if (waitingAlloc) {
-          creditedSlots = Number(waitingAlloc.quantity) || 0;
-          creditedAllocationId = waitingAlloc.id;
+        if (cohortPricing.kind === 'funding' && cohortPricing.coverageCap > 0) {
+          creditedSlots = cohortPricing.coverageCap;
+          creditedAllocationId = `calloc-${institutionId}-${departmentId}-${graduationYear}`;
+          creditedSponsorName = cohortPricing.sponsorName || 'KoHot';
+          creditedShowRecognition = cohortPricing.showRecognition;
           await env.DB.prepare(
             `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
-             VALUES (?, ?, ?, 'kohot_allocation', ?, 'KoHot', 0, ?, 'system', datetime('now'))`
+             VALUES (?, ?, ?, 'kohot_allocation', ?, ?, ?, ?, 'system', datetime('now'))`
           ).bind(
-            `sled-alloc-${waitingAlloc.id}`,
+            `sled-calloc-${creditedAllocationId}`,
             newAlbumId,
             creditedSlots,
-            waitingAlloc.id,
-            `alloc:${waitingAlloc.id}`
+            creditedAllocationId,
+            creditedSponsorName,
+            cohortPricing.standardPriceKobo,
+            `calloc:${creditedAllocationId}`
           ).run();
-
-          await env.DB.prepare(
-            `UPDATE slot_allocations SET status = 'credited', album_id = ?, updated_at = datetime('now') WHERE id = ?`
-          ).bind(newAlbumId, waitingAlloc.id).run();
         } else {
-          const settings = await getPlatformSettingsMap(env);
-          const defaultSlots = Number(settings.default_kohot_slots_per_album) || 0;
-          if (defaultSlots > 0) {
-            creditedSlots = defaultSlots;
+          const allocRows = await env.DB.prepare(
+            `SELECT * FROM slot_allocations WHERE institution_id = ? AND department_id = ? AND graduation_year = ?`
+          ).bind(institutionId, departmentId, graduationYear).all();
+          const waitingAlloc = (allocRows?.results || []).find((a: any) => a.status === 'waiting' && Number(a.quantity) > 0);
+
+          if (waitingAlloc) {
+            creditedSlots = Number(waitingAlloc.quantity) || 0;
+            creditedAllocationId = waitingAlloc.id;
             await env.DB.prepare(
-              `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
-               VALUES (?, ?, ?, 'kohot_allocation', 'KoHot', 0, ?, 'system', datetime('now'))`
+              `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+               VALUES (?, ?, ?, 'kohot_allocation', ?, 'KoHot', 0, ?, 'system', datetime('now'))`
             ).bind(
-              `sled-def-${newAlbumId}`,
+              `sled-alloc-${waitingAlloc.id}`,
               newAlbumId,
-              defaultSlots,
-              `default_alloc:${newAlbumId}`
+              creditedSlots,
+              waitingAlloc.id,
+              `alloc:${waitingAlloc.id}`
             ).run();
+
+            await env.DB.prepare(
+              `UPDATE slot_allocations SET status = 'credited', album_id = ?, updated_at = datetime('now') WHERE id = ?`
+            ).bind(newAlbumId, waitingAlloc.id).run();
+          } else {
+            const settings = await getPlatformSettingsMap(env);
+            const defaultSlots = Number(settings.default_kohot_slots_per_album) || 0;
+            if (defaultSlots > 0) {
+              creditedSlots = defaultSlots;
+              await env.DB.prepare(
+                `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+                 VALUES (?, ?, ?, 'kohot_allocation', 'KoHot', 0, ?, 'system', datetime('now'))`
+              ).bind(
+                `sled-def-${newAlbumId}`,
+                newAlbumId,
+                defaultSlots,
+                `default_alloc:${newAlbumId}`
+              ).run();
+            }
           }
         }
 
         const initialSponsors = Array.isArray(albumPayload.sponsors) ? [...albumPayload.sponsors] : [];
-        if (creditedSlots > 0 && !initialSponsors.some((s: any) => s.sponsorName === 'KoHot')) {
+        if (creditedSlots > 0 && !initialSponsors.some((s: any) => s.sponsorName === creditedSponsorName)) {
           initialSponsors.unshift({
             id: creditedAllocationId || `sp-kohot-${newAlbumId}`,
-            sponsorName: 'KoHot',
-            DisplayLabel: 'Sponsored by KoHot',
+            sponsorName: creditedSponsorName,
+            DisplayLabel: `Sponsored by ${creditedSponsorName}`,
             quantity: creditedSlots,
             amountPaid: 0,
             reference: `KOHOT-ALLOC-${graduationYear}`,
             date: nowIso.split('T')[0],
-            showSponsorNameOnAlbum: true,
+            showSponsorNameOnAlbum: creditedShowRecognition,
             isKoHotCredit: true,
           });
         }
@@ -4731,6 +5316,7 @@ ${message}
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
+      const pricing = await resolveCohortPricing({ albumId });
       const summary = await getAlbumSlotSummary(albumId);
       const settings = await getPlatformSettingsMap(env);
       return new Response(
@@ -4738,6 +5324,7 @@ ${message}
           success: true,
           ...summary,
           settings,
+          pricing,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -4924,6 +5511,14 @@ ${message}
       const tokenHash = await sha256Hex(rawStatusToken);
       const subId = existingByEmail?.id || profilePayload.id || `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+      // Resolve cohort pricing so active Funding offers automatically cover submissions while coverage remains
+      const cohortPricing = await resolveCohortPricing({
+        albumId,
+        institutionId: body.institutionId || profilePayload.institutionId,
+        departmentId: body.departmentId || profilePayload.departmentId,
+        graduationYear: Number(body.graduationYear || profilePayload.graduationYear) || undefined,
+      });
+
       // NEVER trust client-supplied paymentStatus or paidReference:
       // Preserve existing DB payment_status if already paid/waived on the server, otherwise start 'unpaid'
       const paymentStatus =
@@ -4942,13 +5537,17 @@ ${message}
         await deleteR2ObjectAndRecord(existingByEmail.photo_key);
       }
 
+      const isCoveredByFunding = cohortPricing.kind === 'funding' && cohortPricing.isCovered;
+
       const enrichedPayload = {
         ...profilePayload,
         id: subId,
         personalEmail: email,
         paymentStatus,
         paidReference: paidReference || undefined,
-        claimsToBeCovered: Boolean(profilePayload.claimsToBeCovered || body.claimsToBeCovered),
+        claimsToBeCovered: Boolean(isCoveredByFunding || profilePayload.claimsToBeCovered || body.claimsToBeCovered),
+        sponsoredBy: isCoveredByFunding ? cohortPricing.sponsorName : profilePayload.sponsoredBy,
+        programmeId: cohortPricing.programmeId || undefined,
         source,
         status: nextStatus,
         submittedAt: existingByEmail?.created_at || new Date().toISOString(),
@@ -4976,6 +5575,7 @@ ${message}
           submissionId: subId,
           status: nextStatus,
           paymentStatus,
+          pricing: cohortPricing,
           statusToken: rawStatusToken,
           statusLink: `${url.origin}/?submission_token=${rawStatusToken}&album=${encodeURIComponent(albumId)}`,
           submission: enrichedPayload,
@@ -6113,6 +6713,9 @@ ${message}
             albumId,
             albumName: String(matchedSet?.class_set_name || setJson.classSetName || `${departmentName} '${String(classYear).slice(-2)}`),
             amountKobo,
+            listPriceKobo: Number(r.list_price_kobo || meta.list_price_kobo) || amountKobo,
+            discountKobo: Number(r.discount_kobo || meta.discount_kobo) || 0,
+            programmeId: r.programme_id || meta.programme_id || null,
             currency,
             status,
             reference: r.reference || '',
@@ -6264,6 +6867,735 @@ ${message}
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+      }
+    }
+
+    // ============================================================================
+    // 13r. HOST COHORT OFFERS & PROGRAMMES MANAGER (/api/admin/offers/*)
+    // Enforced Host-only on the server and recorded in audit_logs.
+    // ============================================================================
+    if (path.startsWith('/api/admin/offers/')) {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser || sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!env.DB) {
+        return new Response(JSON.stringify({ error: 'Database unavailable' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      await ensureCohortOffersSchema();
+      const settings = await getPlatformSettingsMap(env);
+      const standardPriceKobo = Number(settings.student_fee_kobo) || 50000;
+      const defaultCap = Number(settings.profile_cap_default) || 200;
+
+      const formatProgrammeRow = (row: any, allCohortAllocations: any[]) => {
+        const matchingAllocs = allCohortAllocations.filter(
+          (a: any) => String(a.programme_id) === String(row.id)
+        );
+        const distinctDepts = new Set(
+          matchingAllocs.map(
+            (a: any) =>
+              `${String(a.institution_id).toLowerCase()}::${String(a.department_id).toLowerCase()}`
+          )
+        );
+        return {
+          id: String(row.id),
+          name: String(row.name || ''),
+          kind: (row.kind === 'discount' ? 'discount' : 'funding') as 'funding' | 'discount',
+          discountPercent:
+            row.kind === 'discount' && row.discount_percent !== null && row.discount_percent !== undefined
+              ? Number(row.discount_percent)
+              : null,
+          coverageMode:
+            row.kind === 'funding'
+              ? ((row.coverage_mode === 'all' ? 'all' : 'per_album_cap') as 'all' | 'per_album_cap')
+              : null,
+          coverageCap:
+            row.kind === 'funding' && row.coverage_cap !== null && row.coverage_cap !== undefined
+              ? Number(row.coverage_cap)
+              : null,
+          sponsorName: String(row.sponsor_name || ''),
+          showRecognition: Boolean(Number(row.show_recognition) !== 0 && row.show_recognition !== false),
+          validFrom: row.valid_from || null,
+          validTo: row.valid_to || null,
+          status: (row.status === 'paused' ? 'paused' : 'active') as 'active' | 'paused',
+          usedDepartmentsCount: distinctDepts.size,
+          usedCohortsCount: matchingAllocs.length,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      };
+
+      // 1. GET & POST /api/admin/offers/programmes
+      if (path === '/api/admin/offers/programmes' && request.method === 'GET') {
+        const progsRes = await env.DB.prepare(`SELECT * FROM programmes ORDER BY created_at DESC`).all();
+        const allocsRes = await env.DB.prepare(`SELECT * FROM cohort_allocations`).all();
+        const allAllocs = allocsRes?.results || [];
+        const programmes = (progsRes?.results || []).map((r: any) => formatProgrammeRow(r, allAllocs));
+        return new Response(
+          JSON.stringify({
+            success: true,
+            programmes,
+            standardPriceKobo,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (path === '/api/admin/offers/programmes' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const name = String(body.name || '').trim();
+        const kind = String(body.kind || '').trim().toLowerCase();
+        if (!name) {
+          return new Response(JSON.stringify({ error: 'Programme name is required.' }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        if (kind !== 'funding' && kind !== 'discount') {
+          return new Response(
+            JSON.stringify({ error: "Programme kind must be 'funding' or 'discount'. Standard price is never a programme." }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        let discountPercent: number | null = null;
+        let coverageMode: 'all' | 'per_album_cap' | null = null;
+        let coverageCap: number | null = null;
+
+        if (kind === 'discount') {
+          const pct = Math.floor(Number(body.discountPercent ?? body.discount_percent));
+          if (!Number.isFinite(pct) || pct < 1 || pct > 99) {
+            return new Response(
+              JSON.stringify({ error: 'Discount percentage must be a whole number between 1 and 99.' }),
+              { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          discountPercent = pct;
+        } else {
+          coverageMode =
+            (body.coverageMode || body.coverage_mode) === 'all' ? 'all' : 'per_album_cap';
+          if (coverageMode === 'per_album_cap') {
+            const cap = Math.floor(Number(body.coverageCap ?? body.coverage_cap));
+            if (!Number.isFinite(cap) || cap < 1 || cap > 5000) {
+              return new Response(
+                JSON.stringify({ error: 'Coverage cap must be a whole number between 1 and 5000 profiles.' }),
+                { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+            coverageCap = cap;
+          } else {
+            coverageCap = null;
+          }
+        }
+
+        const sponsorName = String(body.sponsorName ?? body.sponsor_name ?? '').trim().slice(0, 80);
+        const showRecognition =
+          body.showRecognition !== undefined
+            ? Boolean(body.showRecognition)
+            : body.show_recognition !== undefined
+            ? Boolean(body.show_recognition)
+            : true;
+        const validFrom = body.validFrom || body.valid_from ? String(body.validFrom || body.valid_from).slice(0, 10) : null;
+        const validTo = body.validTo || body.valid_to ? String(body.validTo || body.valid_to).slice(0, 10) : null;
+        if (validFrom && validTo && validTo < validFrom) {
+          return new Response(
+            JSON.stringify({ error: 'Valid-to date cannot be earlier than valid-from date.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        const status = (body.status === 'paused' ? 'paused' : 'active') as 'active' | 'paused';
+        const progId = String(body.id || `prog-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+
+        await env.DB.prepare(
+          `INSERT INTO programmes (id, name, kind, discount_percent, coverage_mode, coverage_cap, sponsor_name, show_recognition, valid_from, valid_to, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+        )
+          .bind(
+            progId,
+            name,
+            kind,
+            discountPercent,
+            coverageMode,
+            coverageCap,
+            sponsorName,
+            showRecognition ? 1 : 0,
+            validFrom,
+            validTo,
+            status
+          )
+          .run();
+
+        await logAudit(
+          'programme_created',
+          `Programme "${name}" (${kind === 'discount' ? `${discountPercent}% off` : coverageMode === 'all' ? 'Covers all profiles' : `Covers ${coverageCap} profiles`}) created by ${sessionUser.email}`,
+          sessionUser.email
+        );
+
+        const createdRow = await env.DB.prepare(`SELECT * FROM programmes WHERE id = ?`).bind(progId).first();
+        return new Response(
+          JSON.stringify({
+            success: true,
+            programme: formatProgrammeRow(createdRow, []),
+          }),
+          { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // 2. PUT & DELETE /api/admin/offers/programmes/:id
+      const progItemMatch = path.match(/^\/api\/admin\/offers\/programmes\/([^/]+)$/);
+      if (progItemMatch && (request.method === 'PUT' || request.method === 'DELETE')) {
+        const progId = decodeURIComponent(progItemMatch[1]);
+        const existingRow = await env.DB.prepare(`SELECT * FROM programmes WHERE id = ?`).bind(progId).first();
+        if (!existingRow) {
+          return new Response(JSON.stringify({ error: 'Programme not found.' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        const allocsRes = await env.DB.prepare(`SELECT * FROM cohort_allocations`).all();
+        const allAllocs = allocsRes?.results || [];
+        const usedAllocs = allAllocs.filter((a: any) => String(a.programme_id) === progId);
+
+        if (request.method === 'DELETE') {
+          if (usedAllocs.length > 0) {
+            return new Response(
+              JSON.stringify({
+                error: 'programme_in_use',
+                message: `Cannot delete "${existingRow.name}" because it is assigned to ${usedAllocs.length} cohort(s). Remove it from those cohorts or pause it instead.`,
+              }),
+              { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          await env.DB.prepare(`DELETE FROM programmes WHERE id = ?`).bind(progId).run();
+          await logAudit(
+            'programme_deleted',
+            `Programme "${existingRow.name}" (${progId}) deleted by ${sessionUser.email}`,
+            sessionUser.email
+          );
+          return new Response(JSON.stringify({ success: true, deletedId: progId }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        // PUT: edit or pause/resume
+        const body = (await request.json().catch(() => ({}))) as any;
+        const name = body.name !== undefined ? String(body.name).trim() : String(existingRow.name);
+        const kind = (
+          body.kind !== undefined ? String(body.kind).trim().toLowerCase() : String(existingRow.kind)
+        ) as 'funding' | 'discount';
+        if (!name || (kind !== 'funding' && kind !== 'discount')) {
+          return new Response(JSON.stringify({ error: 'Valid name and kind (funding or discount) are required.' }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        let discountPercent: number | null =
+          existingRow.discount_percent !== null && existingRow.discount_percent !== undefined
+            ? Number(existingRow.discount_percent)
+            : null;
+        let coverageMode: 'all' | 'per_album_cap' | null = existingRow.coverage_mode || null;
+        let coverageCap: number | null =
+          existingRow.coverage_cap !== null && existingRow.coverage_cap !== undefined
+            ? Number(existingRow.coverage_cap)
+            : null;
+
+        if (kind === 'discount') {
+          if (body.discountPercent !== undefined || body.discount_percent !== undefined) {
+            const pct = Math.floor(Number(body.discountPercent ?? body.discount_percent));
+            if (!Number.isFinite(pct) || pct < 1 || pct > 99) {
+              return new Response(
+                JSON.stringify({ error: 'Discount percentage must be between 1 and 99.' }),
+                { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+            discountPercent = pct;
+          }
+          coverageMode = null;
+          coverageCap = null;
+        } else {
+          discountPercent = null;
+          coverageMode =
+            (body.coverageMode ?? body.coverage_mode ?? existingRow.coverage_mode) === 'all'
+              ? 'all'
+              : 'per_album_cap';
+          if (coverageMode === 'per_album_cap') {
+            const cap = Math.floor(
+              Number(body.coverageCap ?? body.coverage_cap ?? existingRow.coverage_cap ?? defaultCap)
+            );
+            if (!Number.isFinite(cap) || cap < 1 || cap > 5000) {
+              return new Response(
+                JSON.stringify({ error: 'Coverage cap must be between 1 and 5000.' }),
+                { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+            coverageCap = cap;
+          } else {
+            coverageCap = null;
+          }
+        }
+
+        const sponsorName =
+          body.sponsorName !== undefined || body.sponsor_name !== undefined
+            ? String(body.sponsorName ?? body.sponsor_name ?? '').trim().slice(0, 80)
+            : String(existingRow.sponsor_name || '');
+        const showRecognition =
+          body.showRecognition !== undefined
+            ? Boolean(body.showRecognition)
+            : body.show_recognition !== undefined
+            ? Boolean(body.show_recognition)
+            : Boolean(Number(existingRow.show_recognition) !== 0);
+        const validFrom =
+          body.validFrom !== undefined || body.valid_from !== undefined
+            ? body.validFrom || body.valid_from
+              ? String(body.validFrom || body.valid_from).slice(0, 10)
+              : null
+            : existingRow.valid_from || null;
+        const validTo =
+          body.validTo !== undefined || body.valid_to !== undefined
+            ? body.validTo || body.valid_to
+              ? String(body.validTo || body.valid_to).slice(0, 10)
+              : null
+            : existingRow.valid_to || null;
+        if (validFrom && validTo && validTo < validFrom) {
+          return new Response(
+            JSON.stringify({ error: 'Valid-to date cannot be earlier than valid-from date.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        const status = (
+          body.status !== undefined
+            ? body.status === 'paused'
+              ? 'paused'
+              : 'active'
+            : existingRow.status === 'paused'
+            ? 'paused'
+            : 'active'
+        ) as 'active' | 'paused';
+
+        await env.DB.prepare(
+          `UPDATE programmes SET name = ?, kind = ?, discount_percent = ?, coverage_mode = ?, coverage_cap = ?, sponsor_name = ?, show_recognition = ?, valid_from = ?, valid_to = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
+        )
+          .bind(
+            name,
+            kind,
+            discountPercent,
+            coverageMode,
+            coverageCap,
+            sponsorName,
+            showRecognition ? 1 : 0,
+            validFrom,
+            validTo,
+            status,
+            progId
+          )
+          .run();
+
+        const updatedRow = await env.DB.prepare(`SELECT * FROM programmes WHERE id = ?`).bind(progId).first();
+
+        // Sync any albums in cohorts using this programme
+        if (usedAllocs.length > 0) {
+          const setsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
+          const allSets = setsRes?.results || [];
+          for (const alloc of usedAllocs) {
+            const matchedSet = allSets.find(
+              (s: any) =>
+                String(s.institution_id).toLowerCase() === String(alloc.institution_id).toLowerCase() &&
+                String(s.department_id).toLowerCase() === String(alloc.department_id).toLowerCase() &&
+                Number(s.graduation_year) === Number(alloc.graduation_year) &&
+                s.status !== 'deleted'
+            );
+            if (matchedSet) {
+              const targetCap =
+                status === 'active' && kind === 'funding'
+                  ? coverageMode === 'all'
+                    ? defaultCap
+                    : Math.max(1, Number(coverageCap) || defaultCap)
+                  : 0;
+              await syncAlbumFundingGrant(
+                matchedSet,
+                String(alloc.id),
+                status === 'active' && kind === 'funding' ? updatedRow : null,
+                targetCap,
+                standardPriceKobo
+              );
+            }
+          }
+        }
+
+        const auditAction =
+          existingRow.status !== status
+            ? status === 'paused'
+              ? 'programme_paused'
+              : 'programme_resumed'
+            : 'programme_updated';
+        await logAudit(
+          auditAction,
+          `Programme "${name}" (${progId}) updated (status: ${status}) by ${sessionUser.email}`,
+          sessionUser.email
+        );
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            programme: formatProgrammeRow(updatedRow, allAllocs),
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // 3. GET /api/admin/offers/cohorts?institutionId=...&year=...
+      if (path === '/api/admin/offers/cohorts' && request.method === 'GET') {
+        const instFilter = (url.searchParams.get('institutionId') || '').trim();
+        const yearFilter = Number(url.searchParams.get('year') || 0);
+
+        const progsRes = await env.DB.prepare(`SELECT * FROM programmes`).all();
+        const allProgs = progsRes?.results || [];
+        const progMap = new Map<string, any>();
+        for (const p of allProgs) progMap.set(String(p.id), p);
+
+        const allocsRes = await env.DB.prepare(`SELECT * FROM cohort_allocations`).all();
+        const allAllocs = allocsRes?.results || [];
+
+        const setsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
+        const allSets = (setsRes?.results || []).filter((s: any) => s.status !== 'deleted');
+
+        // Compute available years (years with albums or allocations, plus current year)
+        const yearsSet = new Set<number>([new Date().getFullYear(), 2026]);
+        for (const s of allSets) {
+          if (!instFilter || String(s.institution_id).toLowerCase() === instFilter.toLowerCase()) {
+            const yr = Number(s.graduation_year);
+            if (yr >= 2000 && yr <= 2100) yearsSet.add(yr);
+          }
+        }
+        for (const a of allAllocs) {
+          if (!instFilter || String(a.institution_id).toLowerCase() === instFilter.toLowerCase()) {
+            const yr = Number(a.graduation_year);
+            if (yr >= 2000 && yr <= 2100) yearsSet.add(yr);
+          }
+        }
+        const availableYears = Array.from(yearsSet).sort((a, b) => b - a);
+
+        const filteredAllocs = allAllocs
+          .filter((a: any) => {
+            if (instFilter && String(a.institution_id).toLowerCase() !== instFilter.toLowerCase()) return false;
+            if (yearFilter && Number(a.graduation_year) !== yearFilter) return false;
+            return true;
+          })
+          .map((a: any) => {
+            const p = progMap.get(String(a.programme_id));
+            return {
+              id: String(a.id),
+              institutionId: String(a.institution_id),
+              departmentId: String(a.department_id),
+              graduationYear: Number(a.graduation_year),
+              programmeId: String(a.programme_id),
+              programme: p ? formatProgrammeRow(p, allAllocs) : null,
+              assignedBy: a.assigned_by || '',
+              assignedAt: a.assigned_at || a.created_at,
+              note: a.note || '',
+            };
+          });
+
+        const filteredAlbums = allSets
+          .filter((s: any) => {
+            if (instFilter && String(s.institution_id).toLowerCase() !== instFilter.toLowerCase()) return false;
+            if (yearFilter && Number(s.graduation_year) !== yearFilter) return false;
+            return true;
+          })
+          .map((s: any) => {
+            let parsed: any = {};
+            try { parsed = JSON.parse(s.data_json || '{}'); } catch {}
+            const isPub =
+              (s.status === 'published' || parsed.published === true || parsed.isPublished === true) &&
+              !parsed.unpublished &&
+              !parsed.isUnpublished;
+            return {
+              id: String(s.id),
+              institutionId: String(s.institution_id),
+              departmentId: String(s.department_id),
+              graduationYear: Number(s.graduation_year),
+              status: isPub ? 'published' : 'draft',
+            };
+          });
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            allocations: filteredAllocs,
+            albums: filteredAlbums,
+            availableYears,
+            standardPriceKobo,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // 4. POST /api/admin/offers/cohorts/bulk — Atomic batch assign or remove offer
+      if (path === '/api/admin/offers/cohorts/bulk' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const institutionId = String(body.institutionId || '').trim();
+        const graduationYear = Number(body.graduationYear || 0);
+        const departmentIds: string[] = Array.isArray(body.departmentIds)
+          ? body.departmentIds.map((d: any) => String(d || '').trim()).filter(Boolean)
+          : [];
+        const action = String(body.action || '').trim().toLowerCase() as 'assign' | 'remove';
+        const programmeId = String(body.programmeId || '').trim();
+        const note = String(body.note || '').trim();
+
+        if (!institutionId || !graduationYear || departmentIds.length === 0) {
+          return new Response(
+            JSON.stringify({ error: 'institutionId, graduationYear, and at least one departmentId are required.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        if (action !== 'assign' && action !== 'remove') {
+          return new Response(
+            JSON.stringify({ error: "Action must be 'assign' or 'remove'." }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        let targetProg: any = null;
+        if (action === 'assign') {
+          if (!programmeId || programmeId === 'standard') {
+            return new Response(
+              JSON.stringify({ error: 'Standard price is never assigned. Choose an active Funding or Discount programme, or use Remove offer.' }),
+              { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          targetProg = await env.DB.prepare(`SELECT * FROM programmes WHERE id = ?`).bind(programmeId).first();
+          if (!targetProg) {
+            return new Response(JSON.stringify({ error: 'Selected programme was not found.' }), {
+              status: 404,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+        }
+
+        const setsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
+        const allSets = (setsRes?.results || []).filter((s: any) => s.status !== 'deleted');
+        const existingAllocsRes = await env.DB.prepare(`SELECT * FROM cohort_allocations`).all();
+        const existingAllocs = existingAllocsRes?.results || [];
+
+        const results: Array<{
+          departmentId: string;
+          status: 'assigned' | 'removed' | 'unchanged';
+          programmeId: string | null;
+          programmeName: string | null;
+          effectiveKind: 'funding' | 'discount' | 'standard';
+        }> = [];
+
+        for (const deptId of departmentIds) {
+          const callocId = `calloc-${institutionId}-${deptId}-${graduationYear}`;
+          const existingRow = existingAllocs.find(
+            (a: any) =>
+              String(a.institution_id).toLowerCase() === institutionId.toLowerCase() &&
+              String(a.department_id).toLowerCase() === deptId.toLowerCase() &&
+              Number(a.graduation_year) === graduationYear
+          );
+          const matchedSet = allSets.find(
+            (s: any) =>
+              String(s.institution_id).toLowerCase() === institutionId.toLowerCase() &&
+              String(s.department_id).toLowerCase() === deptId.toLowerCase() &&
+              Number(s.graduation_year) === graduationYear
+          );
+
+          if (action === 'remove') {
+            if (existingRow) {
+              await env.DB.prepare(`DELETE FROM cohort_allocations WHERE id = ?`).bind(existingRow.id).run();
+            }
+            // Also clean up any legacy slot_allocations row for this cohort
+            const legacyAllocRes = await env.DB.prepare(
+              `SELECT * FROM slot_allocations WHERE institution_id = ? AND department_id = ? AND graduation_year = ?`
+            ).bind(institutionId, deptId, graduationYear).all();
+            for (const la of legacyAllocRes?.results || []) {
+              await env.DB.prepare(`DELETE FROM slot_allocations WHERE id = ?`).bind(la.id).run();
+            }
+            if (matchedSet) {
+              await syncAlbumFundingGrant(matchedSet, existingRow?.id || callocId, null, 0, standardPriceKobo);
+            }
+            results.push({
+              departmentId: deptId,
+              status: existingRow ? 'removed' : 'unchanged',
+              programmeId: null,
+              programmeName: null,
+              effectiveKind: 'standard',
+            });
+          } else {
+            // action === 'assign'
+            if (existingRow && existingRow.id !== callocId) {
+              await env.DB.prepare(`DELETE FROM cohort_allocations WHERE id = ?`).bind(existingRow.id).run();
+            }
+            await env.DB.prepare(
+              `INSERT OR REPLACE INTO cohort_allocations (id, institution_id, department_id, graduation_year, programme_id, assigned_by, assigned_at, note)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`
+            )
+              .bind(
+                callocId,
+                institutionId,
+                deptId,
+                graduationYear,
+                targetProg.id,
+                sessionUser.email,
+                note
+              )
+              .run();
+
+            if (matchedSet) {
+              const targetCap =
+                targetProg.status === 'active' && targetProg.kind === 'funding'
+                  ? targetProg.coverage_mode === 'all'
+                    ? defaultCap
+                    : Math.max(1, Number(targetProg.coverage_cap) || defaultCap)
+                  : 0;
+              await syncAlbumFundingGrant(
+                matchedSet,
+                callocId,
+                targetProg.status === 'active' && targetProg.kind === 'funding' ? targetProg : null,
+                targetCap,
+                standardPriceKobo
+              );
+            }
+
+            results.push({
+              departmentId: deptId,
+              status: 'assigned',
+              programmeId: String(targetProg.id),
+              programmeName: String(targetProg.name),
+              effectiveKind: targetProg.kind === 'discount' ? 'discount' : 'funding',
+            });
+          }
+        }
+
+        await logAudit(
+          action === 'assign' ? 'cohort_offers_bulk_assigned' : 'cohort_offers_bulk_removed',
+          action === 'assign'
+            ? `Assigned programme "${targetProg.name}" (${targetProg.kind}) to ${departmentIds.length} department(s) in ${institutionId} Class of ${graduationYear}`
+            : `Removed cohort offers (reset to Standard) for ${departmentIds.length} department(s) in ${institutionId} Class of ${graduationYear}`,
+          sessionUser.email
+        );
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            action,
+            institutionId,
+            graduationYear,
+            count: results.length,
+            results,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // 5. POST /api/admin/offers/cohorts/copy-year — Copy allocations from {previous year} to {selected year}
+      if (path === '/api/admin/offers/cohorts/copy-year' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const institutionId = String(body.institutionId || '').trim();
+        const fromYear = Number(body.fromYear || 0);
+        const toYear = Number(body.toYear || 0);
+
+        if (!institutionId || !fromYear || !toYear || fromYear === toYear) {
+          return new Response(
+            JSON.stringify({ error: 'Valid institutionId, fromYear, and toYear are required.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const allocsRes = await env.DB.prepare(`SELECT * FROM cohort_allocations`).all();
+        const sourceAllocs = (allocsRes?.results || []).filter(
+          (a: any) =>
+            String(a.institution_id).toLowerCase() === institutionId.toLowerCase() &&
+            Number(a.graduation_year) === fromYear
+        );
+
+        if (sourceAllocs.length === 0) {
+          return new Response(
+            JSON.stringify({
+              error: 'no_source_offers',
+              message: `No offers found in ${fromYear} for this institution to copy.`,
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const progsRes = await env.DB.prepare(`SELECT * FROM programmes`).all();
+        const progMap = new Map<string, any>();
+        for (const p of progsRes?.results || []) progMap.set(String(p.id), p);
+
+        const setsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
+        const allSets = (setsRes?.results || []).filter((s: any) => s.status !== 'deleted');
+
+        const copiedResults: Array<{ departmentId: string; programmeId: string; programmeName: string }> = [];
+
+        for (const src of sourceAllocs) {
+          const deptId = String(src.department_id);
+          const prog = progMap.get(String(src.programme_id));
+          if (!prog) continue;
+
+          const callocId = `calloc-${institutionId}-${deptId}-${toYear}`;
+          await env.DB.prepare(
+            `INSERT OR REPLACE INTO cohort_allocations (id, institution_id, department_id, graduation_year, programme_id, assigned_by, assigned_at, note)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`
+          )
+            .bind(
+              callocId,
+              institutionId,
+              deptId,
+              toYear,
+              prog.id,
+              sessionUser.email,
+              `Copied from Class of ${fromYear}`
+            )
+            .run();
+
+          const matchedSet = allSets.find(
+            (s: any) =>
+              String(s.institution_id).toLowerCase() === institutionId.toLowerCase() &&
+              String(s.department_id).toLowerCase() === deptId.toLowerCase() &&
+              Number(s.graduation_year) === toYear
+          );
+          if (matchedSet && prog.status === 'active' && prog.kind === 'funding') {
+            const targetCap =
+              prog.coverage_mode === 'all'
+                ? defaultCap
+                : Math.max(1, Number(prog.coverage_cap) || defaultCap);
+            await syncAlbumFundingGrant(matchedSet, callocId, prog, targetCap, standardPriceKobo);
+          }
+
+          copiedResults.push({
+            departmentId: deptId,
+            programmeId: String(prog.id),
+            programmeName: String(prog.name),
+          });
+        }
+
+        await logAudit(
+          'cohort_offers_copied_year',
+          `Copied ${copiedResults.length} cohort offer(s) from ${fromYear} to ${toYear} for ${institutionId} by ${sessionUser.email}`,
+          sessionUser.email
+        );
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            fromYear,
+            toYear,
+            copiedCount: copiedResults.length,
+            results: copiedResults,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
     }
 

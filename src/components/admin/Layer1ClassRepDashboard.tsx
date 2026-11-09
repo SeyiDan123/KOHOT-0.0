@@ -61,6 +61,7 @@ import {
   removeAlbumSubmissionOnServer,
   uploadMediaToR2,
   migrateBase64ImagesOnServer,
+  ResolvedCohortPricing,
 } from '../../utils/apiClient';
 import { PaystackModal } from '../common/PaystackModal';
 import { 
@@ -74,6 +75,7 @@ import {
   Trophy, 
   Quote, 
   BookOpen, 
+  GraduationCap,
   Share2, 
   Check, 
   Plus, 
@@ -329,6 +331,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const [totalSlotsCredited, setTotalSlotsCredited] = useState<number>(initialCreditedSlots);
   const [totalSlotsUsed, setTotalSlotsUsed] = useState<number>(initialUsedSlots);
   const [slotPriceNaira, setSlotPriceNaira] = useState<number>(500);
+  const [standardSlotPriceNaira, setStandardSlotPriceNaira] = useState<number>(500);
+  const [cohortPricing, setCohortPricing] = useState<ResolvedCohortPricing | null>(null);
   const [slotPurchasesList, setSlotPurchasesList] = useState<any[]>(currentSet.sponsors || []);
   const [slotLedgerList, setSlotLedgerList] = useState<any[]>(() => {
     const explicit = (currentSet as any).slotLedger;
@@ -364,6 +368,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
   // General Department & Class Info State in Album Edit Modal
   const [editDeptName, setEditDeptName] = useState(currentSet.departmentName || '');
+  const [editDeptLogoUrl, setEditDeptLogoUrl] = useState(currentSet.departmentLogoUrl || '');
+  const [isCompressingDeptLogo, setIsCompressingDeptLogo] = useState(false);
   const [editClassSetName, setEditClassSetName] = useState(currentSet.classSetName || '');
   const [editGraduationYear, setEditGraduationYear] = useState(
     String(currentSet.graduationYear || new Date().getFullYear())
@@ -621,12 +627,13 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
   const heroFileInputRef = useRef<HTMLInputElement>(null);
   const footerFileInputRef = useRef<HTMLInputElement>(null);
+  const deptLogoFileInputRef = useRef<HTMLInputElement>(null);
 
   // Cropping Modal State for all Dashboard Uploads & Framings
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [cropModalImage, setCropModalImage] = useState<string>('');
   const [cropModalAspect, setCropModalAspect] = useState<CropAspectRatio>('free');
-  const [cropModalTitle, setCropModalTitle] = useState<string>('Adjust Framing & Crop');
+  const [cropModalTitle, setCropModalTitle] = useState<string>('Adjust Framing & Resize');
   const [cropModalOnConfirm, setCropModalOnConfirm] = useState<((croppedUrl: string) => void) | null>(null);
 
   const triggerCropForImage = (
@@ -647,6 +654,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     setHeroBannerUrl(currentSet.bannerImageUrl);
     setLegacyFooterUrl(currentSet.legacyGroupImageUrl || currentSet.legacyFooterUrl || '');
     setEditDeptName(currentSet.departmentName || '');
+    setEditDeptLogoUrl(currentSet.departmentLogoUrl || '');
     setEditClassSetName(currentSet.classSetName || '');
     setEditGraduationYear(String(currentSet.graduationYear || new Date().getFullYear()));
     setEditClassSlogan(currentSet.classSlogan || '');
@@ -666,6 +674,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     currentSet.legacyGroupImageUrl,
     currentSet.legacyFooterUrl,
     currentSet.departmentName,
+    currentSet.departmentLogoUrl,
     currentSet.classSetName,
     currentSet.graduationYear,
     currentSet.classSlogan,
@@ -674,6 +683,57 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     currentSet.socials,
     currentSet.videos,
   ]);
+
+  const handleDeptLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToUniversalDataUrl(file);
+      if (dataUrl) {
+        triggerCropForImage(
+          dataUrl,
+          '1:1',
+          'Resize Department Logo (White Background)',
+          async (croppedUrl) => {
+            setIsCompressingDeptLogo(true);
+            try {
+              const fetchRes = await fetch(croppedUrl);
+              const blob = await fetchRes.blob();
+              const croppedFile = new File([blob], 'dept-logo.webp', { type: 'image/webp' });
+              const res = await compressImageToWebP(croppedFile, 512, 0.9);
+              let finalLogoUrl = res.dataUrl;
+              try {
+                const uploadRes = await uploadMediaToR2(res.dataUrl, {
+                  setId: currentSet.id,
+                  category: 'banner',
+                  fileName: 'dept-logo.webp',
+                });
+                if (uploadRes.success && uploadRes.url) {
+                  finalLogoUrl = uploadRes.url;
+                }
+              } catch {
+                // fallback to dataUrl if offline/local
+              }
+              setEditDeptLogoUrl(finalLogoUrl);
+              onUpdateSet({
+                ...currentSet,
+                departmentLogoUrl: finalLogoUrl,
+              });
+              setImagerySaveToast('✓ Department Logo updated on white background and applied to your album!');
+              setTimeout(() => setImagerySaveToast(null), 3500);
+            } catch (err: any) {
+              showError('Logo upload failed', err?.message || 'Error processing department logo.');
+            } finally {
+              setIsCompressingDeptLogo(false);
+            }
+          }
+        );
+      }
+    } catch (err) {
+      console.error('Error reading department logo:', err);
+    }
+    if (deptLogoFileInputRef.current) deptLogoFileInputRef.current.value = '';
+  };
 
   const handleHeroPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -782,6 +842,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     onUpdateSet({
       ...currentSet,
       departmentName: editDeptName.trim() || currentSet.departmentName,
+      departmentLogoUrl: editDeptLogoUrl.trim() || currentSet.departmentLogoUrl,
       classSetName: editClassSetName.trim() || currentSet.classSetName,
       graduationYear: !isNaN(parsedYear) && parsedYear > 1950 ? parsedYear : currentSet.graduationYear,
       classSlogan: cleanedSlogan || undefined,
@@ -793,10 +854,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       socials: socials,
       videos: videos,
     });
-    setImagerySaveToast('✓ General department info, class motto, cover imagery, and social handles saved!');
+    setImagerySaveToast('✓ General department info, department logo, class motto, cover imagery, and social handles saved!');
     showSuccess(
       'Album Details & Design Saved',
-      'Your class motto, general department details, hero/footer imagery, and social links are now active on the album.'
+      'Your department logo, class motto, general department details, hero/footer imagery, and social links are now active on the album.'
     );
     setTimeout(() => setImagerySaveToast(null), 3500);
   };
@@ -1108,16 +1169,42 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 : used;
             setSlotLedgerList(buildFallbackSlotLedger(resolvedSponsors, effectiveUsed));
           }
+          if (res.pricing) {
+            setCohortPricing(res.pricing);
+            const stdNgn = Math.round((res.pricing.standardPriceKobo || res.pricing.listPriceKobo || 50000) / 100);
+            const effNgn = Math.round(
+              (res.pricing.kind === 'discount'
+                ? res.pricing.effectivePriceKobo
+                : res.pricing.standardPriceKobo || res.pricing.listPriceKobo || 50000) / 100
+            );
+            setStandardSlotPriceNaira(stdNgn);
+            setSlotPriceNaira(effNgn);
+          }
         }
       })
       .catch(() => {});
 
-    fetch('/api/config', { credentials: 'include' })
+    fetch(`/api/config?albumId=${encodeURIComponent(currentSet.id)}`, { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         const feeKobo = Number(data?.slotFeeKobo || data?.studentFeeKobo || data?.settings?.student_fee_kobo || 0);
         if (feeKobo > 0) {
-          setSlotPriceNaira(Math.round(feeKobo / 100));
+          const stdNgn = Math.round(feeKobo / 100);
+          setStandardSlotPriceNaira(stdNgn);
+          if (!data?.resolvedPricing) {
+            setSlotPriceNaira(stdNgn);
+          }
+        }
+        if (data?.resolvedPricing) {
+          setCohortPricing(data.resolvedPricing);
+          const stdNgn = Math.round((data.resolvedPricing.standardPriceKobo || data.resolvedPricing.listPriceKobo || feeKobo || 50000) / 100);
+          const effNgn = Math.round(
+            (data.resolvedPricing.kind === 'discount'
+              ? data.resolvedPricing.effectivePriceKobo
+              : data.resolvedPricing.standardPriceKobo || data.resolvedPricing.listPriceKobo || feeKobo || 50000) / 100
+          );
+          setStandardSlotPriceNaira(stdNgn);
+          setSlotPriceNaira(effNgn);
         }
       })
       .catch(() => {});
@@ -4246,7 +4333,27 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       isLightMode ? 'text-slate-500' : 'text-zinc-400'
                     }`}
                   >
-                    ₦{slotPriceNaira.toLocaleString()} per slot
+                    {cohortPricing?.kind === 'funding' && cohortPricing.isCovered ? (
+                      <>
+                        <span className="line-through opacity-60 mr-1.5">
+                          ₦{standardSlotPriceNaira.toLocaleString()}
+                        </span>
+                        <span className="text-emerald-500 font-semibold">
+                          Free, sponsored by {cohortPricing.sponsorName || 'KoHot'}
+                        </span>
+                      </>
+                    ) : cohortPricing?.kind === 'discount' ? (
+                      <>
+                        <span className="line-through opacity-60 mr-1.5">
+                          ₦{standardSlotPriceNaira.toLocaleString()}
+                        </span>
+                        <span className="text-amber-400 font-semibold">
+                          ₦{slotPriceNaira.toLocaleString()} per slot ({cohortPricing.discountPercent}% off)
+                        </span>
+                      </>
+                    ) : (
+                      <>₦{slotPriceNaira.toLocaleString()} per slot</>
+                    )}
                   </p>
                 </div>
 
@@ -6041,6 +6148,30 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               maxWidth="md"
             >
               <form onSubmit={handlePurchaseSlotsSubmit} className="space-y-4 p-1 text-xs font-body">
+                <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-2">
+                  <span className="font-mono-tech text-[11px] uppercase text-zinc-400">
+                    Cohort Slot Rate
+                  </span>
+                  {cohortPricing?.kind === 'funding' && cohortPricing.isCovered ? (
+                    <span className="font-mono-tech text-xs text-emerald-400 font-semibold">
+                      <span className="line-through text-zinc-500 mr-1.5">
+                        ₦{standardSlotPriceNaira.toLocaleString()}
+                      </span>
+                      Free, sponsored by {cohortPricing.sponsorName || 'KoHot'}
+                    </span>
+                  ) : cohortPricing?.kind === 'discount' ? (
+                    <span className="font-mono-tech text-xs text-amber-300 font-semibold">
+                      <span className="line-through text-zinc-500 mr-1.5">
+                        ₦{standardSlotPriceNaira.toLocaleString()}
+                      </span>
+                      ₦{slotPriceNaira.toLocaleString()} / slot ({cohortPricing.discountPercent}% off)
+                    </span>
+                  ) : (
+                    <span className="font-mono-tech text-xs text-white font-semibold">
+                      ₦{slotPriceNaira.toLocaleString()} / slot
+                    </span>
+                  )}
+                </div>
                 <div>
                   <label className="block font-mono-tech text-[11px] uppercase text-zinc-400 mb-1.5">
                     Number of Profile Slots *
@@ -6686,6 +6817,113 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   })()}
                 </div>
 
+                {/* University & Department Logos (Displayed on White Background, Department Logo Editable) */}
+                <div className="sm:col-span-2 pt-3 border-t border-white/10">
+                  <div className="p-4 rounded-2xl bg-[#08090e] border border-white/12 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                      {/* 1st Logo: University Logo on White Background */}
+                      <div className="flex flex-col items-center gap-1">
+                        <div
+                          className="w-14 h-14 rounded-xl bg-white p-1.5 border-2 border-amber-500/40 shadow-md flex items-center justify-center shrink-0"
+                          title={`University Logo: ${currentSet.institutionName}`}
+                        >
+                          {currentSet.institutionLogoUrl ? (
+                            <img
+                              src={currentSet.institutionLogoUrl}
+                              alt={currentSet.institutionName}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <GraduationCap className="w-6 h-6 text-slate-800" />
+                          )}
+                        </div>
+                        <span className="font-mono-tech text-[9px] uppercase tracking-wider text-zinc-400">
+                          1. University
+                        </span>
+                      </div>
+
+                      {/* 2nd Logo: Editable Department Logo on White Background */}
+                      <div className="flex flex-col items-center gap-1">
+                        <div
+                          className="w-14 h-14 rounded-xl bg-white p-1.5 border-2 border-amber-500/40 shadow-md flex items-center justify-center shrink-0"
+                          title={`Department Logo: ${editDeptName || currentSet.departmentName}`}
+                        >
+                          {editDeptLogoUrl || currentSet.departmentLogoUrl ? (
+                            <img
+                              src={editDeptLogoUrl || currentSet.departmentLogoUrl}
+                              alt={editDeptName || currentSet.departmentName}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <GraduationCap className="w-6 h-6 text-slate-800" />
+                          )}
+                        </div>
+                        <span className="font-mono-tech text-[9px] uppercase tracking-wider text-[#d4af37] font-semibold">
+                          2. Department
+                        </span>
+                      </div>
+
+                      <div className="space-y-0.5 min-w-0">
+                        <p className="font-mono-tech text-xs text-white font-semibold">
+                          Department Logo (White Background)
+                        </p>
+                        <p className="text-[11px] text-zinc-400 leading-snug">
+                          Displayed alongside the university logo on your Album Hero and Department Legacy Wall on a clean white background.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <input
+                        ref={deptLogoFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleDeptLogoUpload}
+                        className="hidden"
+                      />
+                      <button
+                        id="album-edit-upload-dept-logo-btn"
+                        type="button"
+                        disabled={isCompressingDeptLogo}
+                        onClick={() => deptLogoFileInputRef.current?.click()}
+                        className="px-3.5 py-2 rounded-xl bg-[#d4af37] hover:bg-amber-400 text-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>{isCompressingDeptLogo ? 'Processing...' : 'Upload Logo'}</span>
+                      </button>
+
+                      {(editDeptLogoUrl || currentSet.departmentLogoUrl) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const activeLogo = editDeptLogoUrl || currentSet.departmentLogoUrl;
+                            if (!activeLogo) return;
+                            triggerCropForImage(
+                              activeLogo,
+                              '1:1',
+                              'Resize Department Logo (White Background)',
+                              (resizedUrl) => {
+                                setEditDeptLogoUrl(resizedUrl);
+                                onUpdateSet({
+                                  ...currentSet,
+                                  departmentLogoUrl: resizedUrl,
+                                });
+                                setImagerySaveToast('✓ Department Logo resized on white background!');
+                                setTimeout(() => setImagerySaveToast(null), 3000);
+                              }
+                            );
+                          }}
+                          className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-200 border border-white/15 font-mono-tech text-[11px] uppercase tracking-wider transition-colors cursor-pointer"
+                        >
+                          Resize
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 {/* Public Directory Listing Toggle */}
                 <div className="sm:col-span-2 pt-2 border-t border-white/10 flex items-center justify-between gap-4">
                   <div>
@@ -7033,55 +7271,63 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             ========================================================================= */}
         {activeTab === 'memories' && (
           <div id="moments-edit-section" className="space-y-5 animate-fadeIn">
-            {/* Centralized Sub-Clips Row for Moments vs Highlights in Dashboard Edit (Subtle, less distracting color) */}
-            <div className="grid grid-cols-2 gap-3 max-w-md mx-auto">
-              <button
-                id="memories-subtab-moments"
-                type="button"
-                onClick={(e) => {
-                  setMemoriesAdminSubTab('moments');
-                  try {
-                    sessionStorage.setItem('kohot_admin_dashboard_subtab', 'moments');
-                  } catch {}
-                  scrollClipIntoView(e.currentTarget);
-                }}
-                className={`h-10 px-4 rounded-full border text-xs font-mono-tech uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                  memoriesAdminSubTab === 'moments'
-                    ? isLightMode
-                      ? 'bg-slate-200/90 border-slate-400 text-slate-900 font-bold'
-                      : 'bg-white/[0.10] border-white/30 text-white font-bold'
-                    : isLightMode
-                    ? 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200 font-medium'
-                    : 'bg-[#12151c] hover:bg-white/[0.05] text-zinc-400 hover:text-zinc-200 border-white/10 font-medium'
+            {/* Nested Sub-Clips Track under Memories Edit */}
+            <div className="flex flex-col items-center justify-center">
+              <div
+                className={`inline-flex items-center p-1 rounded-full border shadow-xs ${
+                  isLightMode
+                    ? 'bg-slate-100/90 border-slate-200/90'
+                    : 'bg-[#0b0d13] border-white/10'
                 }`}
               >
-                <Camera className="w-3.5 h-3.5 shrink-0" />
-                <span>Moments ({currentSet.memories.length})</span>
-              </button>
+                <button
+                  id="memories-subtab-moments"
+                  type="button"
+                  onClick={(e) => {
+                    setMemoriesAdminSubTab('moments');
+                    try {
+                      sessionStorage.setItem('kohot_admin_dashboard_subtab', 'moments');
+                    } catch {}
+                    scrollClipIntoView(e.currentTarget);
+                  }}
+                  className={`h-8 px-4 rounded-full text-[11px] font-mono-tech uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    memoriesAdminSubTab === 'moments'
+                      ? isLightMode
+                        ? 'bg-white text-slate-900 font-bold shadow-xs border border-slate-300/80'
+                        : 'bg-[#1a1f2c] text-[#d9b648] font-bold shadow-xs border border-[#d9b648]/40'
+                      : isLightMode
+                      ? 'text-slate-600 hover:text-slate-900 font-medium'
+                      : 'text-zinc-400 hover:text-zinc-200 font-medium'
+                  }`}
+                >
+                  <Camera className="w-3 h-3 shrink-0" />
+                  <span>Moments ({currentSet.memories.length})</span>
+                </button>
 
-              <button
-                id="memories-subtab-highlights"
-                type="button"
-                onClick={(e) => {
-                  setMemoriesAdminSubTab('highlights');
-                  try {
-                    sessionStorage.setItem('kohot_admin_dashboard_subtab', 'highlights');
-                  } catch {}
-                  scrollClipIntoView(e.currentTarget);
-                }}
-                className={`h-10 px-4 rounded-full border text-xs font-mono-tech uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                  memoriesAdminSubTab === 'highlights'
-                    ? isLightMode
-                      ? 'bg-slate-200/90 border-slate-400 text-slate-900 font-bold'
-                      : 'bg-white/[0.10] border-white/30 text-white font-bold'
-                    : isLightMode
-                    ? 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200 font-medium'
-                    : 'bg-[#12151c] hover:bg-white/[0.05] text-zinc-400 hover:text-zinc-200 border-white/10 font-medium'
-                }`}
-              >
-                <Film className="w-3.5 h-3.5 shrink-0" />
-                <span>Highlights ({videos.length})</span>
-              </button>
+                <button
+                  id="memories-subtab-highlights"
+                  type="button"
+                  onClick={(e) => {
+                    setMemoriesAdminSubTab('highlights');
+                    try {
+                      sessionStorage.setItem('kohot_admin_dashboard_subtab', 'highlights');
+                    } catch {}
+                    scrollClipIntoView(e.currentTarget);
+                  }}
+                  className={`h-8 px-4 rounded-full text-[11px] font-mono-tech uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    memoriesAdminSubTab === 'highlights'
+                      ? isLightMode
+                        ? 'bg-white text-slate-900 font-bold shadow-xs border border-slate-300/80'
+                        : 'bg-[#1a1f2c] text-[#d9b648] font-bold shadow-xs border border-[#d9b648]/40'
+                      : isLightMode
+                      ? 'text-slate-600 hover:text-slate-900 font-medium'
+                      : 'text-zinc-400 hover:text-zinc-200 font-medium'
+                  }`}
+                >
+                  <Film className="w-3 h-3 shrink-0" />
+                  <span>Highlights ({videos.length})</span>
+                </button>
+              </div>
             </div>
 
             {/* =====================================================================
@@ -7091,10 +7337,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             <div id="video-highlights-manager-section" className="space-y-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h3 className="font-syne font-bold text-xl sm:text-2xl text-white leading-tight">
+                  <h3 className={`font-syne font-bold text-xl sm:text-2xl leading-tight ${isLightMode ? 'text-slate-900' : 'text-white'}`}>
                     Highlights ({videos.length})
                   </h3>
-                  <p className="font-body text-xs text-zinc-400 mt-1 leading-snug">
+                  <p className={`font-body text-xs mt-1 leading-snug ${isLightMode ? 'text-slate-600' : 'text-zinc-400'}`}>
                     Stream video highlights from YouTube and social media platforms for convocation, dinner night, or class documentaries.
                   </p>
                 </div>
@@ -7103,9 +7349,13 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   id="add-video-highlight-btn"
                   type="button"
                   onClick={handleOpenAddVideo}
-                  className="px-4 py-2.5 rounded-2xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] tracking-wider uppercase font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-blue-600/20"
+                  className={`h-11 px-4 rounded-full border font-mono-tech text-xs uppercase tracking-wider font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer shrink-0 ${
+                    isLightMode
+                      ? 'bg-amber-50/70 hover:bg-amber-100/80 border-amber-500/60 text-amber-800'
+                      : 'bg-[#12151c] hover:bg-[#d9b648]/10 border-[#d9b648]/55 text-[#d9b648]'
+                  }`}
                 >
-                  <Plus className="w-3.5 h-3.5 shrink-0" />
+                  <Plus className="w-4 h-4 shrink-0" />
                   <span>ADD VIDEO LINK</span>
                 </button>
               </div>
@@ -7370,13 +7620,13 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 ===================================================================== */}
             {memoriesAdminSubTab === 'moments' && (
             <div id="moments-batches-manager-section" className="space-y-4">
-              {/* Moments Header with "+ Add Photo Category" Button */}
+              {/* Moments Header with "+ Add Photo Category" Button synced with INVITE / ADD CLASSMATE UI */}
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h3 className="font-syne font-bold text-xl sm:text-2xl text-white leading-tight">
+                  <h3 className={`font-syne font-bold text-xl sm:text-2xl leading-tight ${isLightMode ? 'text-slate-900' : 'text-white'}`}>
                     Moments ({currentSet.memories.length})
                   </h3>
-                  <p className="font-body text-xs text-zinc-400 mt-1 leading-snug">
+                  <p className={`font-body text-xs mt-1 leading-snug ${isLightMode ? 'text-slate-600' : 'text-zinc-400'}`}>
                     Organize class memories and milestone photos by event category.
                   </p>
                 </div>
@@ -7385,9 +7635,13 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   id="create-batch-btn"
                   type="button"
                   onClick={() => setIsAddingBatch(true)}
-                  className="px-4 py-2.5 rounded-2xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-mono-tech text-[11px] tracking-wider uppercase font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-blue-600/20"
+                  className={`h-11 px-4 rounded-full border font-mono-tech text-xs uppercase tracking-wider font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer shrink-0 ${
+                    isLightMode
+                      ? 'bg-amber-50/70 hover:bg-amber-100/80 border-amber-500/60 text-amber-800'
+                      : 'bg-[#12151c] hover:bg-[#d9b648]/10 border-[#d9b648]/55 text-[#d9b648]'
+                  }`}
                 >
-                  <Plus className="w-3.5 h-3.5 shrink-0" />
+                  <Plus className="w-4 h-4 shrink-0" />
                   <span>ADD PHOTO CATEGORY</span>
                 </button>
               </div>

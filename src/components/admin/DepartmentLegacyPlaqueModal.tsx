@@ -91,38 +91,38 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
   const handleDownloadPdf = async () => {
     setIsGeneratingPdf(true);
     try {
-      // 10" wide by 12" high portrait acrylic plaque specification
+      // 12" wide by 12" high square acrylic plaque specification
       const doc = new jsPDF({
         orientation: 'portrait',
         unit: 'in',
-        format: [10, 12],
+        format: [12, 12],
       });
 
       // Background plate: Sleek Obsidian & Deep Acrylic Cast tone
       doc.setFillColor(12, 14, 18);
-      doc.rect(0, 0, 10, 12, 'F');
+      doc.rect(0, 0, 12, 12, 'F');
 
       // Subtle Outer Glass Margin
       doc.setDrawColor(255, 255, 255);
       doc.setLineWidth(0.015);
-      doc.rect(0.4, 0.4, 9.2, 11.2);
+      doc.rect(0.4, 0.4, 11.2, 11.2);
 
       // Metallic Gold Accent Frame
       doc.setDrawColor(212, 175, 55); // Metallic Gold (#d4af37)
       doc.setLineWidth(0.04);
-      doc.rect(0.65, 0.65, 8.7, 10.7);
+      doc.rect(0.65, 0.65, 10.7, 10.7);
 
       // Inner hairline border
       doc.setDrawColor(180, 140, 40);
       doc.setLineWidth(0.01);
-      doc.rect(0.75, 0.75, 8.5, 10.5);
+      doc.rect(0.75, 0.75, 10.5, 10.5);
 
       // 4 Corner Standoff Wall Mount Bolts (0.75 inch diameter acrylic standoffs)
       const standoffPositions = [
         [0.65, 0.65],
-        [9.35, 0.65],
+        [11.35, 0.65],
         [0.65, 11.35],
-        [9.35, 11.35],
+        [11.35, 11.35],
       ];
       standoffPositions.forEach(([sx, sy]) => {
         // Outer standoff metallic ring
@@ -139,120 +139,120 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
       doc.setFont('times', 'bold');
       doc.setFontSize(10);
       doc.setTextColor(212, 175, 55);
-      doc.text('OFFICIAL ARCHIVAL REGISTER • INSTITUTIONAL PERMANENT REPOSITORY', 5.0, 1.45, { align: 'center' });
+      doc.text('OFFICIAL ARCHIVAL REGISTER • INSTITUTIONAL PERMANENT REPOSITORY', 6.0, 1.45, { align: 'center' });
 
       // University Name
       doc.setFont('times', 'bold');
       doc.setFontSize(18);
       doc.setTextColor(255, 255, 255);
-      doc.text(university.name.toUpperCase(), 5.0, 1.95, { align: 'center' });
+      doc.text(university.name.toUpperCase(), 6.0, 1.95, { align: 'center' });
 
       // Faculty Name
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10.5);
       doc.setTextColor(180, 185, 195);
-      doc.text(department.faculty.toUpperCase(), 5.0, 2.3, { align: 'center' });
+      doc.text(department.faculty.toUpperCase(), 6.0, 2.3, { align: 'center' });
 
       // Gold Divider Line
       doc.setDrawColor(212, 175, 55);
       doc.setLineWidth(0.02);
-      doc.line(2.5, 2.55, 7.5, 2.55);
+      doc.line(3.5, 2.55, 8.5, 2.55);
 
       // Department Title
       doc.setFont('times', 'bold');
       doc.setFontSize(22);
       doc.setTextColor(212, 175, 55);
-      doc.text(department.name.toUpperCase(), 5.0, 3.1, { align: 'center' });
+      doc.text(department.name.toUpperCase(), 6.0, 3.1, { align: 'center' });
 
       // Sub-description
       doc.setFont('times', 'italic');
       doc.setFontSize(10.5);
       doc.setTextColor(220, 220, 220);
       const textLines = [
-        'This architectural 10×12 acrylic plaque certifies permanent digital preservation',
+        'This architectural 12×12 acrylic plaque certifies permanent digital preservation',
         'of the graduating cohorts, achievements, and photographic annals of this department.',
       ];
-      doc.text(textLines[0], 5.0, 3.65, { align: 'center' });
-      doc.text(textLines[1], 5.0, 3.9, { align: 'center' });
+      doc.text(textLines[0], 6.0, 3.65, { align: 'center' });
+      doc.text(textLines[1], 6.0, 3.9, { align: 'center' });
 
       // Centered QR Code Container or Archival Crest (2.8 x 2.8 inches)
       if (showQrCode && qrDataUrl) {
         doc.setFillColor(255, 255, 255);
-        doc.roundedRect(3.6, 4.35, 2.8, 2.8, 0.1, 0.1, 'F');
+        doc.roundedRect(4.6, 4.35, 2.8, 2.8, 0.1, 0.1, 'F');
         doc.setDrawColor(212, 175, 55);
         doc.setLineWidth(0.02);
-        doc.roundedRect(3.6, 4.35, 2.8, 2.8, 0.1, 0.1, 'S');
+        doc.roundedRect(4.6, 4.35, 2.8, 2.8, 0.1, 0.1, 'S');
 
-        doc.addImage(qrDataUrl, 'PNG', 3.75, 4.5, 2.5, 2.5);
+        doc.addImage(qrDataUrl, 'PNG', 4.75, 4.5, 2.5, 2.5);
 
         // QR Code Instructions & Identifier
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(10);
         doc.setTextColor(212, 175, 55);
-        doc.text('SCAN TO EXPLORE DEPARTMENT ARCHIVE DIRECTORY', 5.0, 7.55, { align: 'center' });
+        doc.text('SCAN TO EXPLORE DEPARTMENT ARCHIVE DIRECTORY', 6.0, 7.55, { align: 'center' });
       } else {
         // Commemorative Archival Crest Medallion
         doc.setDrawColor(212, 175, 55);
         doc.setLineWidth(0.035);
-        doc.circle(5.0, 5.7, 1.35, 'S');
+        doc.circle(6.0, 5.7, 1.35, 'S');
         doc.setLineWidth(0.015);
-        doc.circle(5.0, 5.7, 1.25, 'S');
+        doc.circle(6.0, 5.7, 1.25, 'S');
 
         doc.setFont('times', 'bold');
         doc.setFontSize(20);
         doc.setTextColor(212, 175, 55);
-        doc.text(department.code || university.shortCode, 5.0, 5.65, { align: 'center' });
+        doc.text(department.code || university.shortCode, 6.0, 5.65, { align: 'center' });
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8.5);
         doc.setTextColor(220, 220, 220);
-        doc.text('PERMANENT ARCHIVE REGISTER', 5.0, 6.0, { align: 'center' });
+        doc.text('PERMANENT ARCHIVE REGISTER', 6.0, 6.0, { align: 'center' });
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(10);
         doc.setTextColor(212, 175, 55);
-        doc.text('OFFICIAL PHYSICAL COMMEMORATIVE REGISTER', 5.0, 7.55, { align: 'center' });
+        doc.text('OFFICIAL PHYSICAL COMMEMORATIVE REGISTER', 6.0, 7.55, { align: 'center' });
       }
 
       doc.setFont('courier', 'normal');
       doc.setFontSize(8.5);
       doc.setTextColor(160, 165, 175);
-      doc.text(`ARCHIVAL ID: ${department.code || 'DEPT'}-${university.shortCode}-PLAQUE-10x12 • KOHOT ARCHIVES`, 5.0, 7.85, { align: 'center' });
+      doc.text(`ARCHIVAL ID: ${department.code || 'DEPT'}-${university.shortCode}-PLAQUE-12x12 • KOHOT ARCHIVES`, 6.0, 7.85, { align: 'center' });
 
       // Department Legacy Caption
       if (department.caption) {
         doc.setFont('times', 'italic');
         doc.setFontSize(10);
         doc.setTextColor(200, 205, 215);
-        const splitCaption = doc.splitTextToSize(`"${department.caption}"`, 7.2);
-        doc.text(splitCaption, 5.0, 8.4, { align: 'center' });
+        const splitCaption = doc.splitTextToSize(`"${department.caption}"`, 8.2);
+        doc.text(splitCaption, 6.0, 8.4, { align: 'center' });
       }
 
       // Bottom Signatures & Seal
       doc.setDrawColor(90, 80, 50);
       doc.setLineWidth(0.015);
-      doc.line(1.5, 9.8, 3.8, 9.8);
-      doc.line(6.2, 9.8, 8.5, 9.8);
+      doc.line(2.2, 9.8, 4.8, 9.8);
+      doc.line(7.2, 9.8, 9.8, 9.8);
 
       doc.setFont('times', 'bold');
       doc.setFontSize(9);
       doc.setTextColor(200, 200, 200);
-      doc.text('HEAD OF DEPARTMENT', 2.65, 10.05, { align: 'center' });
-      doc.text('DEAN OF FACULTY', 7.35, 10.05, { align: 'center' });
+      doc.text('HEAD OF DEPARTMENT', 3.5, 10.05, { align: 'center' });
+      doc.text('DEAN OF FACULTY', 8.5, 10.05, { align: 'center' });
 
       doc.setFont('times', 'italic');
       doc.setFontSize(8);
       doc.setTextColor(150, 150, 150);
-      doc.text(department.hodName || 'Verified Institutional Signature', 2.65, 10.25, { align: 'center' });
-      doc.text('Official Seal & Accreditation', 7.35, 10.25, { align: 'center' });
+      doc.text(department.hodName || 'Verified Institutional Signature', 3.5, 10.25, { align: 'center' });
+      doc.text('Official Seal & Accreditation', 8.5, 10.25, { align: 'center' });
 
       // Plaque Spec Footer
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7.5);
       doc.setTextColor(120, 120, 120);
-      doc.text('SPECIFICATION: 10×12 INCH ARCHITECTURAL CAST ACRYLIC WITH METALLIC STANDOFF MOUNTS', 5.0, 10.85, { align: 'center' });
+      doc.text('SPECIFICATION: 12×12 INCH ARCHITECTURAL CAST ACRYLIC WITH METALLIC STANDOFF MOUNTS', 6.0, 10.85, { align: 'center' });
 
-      doc.save(`${university.shortCode}-${department.code || 'DEPT'}-10x12-Acrylic-Legacy-Plaque.pdf`);
+      doc.save(`${university.shortCode}-${department.code || 'DEPT'}-12x12-Acrylic-Legacy-Plaque.pdf`);
     } catch (error) {
       console.error('Failed to generate PDF plaque', error);
     } finally {
@@ -264,35 +264,35 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
     setIsGeneratingImage(true);
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = 1200;
+      canvas.width = 1440;
       canvas.height = 1440;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      const bgGrad = ctx.createLinearGradient(0, 0, 1200, 1440);
+      const bgGrad = ctx.createLinearGradient(0, 0, 1440, 1440);
       bgGrad.addColorStop(0, '#101218');
       bgGrad.addColorStop(0.5, '#0b0c10');
       bgGrad.addColorStop(1, '#07080a');
       ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, 0, 1200, 1440);
+      ctx.fillRect(0, 0, 1440, 1440);
 
       ctx.strokeStyle = '#2a2d38';
       ctx.lineWidth = 4;
-      ctx.strokeRect(30, 30, 1140, 1380);
+      ctx.strokeRect(30, 30, 1380, 1380);
 
       ctx.strokeStyle = '#d4af37';
       ctx.lineWidth = 5;
-      ctx.strokeRect(60, 60, 1080, 1320);
+      ctx.strokeRect(60, 60, 1320, 1320);
 
       ctx.strokeStyle = '#8d7020';
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(74, 74, 1052, 1292);
+      ctx.strokeRect(74, 74, 1292, 1292);
 
       const standoffs = [
         [60, 60],
-        [1140, 60],
+        [1380, 60],
         [60, 1380],
-        [1140, 1380],
+        [1380, 1380],
       ];
       standoffs.forEach(([sx, sy]) => {
         ctx.beginPath();
@@ -314,33 +314,33 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
       ctx.textAlign = 'center';
       ctx.fillStyle = '#d4af37';
       ctx.font = 'bold 15px Georgia, serif';
-      ctx.fillText('OFFICIAL ARCHIVAL REGISTER • INSTITUTIONAL PERMANENT REPOSITORY', 600, 140);
+      ctx.fillText('OFFICIAL ARCHIVAL REGISTER • INSTITUTIONAL PERMANENT REPOSITORY', 720, 140);
 
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 28px Georgia, serif';
-      ctx.fillText(university.name.toUpperCase(), 600, 200);
+      ctx.fillText(university.name.toUpperCase(), 720, 200);
 
       ctx.fillStyle = '#9ca3af';
       ctx.font = '17px Arial, sans-serif';
-      ctx.fillText(department.faculty.toUpperCase(), 600, 240);
+      ctx.fillText(department.faculty.toUpperCase(), 720, 240);
 
       ctx.strokeStyle = '#d4af37';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(350, 270);
-      ctx.lineTo(850, 270);
+      ctx.moveTo(470, 270);
+      ctx.lineTo(970, 270);
       ctx.stroke();
 
       ctx.fillStyle = '#d4af37';
       ctx.font = 'bold 36px Georgia, serif';
-      ctx.fillText(department.name.toUpperCase(), 600, 335);
+      ctx.fillText(department.name.toUpperCase(), 720, 335);
 
       ctx.fillStyle = '#d1d5db';
       ctx.font = 'italic 16px Georgia, serif';
-      ctx.fillText('Architectural 10×12 Acrylic Commemorative Plaque', 600, 375);
+      ctx.fillText('Architectural 12×12 Acrylic Commemorative Plaque', 720, 375);
       ctx.font = '14px Arial, sans-serif';
       ctx.fillStyle = '#9ca3af';
-      ctx.fillText('Preserving the graduating cohorts, honors, and photographic annals', 600, 405);
+      ctx.fillText('Preserving the graduating cohorts, honors, and photographic annals', 720, 405);
 
       if (showQrCode && qrDataUrl) {
         const img = new Image();
@@ -350,68 +350,68 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
         });
 
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(430, 460, 340, 340);
+        ctx.fillRect(550, 460, 340, 340);
         ctx.strokeStyle = '#d4af37';
         ctx.lineWidth = 4;
-        ctx.strokeRect(430, 460, 340, 340);
+        ctx.strokeRect(550, 460, 340, 340);
 
-        ctx.drawImage(img, 445, 475, 310, 310);
+        ctx.drawImage(img, 565, 475, 310, 310);
 
         ctx.fillStyle = '#d4af37';
         ctx.font = 'bold 16px Arial, sans-serif';
-        ctx.fillText('SCAN WITH CAMERA TO EXPLORE DEPARTMENT ARCHIVE', 600, 845);
+        ctx.fillText('SCAN WITH CAMERA TO EXPLORE DEPARTMENT ARCHIVE', 720, 845);
       } else {
         // Draw gold circular commemorative seal
         ctx.save();
         ctx.strokeStyle = '#d4af37';
         ctx.lineWidth = 4;
         ctx.beginPath();
-        ctx.arc(600, 630, 160, 0, Math.PI * 2);
+        ctx.arc(720, 630, 160, 0, Math.PI * 2);
         ctx.stroke();
 
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.arc(600, 630, 146, 0, Math.PI * 2);
+        ctx.arc(720, 630, 146, 0, Math.PI * 2);
         ctx.stroke();
 
         ctx.fillStyle = '#d4af37';
         ctx.font = 'bold 44px Georgia, serif';
-        ctx.fillText(department.code || university.shortCode, 600, 620);
+        ctx.fillText(department.code || university.shortCode, 720, 620);
 
         ctx.font = 'bold 15px Arial, sans-serif';
         ctx.fillStyle = '#f3f4f6';
-        ctx.fillText('PERMANENT ARCHIVE', 600, 665);
+        ctx.fillText('PERMANENT ARCHIVE', 720, 665);
         ctx.restore();
 
         ctx.fillStyle = '#d4af37';
         ctx.font = 'bold 16px Arial, sans-serif';
-        ctx.fillText('OFFICIAL PHYSICAL COMMEMORATIVE REGISTER', 600, 845);
+        ctx.fillText('OFFICIAL PHYSICAL COMMEMORATIVE REGISTER', 720, 845);
       }
 
       ctx.fillStyle = '#6b7280';
       ctx.font = '13px monospace';
-      ctx.fillText(`ARCHIVAL ID: ${department.code || 'DEPT'}-${university.shortCode}-PLAQUE-10x12 • KOHOT PLATFORM`, 600, 875);
+      ctx.fillText(`ARCHIVAL ID: ${department.code || 'DEPT'}-${university.shortCode}-PLAQUE-12x12 • KOHOT PLATFORM`, 720, 875);
 
       if (department.caption) {
         ctx.fillStyle = '#d1d5db';
         ctx.font = 'italic 15px Georgia, serif';
-        ctx.fillText(`"${department.caption}"`, 600, 930);
+        ctx.fillText(`"${department.caption}"`, 720, 930);
       }
 
       if (department.hodName) {
         ctx.fillStyle = '#9ca3af';
         ctx.font = '14px Arial, sans-serif';
-        ctx.fillText(`HOD: ${department.hodName}`, 600, 970);
+        ctx.fillText(`HOD: ${department.hodName}`, 720, 970);
       }
 
       ctx.fillStyle = '#6b7280';
       ctx.font = '12px Arial, sans-serif';
-      ctx.fillText('OFFICIALLY CERTIFIED ON THE KOHOT PERMANENT ARCHIVAL NETWORK', 600, 1310);
+      ctx.fillText('OFFICIALLY CERTIFIED ON THE KOHOT PERMANENT ARCHIVAL NETWORK', 720, 1310);
 
       const pngDataUrl = canvas.toDataURL('image/png');
       const link = document.createElement('a');
       link.href = pngDataUrl;
-      link.download = `${university.shortCode}_${department.name.replace(/\s+/g, '_')}_10x12_Plaque.png`;
+      link.download = `${university.shortCode}_${department.name.replace(/\s+/g, '_')}_12x12_Plaque.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -453,7 +453,7 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
             </button>
             <div className="hidden sm:block">
               <span className="text-xs font-syne font-bold text-white">
-                10×12 Acrylic Plaque Register
+                12×12 Acrylic Plaque Register
               </span>
             </div>
           </div>
@@ -476,11 +476,11 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
         {/* Scrollable Modal Content */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
 
-          {/* 10" x 12" Portrait Acrylic Plaque Visual Preview (aspect-[10/12]) */}
+          {/* 12" x 12" Square Acrylic Plaque Visual Preview (aspect-square) */}
           <div className="flex justify-center">
             <div 
               ref={plaqueRef}
-              className="relative w-full max-w-[380px] sm:max-w-[410px] aspect-[10/12] rounded-2xl bg-gradient-to-br from-[#181a20] via-[#101218] to-[#08090d] p-6 sm:p-8 border-2 border-white/20 shadow-[0_0_40px_rgba(212,175,55,0.12)] text-center flex flex-col justify-between overflow-hidden select-none"
+              className="relative w-full max-w-[400px] sm:max-w-[430px] aspect-square rounded-2xl bg-gradient-to-br from-[#181a20] via-[#101218] to-[#08090d] p-6 sm:p-8 border-2 border-white/20 shadow-[0_0_40px_rgba(212,175,55,0.12)] text-center flex flex-col justify-between overflow-hidden select-none"
             >
               {/* Acrylic glass edge bevel highlight */}
               <div className="absolute inset-0 border border-white/10 pointer-events-none rounded-2xl shadow-inner" />
@@ -548,7 +548,7 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
                           SCAN FOR DIRECTORY &amp; YEARLY ALBUMS
                         </p>
                         <p className="font-mono-tech text-[7px] sm:text-[8px] text-zinc-500">
-                          ID: {department.code || 'DEPT'}-{university.shortCode} • 10×12 ACRYLIC SPEC
+                          ID: {department.code || 'DEPT'}-{university.shortCode} • 12×12 ACRYLIC SPEC
                         </p>
                       </div>
                     </>
@@ -570,7 +570,7 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
                           OFFICIAL PHYSICAL COMMEMORATIVE REGISTER
                         </p>
                         <p className="font-mono-tech text-[7px] sm:text-[8px] text-zinc-500">
-                          ID: {department.code || 'DEPT'}-{university.shortCode} • 10×12 ACRYLIC SPEC
+                          ID: {department.code || 'DEPT'}-{university.shortCode} • 12×12 ACRYLIC SPEC
                         </p>
                       </div>
                     </div>
@@ -633,7 +633,7 @@ export const DepartmentLegacyPlaqueModal: React.FC<DepartmentLegacyPlaqueModalPr
               className="px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-[#d4af37] to-[#b38928] hover:from-[#e5c04b] hover:to-[#c49a39] text-black font-tech font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-lg transition-all cursor-pointer disabled:opacity-50"
             >
               <Download className="w-4 h-4" />
-              <span>{isGeneratingPdf ? 'Generating...' : '10×12 PDF'}</span>
+              <span>{isGeneratingPdf ? 'Generating...' : '12×12 PDF'}</span>
             </button>
 
             {/* Download Image PNG button */}

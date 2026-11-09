@@ -213,13 +213,24 @@ export const PublicDirectoryView: React.FC<PublicDirectoryViewProps> = ({
       instEntry.departments.get(deptKey)!.albums.push(card);
     }
 
-    return Array.from(instMap.values()).map((inst) => ({
-      ...inst,
-      departments: Array.from(inst.departments.values()).map((d) => ({
-        ...d,
-        albums: d.albums.sort((a, b) => b.graduationYear - a.graduationYear),
-      })),
-    }));
+    return Array.from(instMap.values())
+      .map((inst) => ({
+        ...inst,
+        departments: Array.from(inst.departments.values())
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((d) => ({
+            ...d,
+            albums: d.albums.sort((a, b) => b.graduationYear - a.graduationYear),
+          })),
+      }))
+      .sort((a, b) => {
+        const uniA = universities.find((u) => u.id.toLowerCase() === a.id.toLowerCase());
+        const uniB = universities.find((u) => u.id.toLowerCase() === b.id.toLowerCase());
+        const aPriority = uniA?.isPriority ? 1 : 0;
+        const bPriority = uniB?.isPriority ? 1 : 0;
+        if (aPriority !== bPriority) return bPriority - aPriority;
+        return a.name.localeCompare(b.name);
+      });
   }, [directoryAlbums, universities]);
 
   const filteredInstitutions = useMemo(() => {

@@ -284,7 +284,7 @@
     #050608 100%
   );
   background-size: 260% 100%;
-  animation: aiBlackWaveFlow 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation: aiBlackWaveFlow 5.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 .kohot-ai-wave-loader::after {
@@ -299,7 +299,7 @@
     rgba(0, 0, 0, 0.85) 70%,
     transparent 100%
   );
-  animation: aiBlackWaveRibbon 1.65s ease-in-out infinite;
+  animation: aiBlackWaveRibbon 4.4s ease-in-out infinite;
   pointer-events: none;
 }
 

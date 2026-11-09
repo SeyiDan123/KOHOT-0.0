@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { ImageOff } from 'lucide-react';
 
 interface GlazedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   src: string;
@@ -10,6 +11,16 @@ interface GlazedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   showMonogram?: boolean;
 }
 
+const getInitialsMonogram = (text: string): string => {
+  const cleaned = (text || '').trim();
+  if (!cleaned) return '••';
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return `${words[0][0]}${words[1][0]}`.toUpperCase();
+  }
+  return cleaned.slice(0, 2).toUpperCase();
+};
+
 export const GlazedImage: React.FC<GlazedImageProps> = ({
   src,
   alt,
@@ -17,13 +28,14 @@ export const GlazedImage: React.FC<GlazedImageProps> = ({
   containerClassName = '',
   aspectRatio,
   priority = false,
+  showMonogram = true,
   ...props
 }) => {
   const [hasError, setHasError] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
-  // Synchronously check if already cached in browser so cached images appear in 0ms
+  // Synchronously check if already cached in browser so cached images appear immediately
   useLayoutEffect(() => {
     setHasError(false);
     const el = imgRef.current;
@@ -43,11 +55,11 @@ export const GlazedImage: React.FC<GlazedImageProps> = ({
 
   return (
     <div
-      className={`relative overflow-hidden bg-[#08090d] select-none ${
+      className={`relative overflow-hidden bg-zinc-900 select-none ${
         aspectRatio ? aspectRatio : ''
       } ${containerClassName}`}
     >
-      {/* AI-Style Moving Black Wave Loader while image is loading */}
+      {/* Slow AI-Style Moving Black Wave Loader while image is loading */}
       {!hasError && Boolean(src) && !isLoaded && (
         <div
           aria-hidden="true"
@@ -55,24 +67,25 @@ export const GlazedImage: React.FC<GlazedImageProps> = ({
         />
       )}
 
-      {/* Default Error / Missing Image Fallback: Official KoHot Logo */}
+      {/* Restored Previous Error / Missing Image Fallback (Monogram or Subtle Placeholder, NOT KoHot Logo) */}
       {hasError || !src ? (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-3 bg-gradient-to-br from-[#0e1017] via-[#090a0f] to-[#141722] text-zinc-300 border border-white/5">
-          <div className="w-11 h-11 rounded-2xl bg-[#141620] border border-[#d4af37]/45 shadow-[0_0_20px_rgba(212,175,55,0.15)] flex items-center justify-center mb-1.5">
-            <span className="font-syne font-extrabold text-base text-[#d4af37] tracking-tight">
-              K
-            </span>
-          </div>
-          <span className="font-syne font-extrabold text-[11px] tracking-wider text-white/90">
-            KoHot
-          </span>
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-3 bg-gradient-to-br from-zinc-800 via-zinc-900 to-black text-zinc-400">
+          {showMonogram && alt ? (
+            <div className="w-11 h-11 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+              <span className="font-syne font-bold text-sm text-zinc-300 tracking-wider">
+                {getInitialsMonogram(alt)}
+              </span>
+            </div>
+          ) : (
+            <ImageOff className="w-5 h-5 text-zinc-500 opacity-60" />
+          )}
         </div>
       ) : (
         <img
           ref={imgRef}
           src={src}
           alt={alt}
-          loading={priority ? 'eager' : props.loading || 'eager'}
+          loading={priority ? 'eager' : props.loading || 'lazy'}
           decoding={priority ? 'sync' : 'async'}
           fetchPriority={priority ? 'high' : undefined}
           referrerPolicy="no-referrer"
@@ -93,3 +106,4 @@ export const GlazedImage: React.FC<GlazedImageProps> = ({
     </div>
   );
 };
+

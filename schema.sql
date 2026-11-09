@@ -90,6 +90,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   status TEXT NOT NULL, -- 'Paid' | 'paid, duplicate class, needs refund' | 'paid, album not created'
   payer_name TEXT,
   payer_email TEXT,
+  programme_id TEXT,
+  list_price_kobo INTEGER,
+  discount_kobo INTEGER DEFAULT 0,
   paystack_data_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -345,3 +348,38 @@ CREATE TABLE IF NOT EXISTS slot_allocations (
 
 CREATE INDEX IF NOT EXISTS idx_slot_allocations_lookup ON slot_allocations(institution_id, department_id, graduation_year);
 
+-- 19. Programmes (Funding & Discount Offers; Standard price is never stored here)
+CREATE TABLE IF NOT EXISTS programmes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('funding', 'discount')),
+  discount_percent INTEGER CHECK(discount_percent IS NULL OR (discount_percent >= 1 AND discount_percent <= 99)),
+  coverage_mode TEXT CHECK(coverage_mode IS NULL OR coverage_mode IN ('all', 'per_album_cap')),
+  coverage_cap INTEGER,
+  sponsor_name TEXT DEFAULT '',
+  show_recognition INTEGER NOT NULL DEFAULT 1,
+  valid_from TEXT,
+  valid_to TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_programmes_kind_status ON programmes(kind, status);
+
+-- 20. Cohort Allocations (No row means Standard; never create rows for Standard)
+CREATE TABLE IF NOT EXISTS cohort_allocations (
+  id TEXT PRIMARY KEY,
+  institution_id TEXT NOT NULL,
+  department_id TEXT NOT NULL,
+  graduation_year INTEGER NOT NULL,
+  programme_id TEXT NOT NULL,
+  assigned_by TEXT,
+  assigned_at TEXT NOT NULL DEFAULT (datetime('now')),
+  note TEXT DEFAULT '',
+  UNIQUE(institution_id, department_id, graduation_year),
+  FOREIGN KEY (programme_id) REFERENCES programmes(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cohort_allocations_cohort ON cohort_allocations(institution_id, department_id, graduation_year);
+CREATE INDEX IF NOT EXISTS idx_cohort_allocations_programme ON cohort_allocations(programme_id);
