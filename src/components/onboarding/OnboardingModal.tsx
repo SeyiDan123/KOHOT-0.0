@@ -57,8 +57,10 @@ interface OnboardingModalProps {
   onLoginSuccess?: (user: UserAccount) => void;
   onOpenLogin?: () => void;
   initialUniversityId?: string;
+  initialDepartmentId?: string;
   initialDepartmentName?: string;
   initialGraduationYear?: number;
+  lockDepartmentContext?: boolean;
   onRegisterSuccess: (newSet: ClassSet, userAccount: UserAccount, tx: FinancialTransaction) => void;
   onSubmitFoundingRequest: (req: FoundingClassRequest) => void;
   onRequestAddition: (req: DepartmentAdditionRequest) => void;
@@ -86,8 +88,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   inviteContext = null,
   onLoginSuccess,
   initialUniversityId,
+  initialDepartmentId,
   initialDepartmentName,
   initialGraduationYear,
+  lockDepartmentContext = false,
   onRegisterSuccess,
   onSubmitFoundingRequest,
   onRequestAddition,
@@ -119,9 +123,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [selectedUniId, setSelectedUniId] = useState<string>(
     inviteContext?.universityId || initialUniversityId || universities[0]?.id || ''
   );
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>('');
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(
+    initialDepartmentId || ''
+  );
   const [selectedDepartmentName, setSelectedDepartmentName] = useState<string>(
     initialDepartmentName || ''
+  );
+  const [isContextLocked, setIsContextLocked] = useState<boolean>(
+    Boolean(lockDepartmentContext || (inviteContext && inviteContext.inviteCode))
   );
 
   // Search states for dropdowns
@@ -184,14 +193,56 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     );
   }, [availableDepartments, deptSearchQuery]);
 
-  // Auto-select department if not set
+  // Sync context-aware university & department whenever modal opens or props change
+  useEffect(() => {
+    if (!isOpen) return;
+    const targetUniId = inviteContext?.universityId || initialUniversityId;
+    if (targetUniId && sortedInstitutions.some((u) => u.id === targetUniId)) {
+      setSelectedUniId(targetUniId);
+    } else if (!selectedUniId && sortedInstitutions.length > 0) {
+      setSelectedUniId(sortedInstitutions[0].id);
+    }
+    setIsContextLocked(
+      Boolean(
+        (lockDepartmentContext && (initialUniversityId || initialDepartmentId || initialDepartmentName)) ||
+          (inviteContext && inviteContext.inviteCode)
+      )
+    );
+  }, [
+    isOpen,
+    inviteContext,
+    initialUniversityId,
+    initialDepartmentId,
+    initialDepartmentName,
+    lockDepartmentContext,
+    sortedInstitutions,
+  ]);
+
+  // Auto-select department from context or default
   useEffect(() => {
     if (availableDepartments.length > 0) {
-      if (!selectedDepartmentId || !availableDepartments.some((d) => d.id === selectedDepartmentId)) {
-        const matchByName = initialDepartmentName
-          ? availableDepartments.find((d) => d.name.toLowerCase() === initialDepartmentName.toLowerCase())
+      const matchById =
+        (inviteContext?.departmentId || initialDepartmentId)
+          ? availableDepartments.find(
+              (d) => d.id === (inviteContext?.departmentId || initialDepartmentId)
+            )
           : null;
-        const target = matchByName || availableDepartments[0];
+      const matchByName =
+        !matchById && initialDepartmentName
+          ? availableDepartments.find(
+              (d) => d.name.toLowerCase() === initialDepartmentName.toLowerCase()
+            )
+          : null;
+
+      if (matchById || matchByName) {
+        const target = (matchById || matchByName)!;
+        setSelectedDepartmentId(target.id);
+        setSelectedDepartmentName(target.name);
+      } else if (
+        !selectedDepartmentId ||
+        !availableDepartments.some((d) => d.id === selectedDepartmentId)
+      ) {
+        const target = availableDepartments[0];
         setSelectedDepartmentId(target.id);
         setSelectedDepartmentName(target.name);
       }
@@ -199,7 +250,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       setSelectedDepartmentId('');
       setSelectedDepartmentName('');
     }
-  }, [availableDepartments, selectedDepartmentId, initialDepartmentName]);
+  }, [
+    isOpen,
+    availableDepartments,
+    inviteContext,
+    initialDepartmentId,
+    initialDepartmentName,
+  ]);
 
   // Selected Department Item
   const currentDeptItem = useMemo(() => {
@@ -1108,169 +1165,210 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       2. Graduating Class &amp; Cohort Details
                     </h3>
                     <p className="font-body text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
-                      Select your academic institution and department from the Host directory.
+                      {isContextLocked
+                        ? 'Your institution and department have been automatically pre-filled from the Department Legacy Wall.'
+                        : 'Select your academic institution and department from the Host directory.'}
                     </p>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-5 sm:p-6 rounded-2xl bg-slate-50/50 dark:bg-white/[0.02] border border-slate-200 dark:border-white/10">
-                    {/* Searchable Institution Combobox */}
-                    <div className="space-y-1.5 sm:col-span-2 relative">
-                      <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
-                        Institution *
-                      </label>
-                      <div className="relative">
-                        <div
-                          onClick={() => setIsUniDropdownOpen(!isUniDropdownOpen)}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs flex items-center justify-between cursor-pointer shadow-xs hover:border-[#d4af37]"
-                        >
-                          <div className="flex items-center gap-2 truncate">
-                            <span className="font-bold">{currentUni?.name}</span>
-                            <span className="text-[10px] text-zinc-500">({currentUni?.shortCode})</span>
-                            {currentUni?.isPriority && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-[#d4af37] text-black">
-                                Current
+                    {isContextLocked && currentUni && currentDeptItem ? (
+                      <div className="sm:col-span-2 p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-400/40 dark:border-emerald-500/30 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-11 h-11 rounded-xl bg-white p-1.5 border border-slate-200 shadow-xs flex items-center justify-center shrink-0">
+                            <img
+                              src={currentDeptItem.logoUrl || currentUni.logoUrl}
+                              alt={selectedDepartmentName}
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono-tech text-[10px] uppercase tracking-wider text-emerald-700 dark:text-emerald-400 font-bold">
+                                Context-Aware Department Selection
                               </span>
-                            )}
+                              <Lock className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                            </div>
+                            <p className="font-syne font-bold text-sm text-slate-900 dark:text-white truncate mt-0.5">
+                              Department of {selectedDepartmentName}
+                            </p>
+                            <p className="font-mono-tech text-[11px] text-slate-600 dark:text-zinc-400 truncate">
+                              {currentUni.name} ({currentUni.shortCode})
+                            </p>
                           </div>
-                          <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
                         </div>
-
-                        {/* Searchable dropdown popup */}
-                        {isUniDropdownOpen && (
-                          <div className="absolute top-full left-0 right-0 mt-1 z-30 max-h-60 overflow-y-auto rounded-2xl bg-white dark:bg-[#18181b] border border-slate-300 dark:border-white/20 shadow-2xl p-2 space-y-1">
-                            <input
-                              type="text"
-                              value={uniSearchQuery}
-                              onChange={(e) => setUniSearchQuery(e.target.value)}
-                              placeholder="Search institution..."
-                              className="w-full px-3 py-2 mb-1 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono-tech text-slate-900 dark:text-white focus:outline-none focus:border-[#d4af37]"
-                              autoFocus
-                            />
-                            {filteredInstitutions.length === 0 ? (
-                              <div className="p-3 text-center text-xs text-zinc-500 font-mono-tech">
-                                No institution found
-                              </div>
-                            ) : (
-                              filteredInstitutions.map((u) => {
-                                const isSelected = u.id === selectedUniId;
-                                const typeLabel =
-                                  u.institutionType === 'polytechnic'
-                                    ? 'Polytechnic'
-                                    : u.institutionType === 'college_of_education'
-                                    ? 'College of Education'
-                                    : 'University';
-
-                                return (
-                                  <div
-                                    key={u.id}
-                                    onClick={() => {
-                                      setSelectedUniId(u.id);
-                                      setIsUniDropdownOpen(false);
-                                      setUniSearchQuery('');
-                                    }}
-                                    className={`px-3 py-2 rounded-xl text-xs font-mono-tech flex items-center justify-between cursor-pointer transition-colors ${
-                                      isSelected
-                                        ? 'bg-[#d4af37]/15 text-[#d4af37] font-bold'
-                                        : 'hover:bg-slate-100 dark:hover:bg-white/5 text-slate-800 dark:text-zinc-200'
-                                    }`}
-                                  >
-                                    <div className="flex items-center gap-2 truncate">
-                                      <span>{u.name}</span>
-                                      <span className="text-[10px] text-zinc-500">[{typeLabel}]</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      {u.isPriority && (
-                                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-[#d4af37] text-black">
-                                          Current
-                                        </span>
-                                      )}
-                                      {isSelected && <Check className="w-3.5 h-3.5 text-[#d4af37]" />}
-                                    </div>
-                                  </div>
-                                );
-                              })
-                            )}
-                          </div>
+                        {!isRelayMode && (
+                          <button
+                            type="button"
+                            onClick={() => setIsContextLocked(false)}
+                            className="px-3 py-1.5 rounded-xl bg-white dark:bg-white/10 hover:bg-slate-100 dark:hover:bg-white/15 border border-slate-200 dark:border-white/10 text-[11px] font-mono-tech text-slate-700 dark:text-zinc-300 shrink-0 cursor-pointer transition-colors"
+                          >
+                            Change
+                          </button>
                         )}
                       </div>
-                    </div>
-
-                    {/* Searchable Department Combobox */}
-                    <div className="space-y-1.5 sm:col-span-2 relative">
-                      <div className="flex items-center justify-between">
-                        <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
-                          Department *
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => setIsRequestingNewDept(true)}
-                          className="text-[11px] font-mono-tech text-amber-600 dark:text-amber-400 hover:underline font-semibold flex items-center gap-1 cursor-pointer"
-                        >
-                          <Building2 className="w-3 h-3" />
-                          <span>Request Missing Department</span>
-                        </button>
-                      </div>
-
-                      <div className="relative">
-                        <div
-                          onClick={() => setIsDeptDropdownOpen(!isDeptDropdownOpen)}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs flex items-center justify-between cursor-pointer shadow-xs hover:border-[#d4af37]"
-                        >
-                          <span className="truncate font-bold">
-                            {selectedDepartmentName || 'Select department...'}
-                          </span>
-                          <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                        </div>
-
-                        {isDeptDropdownOpen && (
-                          <div className="absolute top-full left-0 right-0 mt-1 z-30 max-h-60 overflow-y-auto rounded-2xl bg-white dark:bg-[#18181b] border border-slate-300 dark:border-white/20 shadow-2xl p-2 space-y-1">
-                            <input
-                              type="text"
-                              value={deptSearchQuery}
-                              onChange={(e) => setDeptSearchQuery(e.target.value)}
-                              placeholder="Search department in directory..."
-                              className="w-full px-3 py-2 mb-1 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono-tech text-slate-900 dark:text-white focus:outline-none focus:border-[#d4af37]"
-                              autoFocus
-                            />
-                            {filteredDepartments.length === 0 ? (
-                              <div className="p-3 text-center text-xs text-zinc-500 font-mono-tech">
-                                No department found. Click "Request Missing Department" above.
+                    ) : (
+                      <>
+                        {/* Searchable Institution Combobox */}
+                        <div className="space-y-1.5 sm:col-span-2 relative">
+                          <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
+                            Institution *
+                          </label>
+                          <div className="relative">
+                            <div
+                              onClick={() => setIsUniDropdownOpen(!isUniDropdownOpen)}
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs flex items-center justify-between cursor-pointer shadow-xs hover:border-[#d4af37]"
+                            >
+                              <div className="flex items-center gap-2 truncate">
+                                <span className="font-bold">{currentUni?.name}</span>
+                                <span className="text-[10px] text-zinc-500">({currentUni?.shortCode})</span>
+                                {currentUni?.isPriority && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-[#d4af37] text-black">
+                                    Current
+                                  </span>
+                                )}
                               </div>
-                            ) : (
-                              filteredDepartments.map((dept) => {
-                                const isSelected = dept.id === selectedDepartmentId;
-                                return (
-                                  <div
-                                    key={dept.id}
-                                    onClick={() => {
-                                      setSelectedDepartmentId(dept.id);
-                                      setSelectedDepartmentName(dept.name);
-                                      setIsDeptDropdownOpen(false);
-                                      setDeptSearchQuery('');
-                                    }}
-                                    className={`px-3 py-2 rounded-xl text-xs font-mono-tech flex items-center justify-between cursor-pointer transition-colors ${
-                                      isSelected
-                                        ? 'bg-[#d4af37]/15 text-[#d4af37] font-bold'
-                                        : 'hover:bg-slate-100 dark:hover:bg-white/5 text-slate-800 dark:text-zinc-200'
-                                    }`}
-                                  >
-                                    <div className="truncate">
-                                      <span>{dept.name}</span>
-                                      {dept.faculty && (
-                                        <span className="text-[10px] text-zinc-500 ml-1.5 font-normal">
-                                          ({dept.faculty})
-                                        </span>
-                                      )}
-                                    </div>
-                                    {isSelected && <Check className="w-3.5 h-3.5 text-[#d4af37] shrink-0" />}
+                              <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                            </div>
+
+                            {/* Searchable dropdown popup */}
+                            {isUniDropdownOpen && (
+                              <div className="absolute top-full left-0 right-0 mt-1 z-30 max-h-60 overflow-y-auto rounded-2xl bg-white dark:bg-[#18181b] border border-slate-300 dark:border-white/20 shadow-2xl p-2 space-y-1">
+                                <input
+                                  type="text"
+                                  value={uniSearchQuery}
+                                  onChange={(e) => setUniSearchQuery(e.target.value)}
+                                  placeholder="Search institution..."
+                                  className="w-full px-3 py-2 mb-1 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono-tech text-slate-900 dark:text-white focus:outline-none focus:border-[#d4af37]"
+                                  autoFocus
+                                />
+                                {filteredInstitutions.length === 0 ? (
+                                  <div className="p-3 text-center text-xs text-zinc-500 font-mono-tech">
+                                    No institution found
                                   </div>
-                                );
-                              })
+                                ) : (
+                                  filteredInstitutions.map((u) => {
+                                    const isSelected = u.id === selectedUniId;
+                                    const typeLabel =
+                                      u.institutionType === 'polytechnic'
+                                        ? 'Polytechnic'
+                                        : u.institutionType === 'college_of_education'
+                                        ? 'College of Education'
+                                        : 'University';
+
+                                    return (
+                                      <div
+                                        key={u.id}
+                                        onClick={() => {
+                                          setSelectedUniId(u.id);
+                                          setIsUniDropdownOpen(false);
+                                          setUniSearchQuery('');
+                                        }}
+                                        className={`px-3 py-2 rounded-xl text-xs font-mono-tech flex items-center justify-between cursor-pointer transition-colors ${
+                                          isSelected
+                                            ? 'bg-[#d4af37]/15 text-[#d4af37] font-bold'
+                                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-slate-800 dark:text-zinc-200'
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2 truncate">
+                                          <span>{u.name}</span>
+                                          <span className="text-[10px] text-zinc-500">[{typeLabel}]</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          {u.isPriority && (
+                                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-[#d4af37] text-black">
+                                              Current
+                                            </span>
+                                          )}
+                                          {isSelected && <Check className="w-3.5 h-3.5 text-[#d4af37]" />}
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                    </div>
+                        </div>
+
+                        {/* Searchable Department Combobox */}
+                        <div className="space-y-1.5 sm:col-span-2 relative">
+                          <div className="flex items-center justify-between">
+                            <label className="block text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 font-bold">
+                              Department *
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setIsRequestingNewDept(true)}
+                              className="text-[11px] font-mono-tech text-amber-600 dark:text-amber-400 hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Building2 className="w-3 h-3" />
+                              <span>Request Missing Department</span>
+                            </button>
+                          </div>
+
+                          <div className="relative">
+                            <div
+                              onClick={() => setIsDeptDropdownOpen(!isDeptDropdownOpen)}
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-300 dark:border-white/15 text-slate-900 dark:text-white font-mono-tech text-xs flex items-center justify-between cursor-pointer shadow-xs hover:border-[#d4af37]"
+                            >
+                              <span className="truncate font-bold">
+                                {selectedDepartmentName || 'Select department...'}
+                              </span>
+                              <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                            </div>
+
+                            {isDeptDropdownOpen && (
+                              <div className="absolute top-full left-0 right-0 mt-1 z-30 max-h-60 overflow-y-auto rounded-2xl bg-white dark:bg-[#18181b] border border-slate-300 dark:border-white/20 shadow-2xl p-2 space-y-1">
+                                <input
+                                  type="text"
+                                  value={deptSearchQuery}
+                                  onChange={(e) => setDeptSearchQuery(e.target.value)}
+                                  placeholder="Search department in directory..."
+                                  className="w-full px-3 py-2 mb-1 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono-tech text-slate-900 dark:text-white focus:outline-none focus:border-[#d4af37]"
+                                  autoFocus
+                                />
+                                {filteredDepartments.length === 0 ? (
+                                  <div className="p-3 text-center text-xs text-zinc-500 font-mono-tech">
+                                    No department found. Click "Request Missing Department" above.
+                                  </div>
+                                ) : (
+                                  filteredDepartments.map((dept) => {
+                                    const isSelected = dept.id === selectedDepartmentId;
+                                    return (
+                                      <div
+                                        key={dept.id}
+                                        onClick={() => {
+                                          setSelectedDepartmentId(dept.id);
+                                          setSelectedDepartmentName(dept.name);
+                                          setIsDeptDropdownOpen(false);
+                                          setDeptSearchQuery('');
+                                        }}
+                                        className={`px-3 py-2 rounded-xl text-xs font-mono-tech flex items-center justify-between cursor-pointer transition-colors ${
+                                          isSelected
+                                            ? 'bg-[#d4af37]/15 text-[#d4af37] font-bold'
+                                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-slate-800 dark:text-zinc-200'
+                                        }`}
+                                      >
+                                        <div className="truncate">
+                                          <span>{dept.name}</span>
+                                          {dept.faculty && (
+                                            <span className="text-[10px] text-zinc-500 ml-1.5 font-normal">
+                                              ({dept.faculty})
+                                            </span>
+                                          )}
+                                        </div>
+                                        {isSelected && <Check className="w-3.5 h-3.5 text-[#d4af37] shrink-0" />}
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
 
                     {/* Graduation Year */}
                     <div className="space-y-1.5">

@@ -29,6 +29,7 @@ export interface AuthResponse {
   email?: string;
   name?: string;
   albums?: Array<{ id: string; institutionId: string; departmentId: string; graduationYear: number; classSetName: string; applicantName: string }>;
+  albumObjects?: any[];
   error?: string;
   message?: string;
   status?: number;
@@ -108,6 +109,9 @@ export async function authenticateWithOAuthPayload(
           localStorage.setItem('kohot_session_token', data.sessionToken);
         } catch {}
       }
+      if (Array.isArray(data.albumObjects) && data.albumObjects.length > 0) {
+        (data.user as any).albumObjects = data.albumObjects;
+      }
       return {
         success: true,
         isNewUser: Boolean(data.isNewUser),
@@ -116,6 +120,7 @@ export async function authenticateWithOAuthPayload(
         email: data.email || data.user.email,
         name: data.name || data.user.fullName,
         albums: data.albums,
+        albumObjects: data.albumObjects,
       };
     }
 
@@ -1026,6 +1031,17 @@ export async function submitStudentProfileOnServer(
   }
 }
 
+function getStoredSessionAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  try {
+    const token = localStorage.getItem('kohot_session_token') || '';
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch {}
+  return headers;
+}
+
 /**
  * Publish a Class Album on the server (/api/albums/:id/publish)
  */
@@ -1045,7 +1061,7 @@ export async function publishAlbumOnServer(
   try {
     const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/publish`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getStoredSessionAuthHeaders({ 'Content-Type': 'application/json' }),
       credentials: 'include',
       body: JSON.stringify(payload),
     });
@@ -1066,7 +1082,10 @@ export async function fetchAlbumsFromD1(): Promise<{
   error?: string;
 }> {
   try {
-    const res = await fetch('/api/albums', { credentials: 'include' });
+    const res = await fetch('/api/albums', {
+      headers: getStoredSessionAuthHeaders(),
+      credentials: 'include',
+    });
     if (!res.ok) {
       return { success: false, albums: [], error: `HTTP ${res.status}` };
     }
@@ -1084,7 +1103,10 @@ export async function fetchSingleAlbumFromD1(albumId: string): Promise<{
   error?: string;
 }> {
   try {
-    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}`, { credentials: 'include' });
+    const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}`, {
+      headers: getStoredSessionAuthHeaders(),
+      credentials: 'include',
+    });
     const data = await res.json().catch(() => ({}));
     if (res.status === 404 || data.error === 'not_available') {
       return { success: false, notAvailable: true, error: 'not available' };
@@ -1092,7 +1114,7 @@ export async function fetchSingleAlbumFromD1(albumId: string): Promise<{
     if (!res.ok) {
       return { success: false, error: data.message || data.error || 'Failed to load album' };
     }
-    return { success: true, album: data };
+    return { success: true, album: data.album || data };
   } catch (err: any) {
     return { success: false, error: err?.message || 'Network error' };
   }
@@ -1191,7 +1213,7 @@ export async function saveAlbumToD1(
   try {
     const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getStoredSessionAuthHeaders({ 'Content-Type': 'application/json' }),
       credentials: 'include',
       body: JSON.stringify({
         album,

@@ -191,9 +191,34 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
     }
   };
 
+  const isNewClassmateAddition = Boolean(
+    student &&
+      (student.id.startsWith('std-new-') ||
+        !(currentSet?.students || []).some((s) => s.id === student.id)) &&
+      !student.isClassRep &&
+      !student.id.startsWith('admin-')
+  );
+
   const handleSaveInternal = (approveNow: boolean = false) => {
     if (!fullName.trim()) {
       showError('Name required', 'Please enter the official full name.');
+      return;
+    }
+
+    const effectivePhoto = photoUrl.trim() || student.photoUrl || '';
+    if (!effectivePhoto && (approveNow || isNewClassmateAddition || isStudentSelfEdit)) {
+      showError(
+        'Portrait photo required',
+        'Please upload an official face portrait photo before saving.'
+      );
+      return;
+    }
+
+    if ((isNewClassmateAddition || isStudentSelfEdit) && !email.trim()) {
+      showError(
+        'Email address required',
+        'Please enter the classmate email address (used for annual convocation reminders).'
+      );
       return;
     }
 
@@ -201,15 +226,6 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
       showError(
         'Valid email required',
         'Please enter a valid, accurate email address (e.g., name@domain.com).'
-      );
-      return;
-    }
-
-    const effectivePhoto = photoUrl.trim() || student.photoUrl || '';
-    if (!effectivePhoto && approveNow) {
-      showError(
-        'Photo required for live album',
-        'Please upload or resize a portrait photo before approving.'
       );
       return;
     }
@@ -375,6 +391,8 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
                     ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
                     : isAdminProfile
                     ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
+                    : isNewClassmateAddition
+                    ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
                     : isPending
                     ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
@@ -384,11 +402,13 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
                   ? 'Classmate Profile Update'
                   : isAdminProfile
                   ? 'Class Album Administrator'
+                  : isNewClassmateAddition
+                  ? 'New Classmate Entry'
                   : isPending
                   ? 'Pending Submission Review'
                   : 'Verified Classmate'}
               </span>
-              {!isStudentSelfEdit && (
+              {!isStudentSelfEdit && !isNewClassmateAddition && (
                 <>
                   <span className="text-zinc-500 text-xs font-mono-tech">•</span>
                   <span className="text-zinc-400 text-xs font-mono-tech">ID: {student.id}</span>
@@ -401,6 +421,8 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
                 ? 'Update Your Profile'
                 : isAdminProfile
                 ? 'My Class Profile'
+                : isNewClassmateAddition
+                ? 'Add Classmate Profile'
                 : 'Edit Classmate Details'}
             </h3>
             <p className="font-body text-xs text-zinc-400">
@@ -408,13 +430,15 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
                 ? 'Update your portrait, second photo, quote, or story. Your update will be sent to the Class Admin for approval.'
                 : isAdminProfile
                 ? 'Update your administrator credentials, executive title, parting quote, and story for the live album.'
+                : isNewClassmateAddition
+                ? 'Only add classmates who asked you to. Required fields match the classmate invite form.'
                 : 'Modify student credentials, adjust executive role titles, or refine parting words before or after publishing.'}
             </p>
           </div>
         }
         footer={
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 w-full">
-            {onDelete && !isStudentSelfEdit && (
+            {onDelete && !isStudentSelfEdit && !isNewClassmateAddition && (
               <button
                 type="button"
                 onClick={() => {
@@ -438,10 +462,14 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => handleSaveInternal(false)}
-                className="px-6 py-2 rounded-full bg-white hover:bg-zinc-200 text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md active:scale-95"
+                onClick={() => handleSaveInternal(isNewClassmateAddition ? true : false)}
+                className="px-6 py-2 rounded-full bg-[#d4af37] hover:bg-[#c49f27] text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md active:scale-95"
               >
-                {isStudentSelfEdit ? 'Submit Update for Approval' : 'Save Changes'}
+                {isStudentSelfEdit
+                  ? 'Submit Update for Approval'
+                  : isNewClassmateAddition
+                  ? 'Save Classmate Profile'
+                  : 'Save Changes'}
               </button>
             </div>
           </div>
@@ -601,9 +629,52 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
               list="edit-student-roles-list"
               value={position}
               onChange={(e) => setPosition(e.target.value)}
-              placeholder="e.g. Social Director or Class Rep"
+              placeholder="e.g. President, Class Governor, Class Rep, Social Director..."
               className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none text-xs"
             />
+            <datalist id="edit-student-roles-list">
+              <option value="President" />
+              <option value="Class Governor" />
+              <option value="Class Representative" />
+              <option value="Vice President" />
+              <option value="General Secretary" />
+              <option value="Assistant Class Rep" />
+              <option value="Financial Secretary" />
+              <option value="Treasurer" />
+              <option value="Welfare Director" />
+              <option value="Social Director" />
+              <option value="Public Relations Officer" />
+              <option value="Sports Director" />
+              <option value="Academic Director" />
+            </datalist>
+            <div className="flex flex-wrap gap-1.5 pt-0.5">
+              {[
+                'President',
+                'Class Governor',
+                'Class Representative',
+                'Vice President',
+                'General Secretary',
+                'Welfare Director',
+                'Social Director',
+                'Public Relations Officer',
+              ].map((roleOption) => {
+                const isSelected = position.trim().toLowerCase() === roleOption.toLowerCase();
+                return (
+                  <button
+                    key={roleOption}
+                    type="button"
+                    onClick={() => setPosition(isSelected ? '' : roleOption)}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-mono-tech transition-colors cursor-pointer border ${
+                      isSelected
+                        ? 'bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-300 font-bold'
+                        : 'bg-slate-100 dark:bg-white/[0.04] border-slate-200 dark:border-white/10 text-slate-600 dark:text-zinc-400 hover:bg-slate-200 dark:hover:bg-white/[0.08]'
+                    }`}
+                  >
+                    {roleOption}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* 4b. Class Awards & Honours (each award gets a unique badge icon — never repeats) */}
@@ -875,20 +946,18 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
           {/* 8. Email Address */}
           <div>
             <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-slate-700 dark:text-zinc-300 mb-1.5 font-bold">
-              Email Address{' '}
-              <span className="text-slate-500 dark:text-zinc-500 lowercase font-normal">
-                (optional)
-              </span>
+              Email Address *
             </label>
             <input
               type="email"
+              required={isNewClassmateAddition || isStudentSelfEdit}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="e.g. adebayo.ogunlesi@example.com"
               className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-[#08090e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-amber-500 dark:focus:border-white/30 focus:outline-none font-body text-xs"
             />
             <p className="text-[10px] text-slate-500 dark:text-zinc-400 font-mono-tech mt-1">
-              Meant for annual reminder about this album to relive the experience
+              Required for annual convocation reminders to relive the album experience
             </p>
           </div>
 

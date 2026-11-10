@@ -1048,20 +1048,20 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       data-dashboard-theme={isLightMode ? 'light' : 'dark'}
       className={`min-h-screen pb-24 font-body transition-colors selection:bg-[#d4af37]/30 ${
         isLightMode 
-          ? 'bg-[#f1f3f7] text-zinc-900 dashboard-light' 
-          : 'bg-[#121214] text-[#e2e4e9] dashboard-dark'
+          ? 'bg-[#f4f3ef] text-zinc-900 dashboard-light' 
+          : 'bg-[#0b0d13] text-[#e2e4e9] dashboard-dark'
       }`}
     >
       {/* Top Command Banner - Clean, Unified Header */}
       <header className={`sticky top-0 z-30 backdrop-blur-xl border-b px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4 transition-colors ${
         isLightMode 
-          ? 'bg-white/95 border-zinc-300 text-black shadow-sm' 
-          : 'bg-[#18181b]/95 border-zinc-800 text-white'
+          ? 'bg-white/95 border-slate-200/90 text-black shadow-xs' 
+          : 'bg-[#12151e]/95 border-white/10 text-white'
       }`}>
         {/* Left: Host Title and Name (No links back to public site) */}
         <div className="flex items-center gap-3.5 min-w-0">
           <div className="min-w-0 leading-tight">
-            <div className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-bold">
+            <div className="font-mono-tech text-[10px] uppercase tracking-wider text-amber-600 dark:text-[#d4af37] font-bold">
               Host
             </div>
             <div className={`font-syne font-bold text-xs sm:text-sm truncate ${isLightMode ? 'text-zinc-900' : 'text-white'}`}>
@@ -1080,8 +1080,8 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             aria-label={isLightMode ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
             className={`w-9 h-9 rounded-full flex items-center justify-center border transition-all cursor-pointer ${
               isLightMode
-                ? 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-800 shadow-xs'
-                : 'bg-white/5 hover:bg-white/10 border-white/15 text-amber-400'
+                ? 'bg-[#f8f7f4] hover:bg-slate-200/70 border-slate-300 text-zinc-800 shadow-xs'
+                : 'bg-[#161a24] hover:bg-white/10 border-white/15 text-[#d4af37]'
             }`}
           >
             {isLightMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
@@ -1096,14 +1096,14 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       </header>
 
       {/* Main Container */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-8 sm:pt-10 space-y-8">
-        {/* Command Navigation Tabs (Sticky upon scroll) */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-6 sm:pt-8 space-y-8">
+        {/* Command Navigation Tabs (Sticky Segmented Pill Bar matching Communications UI) */}
         <div
           id="host-command-nav-tabs"
-          className={`sticky top-[57px] sm:top-[65px] z-30 -mx-4 px-4 sm:mx-0 sm:px-3 py-3 rounded-b-2xl backdrop-blur-xl flex items-center gap-2 overflow-x-auto no-scrollbar border-b transition-colors ${
+          className={`sticky top-[57px] sm:top-[65px] z-30 p-1.5 rounded-full backdrop-blur-xl flex items-center gap-1.5 overflow-x-auto no-scrollbar border transition-colors ${
             isLightMode
-              ? 'bg-[#f8fafc]/95 border-zinc-200 shadow-xs'
-              : 'bg-[#121214]/95 border-white/[0.08] shadow-md'
+              ? 'bg-white/95 border-slate-200/90 shadow-xs'
+              : 'bg-[#12151e]/95 border-white/10 shadow-md'
           }`}
         >
           <button
@@ -1112,18 +1112,18 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               setActiveTab('album_demos');
               e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-full text-xs sm:text-sm font-syne font-semibold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'album_demos'
-                ? 'bg-[#d4af37] text-black font-bold shadow-md'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                : isLightMode ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80' : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#d4af37]" />
+            <Sparkles className={`w-3.5 h-3.5 ${activeTab === 'album_demos' ? 'text-black' : 'text-[#d4af37]'}`} />
             <span>Album Demos</span>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono-tech font-bold ${
-              activeTab === 'album_demos' ? 'bg-black text-white' : 'bg-amber-400/20 text-amber-500'
+              activeTab === 'album_demos' ? 'bg-black/15 text-black' : 'bg-amber-400/20 text-amber-600 dark:text-amber-400'
             }`}>
-              Crownfield Law (4)
+              4
             </span>
           </button>
 
@@ -1133,10 +1133,10 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               setActiveTab('seeder');
               e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-full text-xs sm:text-sm font-syne font-semibold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'seeder'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                : isLightMode ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80' : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
             <Database className="w-3.5 h-3.5" />
@@ -1149,13 +1149,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               setActiveTab('finances');
               e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-full text-xs sm:text-sm font-syne font-semibold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'finances'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                : isLightMode ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80' : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            <Coins className="w-3.5 h-3.5 text-emerald-400" />
+            <Coins className={`w-3.5 h-3.5 ${activeTab === 'finances' ? 'text-black' : 'text-emerald-500'}`} />
             <span>Finances</span>
           </button>
 
@@ -1165,13 +1165,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               setActiveTab('reminders');
               e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-full text-xs sm:text-sm font-syne font-semibold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'reminders'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                : isLightMode ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80' : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            <MessageCircle className="w-3.5 h-3.5 text-[#d4af37]" />
+            <MessageCircle className={`w-3.5 h-3.5 ${activeTab === 'reminders' ? 'text-black' : 'text-[#d4af37]'}`} />
             <span>KoHot Communications</span>
           </button>
 
@@ -1181,13 +1181,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               setActiveTab('editor');
               e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-full text-xs sm:text-sm font-syne font-semibold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'editor'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                : isLightMode ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80' : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            <Film className="w-3.5 h-3.5 text-blue-600" />
+            <Film className={`w-3.5 h-3.5 ${activeTab === 'editor' ? 'text-black' : 'text-blue-500'}`} />
             <span>KoHot Media</span>
           </button>
 
@@ -1197,13 +1197,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               setActiveTab('testimonials');
               e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-full text-xs sm:text-sm font-syne font-semibold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'testimonials'
-                ? isLightMode ? 'bg-zinc-950 text-white font-semibold shadow-md' : 'bg-white text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                : isLightMode ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80' : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            <Award className="w-3.5 h-3.5 text-[#d4af37]" />
+            <Award className={`w-3.5 h-3.5 ${activeTab === 'testimonials' ? 'text-black' : 'text-[#d4af37]'}`} />
             <span>Testimonials</span>
           </button>
 
@@ -1213,13 +1213,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               setActiveTab('disputes');
               e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }}
-            className={`px-5 py-2.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-full text-xs sm:text-sm font-syne font-semibold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
               activeTab === 'disputes'
-                ? 'bg-amber-400 text-black font-semibold shadow'
-                : isLightMode ? 'bg-white hover:bg-zinc-100 text-black font-semibold border border-zinc-300 shadow-xs' : 'bg-[#18181b] hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                : isLightMode ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80' : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            <Shield className="w-3.5 h-3.5 text-amber-500" />
+            <Shield className={`w-3.5 h-3.5 ${activeTab === 'disputes' ? 'text-black' : 'text-amber-500'}`} />
             <span>Admin Help &amp; Support</span>
             {(newSupportCount + pendingRequestsCount) > 0 && (
               <span className="px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold animate-pulse">
@@ -3425,84 +3425,45 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             9. ADMIN HELP & SUPPORT MODULE (Unified with Sub-Clips: Admin Help, Support, Requests)
             ========================================================================= */}
         {activeTab === 'disputes' && (
-          <div id="admin-help-and-support-module" className="space-y-5 animate-fadeIn">
-            {/* Compact Section Header & Sub-Clips */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-[#18181b] border border-white/12 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 shadow-sm">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-[#d4af37] shrink-0">
-                  <Shield className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <h2 className="font-syne font-bold text-base sm:text-lg text-white">
-                    Admin Help &amp; Support
-                  </h2>
-                  <p className="font-body text-xs text-zinc-400 truncate">
-                    Manage ownership disputes, co-admin claims, support tickets, and department requests.
-                  </p>
-                </div>
-              </div>
-
-              {/* Sub-Clips Switcher */}
-              <div className="inline-flex items-center p-1 rounded-xl bg-black/50 border border-white/10 self-start lg:self-center max-w-full overflow-x-auto no-scrollbar gap-1 shrink-0">
-                <button
-                  id="subclip-admin-help-btn"
-                  type="button"
-                  onClick={(e) => {
-                    setAdminHelpSupportSubTab('admin_help');
-                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                  }}
-                  className={`px-3.5 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
-                    adminHelpSupportSubTab === 'admin_help'
-                      ? 'bg-amber-400 text-black font-bold shadow'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  <Shield className="w-3.5 h-3.5" />
-                  <span>Admin Help</span>
-                </button>
-                <button
-                  id="subclip-support-btn"
-                  type="button"
-                  onClick={(e) => {
-                    setAdminHelpSupportSubTab('support');
-                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                  }}
-                  className={`px-3.5 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
-                    adminHelpSupportSubTab === 'support'
-                      ? 'bg-[#d4af37] text-black font-bold shadow'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  <Inbox className="w-3.5 h-3.5" />
-                  <span>Support</span>
-                  {newSupportCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-mono-tech font-bold">
-                      {newSupportCount}
-                    </span>
-                  )}
-                </button>
-                <button
-                  id="subclip-requests-btn"
-                  type="button"
-                  onClick={(e) => {
-                    setAdminHelpSupportSubTab('requests');
-                    e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                  }}
-                  className={`px-3.5 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
-                    adminHelpSupportSubTab === 'requests'
-                      ? 'bg-white text-black font-bold shadow'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  <FolderPlus className="w-3.5 h-3.5" />
-                  <span>Requests</span>
-                  {pendingRequestsCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-mono-tech font-bold">
-                      {pendingRequestsCount}
-                    </span>
-                  )}
-                </button>
-              </div>
+          <div id="admin-help-and-support-module" className="max-w-3xl mx-auto space-y-5 animate-fadeIn">
+            {/* Top Segmented Pill Switcher matching Screenshots 1 & 3 */}
+            <div className="p-1.5 rounded-full bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 flex items-center justify-between gap-1 shadow-xs">
+              <button
+                id="subclip-admin-help-btn"
+                type="button"
+                onClick={() => setAdminHelpSupportSubTab('admin_help')}
+                className={`flex-1 py-2.5 px-3 rounded-full text-xs sm:text-sm font-syne font-semibold transition-all cursor-pointer text-center ${
+                  adminHelpSupportSubTab === 'admin_help'
+                    ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                Admin Help
+              </button>
+              <button
+                id="subclip-support-btn"
+                type="button"
+                onClick={() => setAdminHelpSupportSubTab('support')}
+                className={`flex-1 py-2.5 px-3 rounded-full text-xs sm:text-sm font-syne font-semibold transition-all cursor-pointer text-center ${
+                  adminHelpSupportSubTab === 'support'
+                    ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                Support {newSupportCount}
+              </button>
+              <button
+                id="subclip-requests-btn"
+                type="button"
+                onClick={() => setAdminHelpSupportSubTab('requests')}
+                className={`flex-1 py-2.5 px-3 rounded-full text-xs sm:text-sm font-syne font-semibold transition-all cursor-pointer text-center ${
+                  adminHelpSupportSubTab === 'requests'
+                    ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                Requests {pendingRequestsCount}
+              </button>
             </div>
 
             {adminHelpSupportSubTab === 'admin_help' ? (
@@ -3510,43 +3471,44 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
             ) : adminHelpSupportSubTab === 'support' ? (
               <MasterSupportInboxSection isLightMode={isLightMode} />
             ) : (
-              <div id="requests-module" className="space-y-8 animate-fadeIn">
+              <div id="requests-module" className="space-y-6 animate-fadeIn">
                 {/* Unlisted Department Addition Inquiries */}
-                <div className="p-6 sm:p-8 rounded-3xl bg-[#18181b] border border-white/15 space-y-6 shadow-xl">
-                  <div className="pb-3 border-b border-white/10">
-                    <h2 className="font-syne font-bold text-xl text-white flex items-center gap-2.5">
-                      <Inbox className="w-5 h-5 text-white" />
-                      <span>Unlisted Department Addition Inquiries</span>
+                <div className="p-5 sm:p-7 rounded-3xl bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 space-y-5 shadow-xs">
+                  <div>
+                    <h2 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
+                      Department addition requests
                     </h2>
-                    <p className="font-body text-xs text-zinc-400 mt-1">
-                      Incoming Class Rep inquiries requesting new universities or unlisted departments to be preloaded.
+                    <p className="font-body text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                      Incoming Class Rep inquiries requesting new universities or unlisted departments to be added to the directory.
                     </p>
                   </div>
 
                   <div className="space-y-3 font-body">
                     {additionRequests.length === 0 ? (
-                      <p className="text-xs text-zinc-500 font-mono-tech py-6 text-center">
-                        No pending department requests in queue.
-                      </p>
+                      <div className="py-10 px-4 text-center rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/60 border border-slate-200/80 dark:border-white/10">
+                        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-body">
+                          No pending department requests in queue.
+                        </p>
+                      </div>
                     ) : (
                       additionRequests.map((req) => (
                         <div
                           key={req.id}
-                          className="p-5 rounded-2xl bg-[#08090e] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                          className="p-4 sm:p-5 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                         >
                           <div>
                             <div className="flex items-center gap-2">
-                              <span className="font-syne font-bold text-white text-sm">
+                              <span className="font-syne font-bold text-slate-900 dark:text-white text-sm">
                                 {req.requestedDepartment}
                               </span>
-                              <span className="text-zinc-500">•</span>
-                              <span className="text-zinc-300 text-xs">{req.institutionName}</span>
+                              <span className="text-slate-400">•</span>
+                              <span className="text-slate-600 dark:text-slate-300 text-xs">{req.institutionName}</span>
                             </div>
-                            <p className="text-xs text-zinc-400 font-mono-tech mt-1">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 font-mono-tech mt-1">
                               Faculty: {req.facultyName} • Rep: {req.requesterName} ({req.requesterEmail}, {req.requesterPhone})
                             </p>
                             {req.notes && (
-                              <p className="text-xs text-zinc-400 mt-1.5 italic">"{req.notes}"</p>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 italic">"{req.notes}"</p>
                             )}
                           </div>
 
@@ -3554,12 +3516,12 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                             {req.status === 'Pending' ? (
                               <button
                                 onClick={() => handleApproveRequest(req)}
-                                className="bg-white hover:bg-zinc-200 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
+                                className="bg-[#d4af37] hover:bg-[#c5a028] text-black font-syne text-xs font-bold py-2.5 px-4 rounded-full transition-colors cursor-pointer"
                               >
                                 Approve &amp; Seed
                               </button>
                             ) : (
-                              <span className="text-xs font-mono-tech text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
+                              <span className="text-xs font-mono-tech text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
                                 Approved
                               </span>
                             )}

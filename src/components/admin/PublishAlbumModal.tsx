@@ -192,15 +192,30 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
   const isStep2Filled = reviewMessage.trim().length > 0;
   const isStep3Complete = Boolean(successorName.trim() && successorPhone.trim());
 
+  const adminEmailNorm = (currentUser?.email || currentSet.classRepEmail || '').toLowerCase().trim();
   const approvedStudents = (currentSet.students || []).filter(
     (s) => s.approved || s.status === 'approved' || s.submissionStatus === 'approved'
   );
-  const unpaidApprovedStudents = approvedStudents.filter((s) => {
-    if (s.isAdminProfile || s.isClassRep) return false;
-    const isCoveredBySlot = Boolean(s.usedSlot || s.slotConsumed || s.paymentStatus === 'waived');
-    const isPaidIndividually = s.paymentStatus === 'paid';
+  const rawUnpaidApprovedStudents = approvedStudents.filter((s) => {
+    if (
+      s.isAdminProfile ||
+      s.isClassRep ||
+      s.id?.startsWith('admin-') ||
+      (adminEmailNorm && s.email?.toLowerCase().trim() === adminEmailNorm)
+    ) {
+      return false;
+    }
+    const isCoveredBySlot = Boolean(
+      s.usedSlot || s.slotConsumed || s.paymentStatus === 'waived' || s.feeChoice === 'waived'
+    );
+    const isPaidIndividually = s.paymentStatus === 'paid' || s.feeChoice === 'paid';
     return !isCoveredBySlot && !isPaidIndividually;
   });
+  const availableSlotBalance = Math.max(0, Number(currentSet.profileSlotBalance ?? 0));
+  const unpaidApprovedStudents =
+    availableSlotBalance >= rawUnpaidApprovedStudents.length
+      ? []
+      : rawUnpaidApprovedStudents.slice(availableSlotBalance);
   const fundedProfilesOk = unpaidApprovedStudents.length === 0;
 
   const canPublish = isStep1Complete && isStep3Complete && fundedProfilesOk;
@@ -346,8 +361,45 @@ export const PublishAlbumModal: React.FC<PublishAlbumModalProps> = ({
       ]);
     }
 
+    let remainingSlotsToApply = Math.max(0, Number(currentSet.profileSlotBalance ?? 0));
+    let newlyConsumedSlots = 0;
+    const reconciledStudents = (currentSet.students || []).map((s) => {
+      const isApp = s.approved || s.status === 'approved' || s.submissionStatus === 'approved';
+      const isAdm =
+        s.isAdminProfile ||
+        s.isClassRep ||
+        s.id?.startsWith('admin-') ||
+        (adminEmailNorm && s.email?.toLowerCase().trim() === adminEmailNorm);
+      const isCovered = Boolean(
+        s.usedSlot ||
+          s.slotConsumed ||
+          s.paymentStatus === 'waived' ||
+          s.feeChoice === 'waived' ||
+          s.paymentStatus === 'paid' ||
+          s.feeChoice === 'paid'
+      );
+      if (isApp && !isAdm && !isCovered && remainingSlotsToApply > 0) {
+        remainingSlotsToApply -= 1;
+        newlyConsumedSlots += 1;
+        return {
+          ...s,
+          usedSlot: true,
+          slotConsumed: true,
+          paymentStatus: s.paymentStatus || ('waived' as const),
+        };
+      }
+      return s;
+    });
+
     const updatedSet: ClassSet = {
       ...currentSet,
+      students: reconciledStudents,
+      profileSlotBalance:
+        newlyConsumedSlots > 0 ? remainingSlotsToApply : currentSet.profileSlotBalance,
+      totalSlotsUsed:
+        newlyConsumedSlots > 0
+          ? (currentSet.totalSlotsUsed ?? 0) + newlyConsumedSlots
+          : currentSet.totalSlotsUsed,
       convocationDate: formattedConvocationStr,
       isPublished: publishNow,
       published: publishNow,

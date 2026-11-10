@@ -314,7 +314,10 @@ export default function App() {
 
   // App state backed by D1 Worker API routes (Crownfield demo albums stay as static code)
   const [universities, setUniversities] = useState<UniversityDirectoryItem[]>(getStoredUniversities);
-  const [sets, setSets] = useState<ClassSet[]>(() => [...CROWNFIELD_PUBLIC_LAW_SETS]);
+  const [sets, setSets] = useState<ClassSet[]>(() => {
+    const stored = getStoredSets().filter((s) => !isCrownfieldDemoAlbum(s));
+    return [...CROWNFIELD_PUBLIC_LAW_SETS, ...stored];
+  });
   const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
   const [additionRequests, setAdditionRequests] = useState<DepartmentAdditionRequest[]>([]);
   const [foundingRequests, setFoundingRequests] = useState<FoundingClassRequest[]>([]);
@@ -327,8 +330,10 @@ export default function App() {
   const [inviteContext, setInviteContext] = useState<NextClassInviteContext | null>(parseInviteContextFromUrl);
   const [onboardingPrefill, setOnboardingPrefill] = useState<{
     universityId?: string;
+    departmentId?: string;
     departmentName?: string;
     graduationYear?: number;
+    lockDepartmentContext?: boolean;
   }>({});
 
   // Authentication & Role-Based Routing (Persisted so going away or network hiccups never drop the admin back to the website)
@@ -475,7 +480,25 @@ export default function App() {
         setD1Error(albumsRes.error);
       } else {
         const d1NonDemo = (albumsRes.albums || []).filter((a: ClassSet) => !isCrownfieldDemoAlbum(a));
-        setSets([...CROWNFIELD_PUBLIC_LAW_SETS, ...d1NonDemo]);
+        setSets((prev) => {
+          const prevNonDemo = prev.filter((p) => !isCrownfieldDemoAlbum(p));
+          const mergedMap = new Map<string, ClassSet>();
+          for (const p of prevNonDemo) {
+            mergedMap.set(p.id, p);
+          }
+          for (const d1Set of d1NonDemo) {
+            const existing = mergedMap.get(d1Set.id);
+            // If D1 returned a lightweight public stub for an album we already have full admin data for locally, keep full admin data
+            if (existing && existing.classRepEmail && !d1Set.classRepEmail) {
+              mergedMap.set(d1Set.id, { ...d1Set, ...existing });
+            } else {
+              mergedMap.set(d1Set.id, existing ? { ...existing, ...d1Set } : d1Set);
+            }
+          }
+          const nextSets = [...CROWNFIELD_PUBLIC_LAW_SETS, ...Array.from(mergedMap.values())];
+          saveStoredSets(nextSets);
+          return nextSets;
+        });
       }
 
       if (instRes.success && instRes.institutions.length > 0) {
@@ -1046,6 +1069,27 @@ export default function App() {
     try {
       localStorage.setItem('kohot_current_user', JSON.stringify(user));
     } catch {}
+
+    const incomingAlbums: ClassSet[] = Array.isArray((user as any).albumObjects)
+      ? (user as any).albumObjects
+      : [];
+
+    if (incomingAlbums.length > 0) {
+      setSets((prev) => {
+        const map = new Map<string, ClassSet>();
+        for (const s of prev) map.set(s.id, s);
+        for (const inc of incomingAlbums) {
+          if (inc && inc.id) {
+            const prevMatch = map.get(inc.id);
+            map.set(inc.id, prevMatch ? { ...prevMatch, ...inc } : inc);
+          }
+        }
+        const updated = Array.from(map.values());
+        saveStoredSets(updated);
+        return updated;
+      });
+    }
+
     if (user.role === 'master_host') {
       setCurrentUser(user);
       setAlbumOriginView('layer0_master');
@@ -1057,11 +1101,13 @@ export default function App() {
         );
       } catch {}
     } else if (user.role === 'class_rep' && user.assignedSetId) {
-      const repSet = sets.find(
-        (s) =>
-          s.id === user.assignedSetId ||
-          (user.email && s.classRepEmail?.toLowerCase().trim() === user.email.toLowerCase().trim())
-      );
+      const repSet =
+        incomingAlbums.find((s) => s.id === user.assignedSetId) ||
+        sets.find(
+          (s) =>
+            s.id === user.assignedSetId ||
+            (user.email && s.classRepEmail?.toLowerCase().trim() === user.email.toLowerCase().trim())
+        );
       if (repSet) {
         if (repSet.institutionId || repSet.universityId) {
           setSelectedUniversityId(repSet.institutionId || repSet.universityId!);
@@ -1081,6 +1127,9 @@ export default function App() {
         );
       } catch {}
     }
+
+    // Immediately reload D1 data with the newly stored session token so owned draft albums & slot balances are hydrated
+    loadAllD1Data();
   };
 
   const handleLogout = async (explicitSet?: ClassSet) => {
@@ -1556,8 +1605,27 @@ export default function App() {
               }
               window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
             }}
-            onOpenOnboarding={() => {
+            onOpenOnboarding={(ctx) => {
               setVerifiedSignupSession(null);
+              if (ctx && (ctx.universityId || ctx.departmentId || ctx.departmentName)) {
+                setOnboardingPrefill({
+                  universityId: ctx.universityId || selectedUniversityId || undefined,
+                  departmentId: ctx.departmentId || selectedDepartmentId || undefined,
+                  departmentName: ctx.departmentName,
+                  graduationYear: ctx.graduationYear,
+                  lockDepartmentContext: true,
+                });
+              } else if (selectedUniversityId || selectedDepartmentId) {
+                const matchedDept = universities
+                  .flatMap((u) => u.departments || [])
+                  .find((d) => d.id === selectedDepartmentId);
+                setOnboardingPrefill({
+                  universityId: selectedUniversityId || matchedDept?.universityId || undefined,
+                  departmentId: selectedDepartmentId || undefined,
+                  departmentName: matchedDept?.name || undefined,
+                  lockDepartmentContext: Boolean(selectedDepartmentId),
+                });
+              }
               setIsOnboardingOpen(true);
             }}
             onOpenLogin={() => setIsLoginOpen(true)}
@@ -1613,9 +1681,68 @@ export default function App() {
         {activeView === 'layer1_rep' && (
           currentUser ? (
             (() => {
-              const activeSetForRep = (currentUser.role === 'class_rep' && currentUser.assignedSetId)
-                ? (sets.find((s) => s.id === currentUser.assignedSetId) || currentSet)
-                : currentSet;
+              let activeSetForRep: ClassSet = currentSet;
+              if (currentUser.role === 'class_rep') {
+                const matchedSet = sets.find(
+                  (s) =>
+                    !isCrownfieldDemoAlbum(s) &&
+                    ((currentUser.assignedSetId && s.id === currentUser.assignedSetId) ||
+                      (currentUser.email &&
+                        s.classRepEmail?.toLowerCase().trim() === currentUser.email.toLowerCase().trim()))
+                );
+                if (matchedSet) {
+                  activeSetForRep = matchedSet;
+                } else {
+                  // Never fall back a real Class Admin to a Crownfield Demo Album while D1 is loading
+                  const assignedId = currentUser.assignedSetId || 'draft-album';
+                  const matchedUni =
+                    universities.find((u) => assignedId.startsWith(`${u.id}-`)) ||
+                    universities.find((u) => u.id === selectedUniversityId) ||
+                    universities[0];
+                  const matchedDept =
+                    matchedUni?.departments?.find((d) =>
+                      assignedId.includes(d.id.replace(/^dept-/, ''))
+                    ) ||
+                    matchedUni?.departments?.find((d) => d.id === selectedDepartmentId) ||
+                    matchedUni?.departments?.[0];
+                  const yearMatch = assignedId.match(/(20\d{2})$/);
+                  const resolvedYear = yearMatch ? Number(yearMatch[1]) : 2026;
+                  activeSetForRep = {
+                    id: assignedId,
+                    institutionId: matchedUni?.id || 'unilorin',
+                    institutionName: matchedUni?.name || 'University of Ilorin',
+                    institutionLogoUrl: matchedUni?.logoUrl || '',
+                    departmentId: matchedDept?.id || 'dept-unilorin-pubadmin',
+                    departmentName: matchedDept?.name || 'Public Administration',
+                    departmentLogoUrl: matchedDept?.logoUrl || matchedUni?.logoUrl || '',
+                    faculty: matchedDept?.faculty || 'Faculty of Management Sciences',
+                    graduationYear: resolvedYear,
+                    classSetName: `${matchedDept?.name || 'Department'} Class of '${String(resolvedYear).slice(-2)}`,
+                    academicYears: 4,
+                    classRepName: currentUser.fullName || 'Class Representative',
+                    classRepEmail: currentUser.email,
+                    classRepPhone: currentUser.phone || '',
+                    currentAdminUserId: currentUser.id,
+                    activationStatus: 'inactive',
+                    activationDate: '',
+                    activationRef: '',
+                    isPublished: false,
+                    published: false,
+                    isUnpublished: false,
+                    unpublished: false,
+                    bannerImageUrl:
+                      matchedDept?.heroImageUrl ||
+                      'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85',
+                    legacyGroupImageUrl:
+                      'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&auto=format&fit=crop&q=85',
+                    ourStory: '',
+                    students: [],
+                    memories: [],
+                    awards: [],
+                    voices: [],
+                  };
+                }
+              }
 
               return (
                 <Layer1ClassRepDashboard
@@ -1762,13 +1889,15 @@ export default function App() {
           setIsLoginOpen(true);
         }}
         initialUniversityId={onboardingPrefill.universityId || selectedUniversityId || undefined}
+        initialDepartmentId={(onboardingPrefill as any).departmentId || selectedDepartmentId || undefined}
         initialDepartmentName={
           onboardingPrefill.departmentName ||
           universities
             .flatMap((u) => u.departments || [])
-            .find((d) => d.id === selectedDepartmentId)?.name || undefined
+            .find((d) => d.id === ((onboardingPrefill as any).departmentId || selectedDepartmentId))?.name || undefined
         }
         initialGraduationYear={onboardingPrefill.graduationYear}
+        lockDepartmentContext={Boolean((onboardingPrefill as any).lockDepartmentContext)}
         onRegisterSuccess={handleRegisterSuccess}
         onRequestAddition={handleRequestAddition}
         onSubmitFoundingRequest={handleSubmitFoundingRequest}

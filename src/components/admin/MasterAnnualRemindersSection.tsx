@@ -1,30 +1,27 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
-  Users,
   Search,
-  Send,
   CheckCircle2,
   Copy,
   Check,
-  Sparkles,
-  ExternalLink,
-  Edit3,
-  Image as ImageIcon,
   MessageCircle,
-  Share2,
-  Smartphone,
-  Building2,
-  GraduationCap,
+  MessageSquare,
+  ChevronDown,
+  Upload,
+  X,
+  ExternalLink,
 } from 'lucide-react';
 import {
   UniversityDirectoryItem,
   ClassSet,
   WebsiteContentOverride,
+  NextClassHandoffInvite,
 } from '../../types';
-import { ImageDropzone } from '../common/ImageDropzone';
-import { MasterNextClassHandoffsSection } from './MasterNextClassHandoffsSection';
+import { getStoredNextClassInvites } from '../../data/initialData';
 import { getWhatsAppDigits, formatNigerianPhoneNumber } from '../../utils/phoneFormatter';
 import { logManualCommunication } from '../../utils/kohotCommunications';
+import { uploadMediaToR2 } from '../../utils/apiClient';
+import { compressImageToWebP } from '../../utils/imageCompressor';
 
 interface MasterAnnualRemindersSectionProps {
   universities: UniversityDirectoryItem[];
@@ -40,6 +37,7 @@ interface RegisteredAdminContact {
   adminName: string;
   roleLabel: 'Album Admin' | 'Co-Admin';
   phone: string;
+  email?: string;
   departmentName: string;
   institutionId: string;
   institutionName: string;
@@ -55,16 +53,12 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
   onUpdateContentOverride,
   onViewDepartmentLegacyWall,
 }) => {
-  // 3 Sub-Clips under KoHot Communications:
-  // 1. Department Executives Blast ('executive_blast')
-  // 2. Message Registered Album Admins ('album_admins')
-  // 3. Next-Class Handoffs ('handoffs')
   const [communicationsTab, setCommunicationsTab] = useState<
     'executive_blast' | 'album_admins' | 'handoffs'
   >('executive_blast');
 
   // =========================================================================
-  // SUB-CLIP 1 STATE: DEPARTMENT EXECUTIVES BLAST (WHATSAPP & SMS ONLY)
+  // 1. OUTREACH STATE
   // =========================================================================
   const [blastImageUrl, setBlastImageUrl] = useState<string>(
     (contentOverride as any)?.broadcastLinkContextImageUrl ||
@@ -73,13 +67,39 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
   );
   const [blastMessageClip, setBlastMessageClip] = useState<string>(
     contentOverride?.executiveBlastMessageTemplate ||
-      `Hello Department Executive Team,\n\nGive your graduating class a permanent digital home and a physical Legacy Plaque in your department corridor.\n\nCreate your official Department Class Album on KoHot today:\n{{website_url}}\n\nPreserve your classmates, portraits, moments, and stories forever.`
+      `Hello Department Executives and Student Leaders, preserve the memories and achievements of your graduating class on KoHot. Create your official class album and corridor Legacy Plaque here:\n{{website_url}}`
   );
+  const [isEditingOutreachMessage, setIsEditingOutreachMessage] = useState(false);
+  const [isChangingPreviewImage, setIsChangingPreviewImage] = useState(false);
+  const [isUploadingPreviewImage, setIsUploadingPreviewImage] = useState(false);
   const [targetBlastAudience, setTargetBlastAudience] = useState<string>('all');
-  const [execBlastToast, setExecBlastToast] = useState<string | null>(null);
   const [copiedBlastLink, setCopiedBlastLink] = useState(false);
-  const [copiedBlastMessage, setCopiedBlastMessage] = useState(false);
-  const [imageSaveToast, setImageSaveToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const fullOutreachLink = useMemo(() => {
+    const origin =
+      typeof window !== 'undefined' && window.location.origin
+        ? window.location.origin
+        : 'https://kohot.lumna.workers.dev';
+    return `${origin}/?ref=dept_exec`;
+  }, []);
+
+  const displayOutreachLink = useMemo(() => {
+    return fullOutreachLink.replace(/^https?:\/\//i, '');
+  }, [fullOutreachLink]);
+
+  const resolvedOutreachMessage = useMemo(() => {
+    if (blastMessageClip.includes('{{website_url}}')) {
+      return blastMessageClip.replace(/\{\{website_url\}\}/g, fullOutreachLink);
+    }
+    return `${blastMessageClip.trim()}\n${fullOutreachLink}`;
+  }, [blastMessageClip, fullOutreachLink]);
 
   const handleUpdateBlastImage = (newUrl: string) => {
     setBlastImageUrl(newUrl);
@@ -88,32 +108,47 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
         ...contentOverride,
         executiveBlastImageUrl: newUrl,
       });
-      setImageSaveToast(true);
-      setTimeout(() => setImageSaveToast(false), 3000);
+    }
+    showToast('Link preview image updated.');
+  };
+
+  const handlePreviewImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingPreviewImage(true);
+    try {
+      const compressed = await compressImageToWebP(file, 1200, 0.86);
+      const uploaded = await uploadMediaToR2(compressed.dataUrl, {
+        setId: 'site-hero',
+        category: 'outreach-preview',
+        fileName: file.name || 'outreach-preview.webp',
+      });
+      const finalUrl = uploaded.success && uploaded.url ? uploaded.url : compressed.dataUrl;
+      handleUpdateBlastImage(finalUrl);
+      setIsChangingPreviewImage(false);
+    } catch {
+      showToast('Could not upload image. Please try another photo.');
+    } finally {
+      setIsUploadingPreviewImage(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   // =========================================================================
-  // SUB-CLIP 2 STATE: REGISTERED ALBUM ADMINS (WHATSAPP & SMS MESSAGING)
+  // 2. REGISTERED ALBUM ADMINS STATE
   // =========================================================================
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [adminUniFilter, setAdminUniFilter] = useState<string>('all');
+  const [isEditingAdminMessage, setIsEditingAdminMessage] = useState(false);
   const [adminMessageTemplate, setAdminMessageTemplate] = useState<string>(
-    `Hello {{admin_name}},\n\nThis is KoHot Host reaching out regarding your {{department_name}} ({{institution_name}}) — Class of {{graduation_year}} album.\n\nAccess your class album here:\n{{album_url}}`
+    `Hello {{admin_name}}, this is KoHot Host reaching out regarding your {{department_name}} ({{institution_name}}) Class of {{graduation_year}} album:\n{{album_url}}`
   );
-  const [copiedAdminPhone, setCopiedAdminPhone] = useState<string | null>(null);
-  const [copiedAllPhones, setCopiedAllPhones] = useState(false);
-  const [copiedAdminTemplate, setCopiedAdminTemplate] = useState(false);
-  const [adminMessageToast, setAdminMessageToast] = useState<string | null>(null);
 
-  // Extract all registered Album Admins (and Co-Admins) from existing sets
   const registeredAdmins = useMemo<RegisteredAdminContact[]>(() => {
     const list: RegisteredAdminContact[] = [];
-
     sets.forEach((set) => {
-      if (set.deletedAt) return;
+      if (set.deletedAt || set.id.startsWith('crownfield-')) return;
 
-      // Primary Album Admin phone resolution from existing data
       const adminStudent = (set.students || []).find(
         (st) =>
           ((set as any).classAdminStudentId && st.id === (set as any).classAdminStudentId) ||
@@ -133,6 +168,7 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
         adminName: set.classRepName || adminStudent?.fullName || 'Class Album Admin',
         roleLabel: 'Album Admin',
         phone: resolvedPrimaryPhone,
+        email: set.classRepEmail || adminStudent?.email,
         departmentName: set.departmentName,
         institutionId: set.institutionId,
         institutionName: set.institutionName,
@@ -141,7 +177,6 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
         isPublished: Boolean(set.isPublished),
       });
 
-      // Include any registered Co-Admins if they have existing data
       const coAdminsList = (set as any).coAdmins;
       if (Array.isArray(coAdminsList)) {
         coAdminsList.forEach((co: any, idx: number) => {
@@ -150,13 +185,15 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
               (co.email && st.email?.toLowerCase() === co.email.toLowerCase()) ||
               (co.fullName && st.fullName?.toLowerCase() === co.fullName.toLowerCase())
           );
-          const coPhone = co.phone || coStudent?.whatsappNumber || (coStudent as any)?.phoneNumber || '';
+          const coPhone =
+            co.phone || coStudent?.whatsappNumber || (coStudent as any)?.phoneNumber || '';
           list.push({
             id: `coadmin-${set.id}-${idx}`,
             setId: set.id,
             adminName: co.fullName || coStudent?.fullName || 'Co-Admin',
             roleLabel: 'Co-Admin',
             phone: coPhone,
+            email: co.email || coStudent?.email,
             departmentName: set.departmentName,
             institutionId: set.institutionId,
             institutionName: set.institutionName,
@@ -167,7 +204,6 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
         });
       }
     });
-
     return list;
   }, [sets]);
 
@@ -178,12 +214,13 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
       }
       if (adminSearchQuery.trim()) {
         const q = adminSearchQuery.toLowerCase();
-        const matchName = admin.adminName.toLowerCase().includes(q);
-        const matchDept = admin.departmentName.toLowerCase().includes(q);
-        const matchUni = admin.institutionName.toLowerCase().includes(q);
-        const matchPhone = admin.phone.toLowerCase().includes(q);
-        const matchYear = String(admin.graduationYear).includes(q);
-        return matchName || matchDept || matchUni || matchPhone || matchYear;
+        return (
+          admin.adminName.toLowerCase().includes(q) ||
+          admin.departmentName.toLowerCase().includes(q) ||
+          admin.institutionName.toLowerCase().includes(q) ||
+          admin.phone.toLowerCase().includes(q) ||
+          String(admin.graduationYear).includes(q)
+        );
       }
       return true;
     });
@@ -193,7 +230,7 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
     const albumUrl =
       typeof window !== 'undefined'
         ? `${window.location.origin}/#album-${admin.setId}`
-        : `https://kohot.com/#album-${admin.setId}`;
+        : `https://kohot.lumna.workers.dev/#album-${admin.setId}`;
 
     return adminMessageTemplate
       .replace(/\{\{admin_name\}\}/g, admin.adminName)
@@ -235,851 +272,684 @@ export const MasterAnnualRemindersSection: React.FC<MasterAnnualRemindersSection
         : `sms:?body=${encoded}`;
       window.location.href = smsUrl;
     }
+  };
 
-    setAdminMessageToast(
-      `Opened ${channel === 'whatsapp' ? 'WhatsApp' : 'SMS'} for ${admin.adminName} (${admin.departmentName}).`
+  // =========================================================================
+  // 3. HANDOFFS STATE
+  // =========================================================================
+  const [storedInvites] = useState<NextClassHandoffInvite[]>(getStoredNextClassInvites);
+  const [handoffSearchQuery, setHandoffSearchQuery] = useState('');
+  const [isEditingHandoffMessage, setIsEditingHandoffMessage] = useState(false);
+  const [handoffMessageTemplate, setHandoffMessageTemplate] = useState<string>(
+    `Hello {{contact_name}}, you have been nominated to lead the {{department_name}} ({{institution_name}}) Class of {{next_year}} digital album on KoHot. Initialize your class album here:\n{{invite_url}}`
+  );
+
+  const handoffRecords = useMemo(() => {
+    const nonDemoSets = sets.filter((s) => !s.deletedAt && !s.id.startsWith('crownfield-'));
+    return nonDemoSets
+      .map((set) => {
+        const nextYear = (set.graduationYear || new Date().getFullYear()) + 1;
+        const invite = storedInvites.find(
+          (i) =>
+            i.fromSetId === set.id ||
+            (i.targetDepartmentId === set.departmentId && i.targetClassYear === nextYear)
+        );
+        const contact =
+          set.nextClassContact ||
+          (invite
+            ? {
+                name: invite.targetContactName,
+                phoneOrWhatsapp: invite.targetContactPhone,
+                email: invite.targetContactEmail,
+                graduatingYear: nextYear,
+              }
+            : undefined);
+
+        const nextSetExists = nonDemoSets.some(
+          (s) => s.departmentId === set.departmentId && s.graduationYear === nextYear
+        );
+        const status = nextSetExists ? 'approved' : invite?.status || (contact ? 'invited' : 'not_invited');
+
+        return {
+          set,
+          invite,
+          contact,
+          nextYear,
+          status,
+        };
+      })
+      .filter((r) => Boolean(r.contact?.name || r.invite));
+  }, [sets, storedInvites]);
+
+  const filteredHandoffs = useMemo(() => {
+    if (!handoffSearchQuery.trim()) return handoffRecords;
+    const q = handoffSearchQuery.toLowerCase();
+    return handoffRecords.filter(
+      (rec) =>
+        rec.set.departmentName.toLowerCase().includes(q) ||
+        rec.set.institutionName.toLowerCase().includes(q) ||
+        (rec.contact?.name || '').toLowerCase().includes(q) ||
+        String(rec.nextYear).includes(q)
     );
-    setTimeout(() => setAdminMessageToast(null), 3500);
+  }, [handoffRecords, handoffSearchQuery]);
+
+  const buildHandoffInviteLink = (rec: (typeof handoffRecords)[0]) => {
+    const origin =
+      typeof window !== 'undefined' && window.location.origin
+        ? window.location.origin
+        : 'https://kohot.lumna.workers.dev';
+    const params = new URLSearchParams();
+    params.set('relay', '1');
+    params.set('uni', rec.set.institutionId);
+    if (rec.set.departmentId) params.set('deptId', rec.set.departmentId);
+    params.set('dept', rec.set.departmentName);
+    params.set('year', String(rec.nextYear));
+    if (rec.contact?.name) params.set('repName', rec.contact.name);
+    if (rec.contact?.phoneOrWhatsapp) params.set('repPhone', rec.contact.phoneOrWhatsapp);
+    return `${origin}/?${params.toString()}`;
   };
 
-  const handleBulkSmsAllFilteredAdmins = () => {
-    const phones = filteredAdmins
-      .map((a) => formatNigerianPhoneNumber(a.phone))
-      .filter((p) => Boolean(p));
+  const handleDispatchHandoff = (rec: (typeof handoffRecords)[0], channel: 'whatsapp' | 'sms') => {
+    const inviteUrl = buildHandoffInviteLink(rec);
+    const msg = handoffMessageTemplate
+      .replace(/\{\{contact_name\}\}/g, rec.contact?.name || 'Class Representative')
+      .replace(/\{\{department_name\}\}/g, rec.set.departmentName)
+      .replace(/\{\{institution_name\}\}/g, rec.set.institutionName)
+      .replace(/\{\{next_year\}\}/g, String(rec.nextYear))
+      .replace(/\{\{invite_url\}\}/g, inviteUrl);
+    const encoded = encodeURIComponent(msg);
+    const phone = rec.contact?.phoneOrWhatsapp || '';
 
-    const genericMsg = adminMessageTemplate
-      .replace(/\{\{admin_name\}\}/g, 'Class Album Admin')
-      .replace(/\{\{department_name\}\}/g, 'your department')
-      .replace(/\{\{institution_name\}\}/g, 'your institution')
-      .replace(/\{\{graduation_year\}\}/g, 'your graduating class')
-      .replace(
-        /\{\{album_url\}\}/g,
-        typeof window !== 'undefined' ? window.location.origin : 'https://kohot.com'
-      );
-
-    const recipientsJoined = phones.join(',');
-    const smsUrl = recipientsJoined
-      ? `sms:${recipientsJoined}?body=${encodeURIComponent(genericMsg)}`
-      : `sms:?body=${encodeURIComponent(genericMsg)}`;
-    window.location.href = smsUrl;
-  };
-
-  const handleCopyAllAdminPhones = () => {
-    const phones = filteredAdmins
-      .map((a) => formatNigerianPhoneNumber(a.phone) || a.phone)
-      .filter(Boolean)
-      .join(', ');
-    navigator.clipboard.writeText(phones);
-    setCopiedAllPhones(true);
-    setTimeout(() => setCopiedAllPhones(false), 2500);
+    if (channel === 'whatsapp') {
+      const waDigits = getWhatsAppDigits(phone);
+      const waUrl = waDigits
+        ? `https://wa.me/${waDigits}?text=${encoded}`
+        : `https://api.whatsapp.com/send?text=${encoded}`;
+      window.open(waUrl, '_blank');
+    } else {
+      const formattedPhone = formatNigerianPhoneNumber(phone);
+      const smsUrl = formattedPhone
+        ? `sms:${formattedPhone}?body=${encoded}`
+        : `sms:?body=${encoded}`;
+      window.location.href = smsUrl;
+    }
   };
 
   return (
-    <div id="master-communications-module" className="space-y-8 animate-fadeIn">
+    <div id="master-communications-module" className="max-w-xl mx-auto space-y-5 animate-fadeIn pb-10">
       {/* =========================================================================
-          HEADER & SUB-CLIP NAVIGATION (WHATSAPP & SMS ONLY)
+          TOP SEGMENTED PILL BAR: Outreach | Admins N | Handoffs N
           ========================================================================= */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-[#0e1017] via-[#131622] to-[#0a0b10] border border-white/15 shadow-2xl space-y-6">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2.5">
-              <span className="px-3 py-1 rounded-full bg-[#25D366]/15 border border-[#25D366]/30 text-[#25D366] font-mono-tech text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5">
-                <MessageCircle className="w-3 h-3" />
-                <span>WhatsApp &amp; SMS Direct Outreach</span>
-              </span>
-              <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-zinc-400 font-mono-tech text-[10px] uppercase tracking-wider">
-                Existing Cohort Data
-              </span>
-            </div>
+      <div className="p-1.5 rounded-full bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 grid grid-cols-3 items-center shadow-xs">
+        <button
+          type="button"
+          id="comm-tab-executive-blast"
+          onClick={() => setCommunicationsTab('executive_blast')}
+          className={`py-2.5 px-3 rounded-full text-xs sm:text-sm font-syne transition-all cursor-pointer text-center truncate ${
+            communicationsTab === 'executive_blast'
+              ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+              : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
+          }`}
+        >
+          Outreach
+        </button>
 
-            <h2 className="font-syne font-bold text-2xl sm:text-3xl text-white flex items-center gap-3">
-              <MessageCircle className="w-7 h-7 text-[#d4af37]" />
-              <span>KoHot Communications</span>
-            </h2>
+        <button
+          type="button"
+          id="comm-tab-album-admins"
+          onClick={() => setCommunicationsTab('album_admins')}
+          className={`py-2.5 px-3 rounded-full text-xs sm:text-sm font-syne transition-all cursor-pointer text-center truncate ${
+            communicationsTab === 'album_admins'
+              ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+              : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
+          }`}
+        >
+          Admins {registeredAdmins.length}
+        </button>
 
-            <p className="font-body text-xs sm:text-sm text-zinc-400 max-w-2xl leading-relaxed">
-              Centralized WhatsApp and SMS messaging hub for Department Executives outreach, registered Class Album Admins, and sequential Next-Class Handoffs.
-            </p>
-          </div>
-
-          {/* SUB-CLIP NAVIGATION PILLS */}
-          <div className="flex flex-wrap items-center gap-1.5 p-1.5 rounded-2xl bg-black/60 border border-white/10 self-start">
-            <button
-              type="button"
-              id="comm-tab-executive-blast"
-              onClick={() => setCommunicationsTab('executive_blast')}
-              className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                communicationsTab === 'executive_blast'
-                  ? 'bg-[#d4af37] text-black font-bold shadow'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Department Executives Blast</span>
-            </button>
-
-            <button
-              type="button"
-              id="comm-tab-album-admins"
-              onClick={() => setCommunicationsTab('album_admins')}
-              className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                communicationsTab === 'album_admins'
-                  ? 'bg-[#25D366] text-black font-bold shadow'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" />
-              <span>Registered Album Admins</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono-tech font-bold ${
-                  communicationsTab === 'album_admins'
-                    ? 'bg-black/20 text-black'
-                    : 'bg-white/10 text-zinc-300'
-                }`}
-              >
-                {registeredAdmins.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              id="comm-tab-handoffs"
-              onClick={() => setCommunicationsTab('handoffs')}
-              className={`px-4 py-2 rounded-xl text-xs font-mono-tech uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                communicationsTab === 'handoffs'
-                  ? 'bg-white text-black font-bold shadow'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <Share2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Next-Class Handoffs</span>
-            </button>
-          </div>
-        </div>
+        <button
+          type="button"
+          id="comm-tab-handoffs"
+          onClick={() => setCommunicationsTab('handoffs')}
+          className={`py-2.5 px-3 rounded-full text-xs sm:text-sm font-syne transition-all cursor-pointer text-center truncate ${
+            communicationsTab === 'handoffs'
+              ? 'bg-[#d4af37] text-black font-bold shadow-xs'
+              : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
+          }`}
+        >
+          Handoffs {handoffRecords.length}
+        </button>
       </div>
 
-      {/* =========================================================================
-          SUB-CLIP 1: DEPARTMENT EXECUTIVES BLAST (WHATSAPP & SMS ONLY)
-          ========================================================================= */}
-      {communicationsTab === 'executive_blast' && (
-        <div className="space-y-8 animate-fadeIn" id="executive-blast-section">
-          {/* Section Overview Header */}
-          <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-2">
-            <div className="flex items-center gap-2 text-[#d4af37]">
-              <Sparkles className="w-4 h-4" />
-              <span className="font-mono-tech text-[11px] uppercase tracking-wider font-bold">
-                Executive Outreach &amp; Album Creation Engine • WhatsApp &amp; SMS
-              </span>
-            </div>
-            <h3 className="font-syne font-black text-xl sm:text-2xl text-white">
-              Blast Outreach to Department Executives
-            </h3>
-            <p className="font-body text-xs sm:text-sm text-zinc-300 max-w-3xl leading-relaxed">
-              Compose and dispatch broadcast messages via WhatsApp and SMS directly to department executive leadership and student union representatives across universities inviting them to create their graduating class album. Links sent here land directly on the <strong>KoHot website homepage</strong>.
-            </p>
-          </div>
-
-          {/* Toast notices */}
-          {execBlastToast && (
-            <div className="p-4 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs font-mono-tech flex items-center gap-3 animate-fadeIn shadow-xl">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>{execBlastToast}</span>
-            </div>
-          )}
-
-          {imageSaveToast && (
-            <div className="p-4 rounded-2xl bg-[#d4af37]/20 border border-[#d4af37]/40 text-[#d4af37] text-xs font-mono-tech flex items-center gap-3 animate-fadeIn shadow-xl">
-              <Check className="w-4 h-4 text-[#d4af37] shrink-0" />
-              <span>Broadcast Link Context Image updated and saved permanently to platform assets!</span>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* LEFT COLUMN: CONTEXT IMAGE EDITOR & MESSAGE COMPOSER */}
-            <div className="lg:col-span-7 space-y-6">
-              {/* AREA 1: CONTEXT IMAGE MANAGER (GRADUATES PHOTO) */}
-              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-5 shadow-xl">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-white/10 gap-2">
-                  <div className="flex items-center gap-2.5">
-                    <ImageIcon className="w-5 h-5 text-[#d4af37]" />
-                    <div>
-                      <h4 className="font-syne font-bold text-sm text-white">
-                        Platform Links Context Image (Graduates Photo)
-                      </h4>
-                      <p className="text-zinc-400 text-xs font-body mt-0.5">
-                        Carried across blast message links, Next Class relay links, and Other Department invites.
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleUpdateBlastImage(
-                        'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85'
-                      )
-                    }
-                    className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs self-start sm:self-auto cursor-pointer transition-colors"
-                  >
-                    Reset to Default
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  <ImageDropzone
-                    value={blastImageUrl}
-                    onChange={(url) => handleUpdateBlastImage(url)}
-                    aspectRatio="16:9"
-                    maxDimension={1200}
-                    helperText="Upload or drag & drop a high-resolution photo of graduating students/celebration. Automatically optimized for social cards."
-                  />
-
-                  <div className="space-y-1.5">
-                    <label className="block text-[11px] font-mono-tech uppercase text-zinc-400 font-semibold">
-                      Direct Context Image URL
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="url"
-                        value={blastImageUrl}
-                        onChange={(e) => setBlastImageUrl(e.target.value)}
-                        placeholder="https://images.unsplash.com/photo-..."
-                        className="flex-1 px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-[#d4af37]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateBlastImage(blastImageUrl)}
-                        className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs cursor-pointer border border-white/20 transition-colors"
-                      >
-                        Apply
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Presets */}
-                  <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar text-[11px] font-mono-tech">
-                    <span className="text-zinc-500 shrink-0 font-semibold">Presets:</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleUpdateBlastImage(
-                          'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85'
-                        )
-                      }
-                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
-                    >
-                      Graduation Caps
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleUpdateBlastImage(
-                          'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1600&auto=format&fit=crop&q=85'
-                        )
-                      }
-                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
-                    >
-                      Cohort Convocation
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleUpdateBlastImage(
-                          'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1600&auto=format&fit=crop&q=85'
-                        )
-                      }
-                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 shrink-0 cursor-pointer"
-                    >
-                      Alumni Group Smile
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* AREA 2: MESSAGE CLIP COMPOSER */}
-              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-5 shadow-xl">
-                <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                  <div className="flex items-center gap-2">
-                    <Edit3 className="w-4 h-4 text-[#d4af37]" />
-                    <h4 className="font-syne font-bold text-sm text-white">
-                      Executive Outreach Message Clip (WhatsApp &amp; SMS)
-                    </h4>
-                  </div>
-                  <span className="text-[10px] font-mono-tech text-zinc-500 uppercase">
-                    Variable: {'{{website_url}}'}
-                  </span>
-                </div>
-
-                {/* Audience Selector */}
-                <div className="space-y-1.5">
-                  <label className="block text-[11px] font-mono-tech uppercase text-zinc-400 font-semibold">
-                    Target Department Executives Audience
-                  </label>
-                  <select
-                    value={targetBlastAudience}
-                    onChange={(e) => setTargetBlastAudience(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white text-xs font-mono-tech focus:outline-none focus:border-[#d4af37]"
-                  >
-                    <option value="all">
-                      All Universities &amp; All Departments (
-                      {universities.reduce((acc, u) => acc + (u.departments?.length || 0), 0)}{' '}
-                      Departments)
-                    </option>
-                    {universities.map((uni) => (
-                      <option key={uni.id} value={uni.id}>
-                        {uni.name} ({uni.departments?.length || 0} Departments)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Destination Link Info Box */}
-                <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono-tech text-[10px] uppercase text-zinc-400 font-bold">
-                      Destination Landing Link
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px]">
-                      Lands on Website Homepage
-                    </span>
-                  </div>
-                  <p className="font-mono-tech text-xs text-[#d4af37] break-all select-all">
-                    {typeof window !== 'undefined'
-                      ? `${window.location.origin}/?ref=dept_exec_blast`
-                      : 'https://kohot.com/?ref=dept_exec_blast'}
-                  </p>
-                </div>
-
-                {/* Textarea */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-[11px] font-mono-tech uppercase text-zinc-400 font-semibold">
-                      Outreach Message Text *
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setBlastMessageClip((prev) => prev + ' {{website_url}}')}
-                      className="text-[10px] font-mono-tech text-[#d4af37] hover:underline cursor-pointer"
-                    >
-                      + Insert {'{{website_url}}'}
-                    </button>
-                  </div>
-                  <textarea
-                    rows={8}
-                    value={blastMessageClip}
-                    onChange={(e) => setBlastMessageClip(e.target.value)}
-                    className="w-full p-4 rounded-2xl bg-black/60 border border-white/15 text-white text-xs font-body leading-relaxed focus:outline-none focus:border-[#d4af37] resize-y"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[10px] font-mono-tech text-zinc-500">
-                    Auto-interpolates website URL when dispatched via WhatsApp or SMS
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onUpdateContentOverride && contentOverride) {
-                        onUpdateContentOverride({
-                          ...contentOverride,
-                          executiveBlastMessageTemplate: blastMessageClip,
-                        });
-                        setExecBlastToast('Message template saved to platform configuration!');
-                        setTimeout(() => setExecBlastToast(null), 3000);
-                      }
-                    }}
-                    className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs transition-colors cursor-pointer border border-white/15"
-                  >
-                    Save As Default Template
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* RIGHT COLUMN: LIVE CONTEXT CARD PREVIEW & WHATSAPP / SMS DISPATCH BAR */}
-            <div className="lg:col-span-5 space-y-6">
-              {/* LIVE SOCIAL / MESSAGING CARD PREVIEW */}
-              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
-                <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                  <div className="flex items-center gap-2">
-                    <Share2 className="w-4 h-4 text-[#d4af37]" />
-                    <h4 className="font-syne font-bold text-sm text-white">
-                      Shared Link Card Preview
-                    </h4>
-                  </div>
-                  <span className="text-[10px] font-mono-tech text-emerald-400">
-                    Live Context Preview
-                  </span>
-                </div>
-
-                <p className="text-zinc-400 text-xs font-body">
-                  When recipients receive this link via WhatsApp or SMS, it displays the visual card below with your graduate image:
-                </p>
-
-                {/* Preview Social Card */}
-                <div className="rounded-2xl border border-white/15 bg-black overflow-hidden shadow-2xl transition-all hover:border-[#d4af37]/40">
-                  <div className="relative aspect-[16/9] w-full overflow-hidden bg-black/80">
-                    <img
-                      src={blastImageUrl}
-                      alt="Graduates Context"
-                      className="w-full h-full object-cover filter contrast-[1.05]"
-                    />
-                    <div className="absolute top-3 left-3 px-2.5 py-0.5 rounded-full bg-black/70 backdrop-blur-md border border-white/20 text-[10px] font-mono-tech uppercase text-[#d4af37] font-bold">
-                      KoHot Album Platform
-                    </div>
-                  </div>
-
-                  <div className="p-4 space-y-2 bg-[#121420]">
-                    <span className="text-[10px] font-mono-tech uppercase text-zinc-500 font-bold block">
-                      kohot.com • Direct Department Invitation
-                    </span>
-                    <h5 className="font-syne font-bold text-sm text-white leading-snug">
-                      Preserve Your Department Class Album — KoHot
-                    </h5>
-                    <p className="text-zinc-400 text-xs line-clamp-2 leading-relaxed">
-                      Establish the official permanent archive and corridor Legacy Plaque for your graduating class. Beautiful graduate memories live here.
-                    </p>
-                    <div className="pt-2 border-t border-white/10 flex items-center justify-between">
-                      <span className="text-[10px] font-mono-tech text-emerald-400 font-semibold">
-                        Destination: Website Homepage
-                      </span>
-                      <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* WHATSAPP & SMS DISPATCH BAR (NO EMAIL BUTTON) */}
-              <div className="p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
-                <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                  <Send className="w-4 h-4 text-[#d4af37]" />
-                  <span>WhatsApp &amp; SMS Dispatch Channels</span>
-                </h4>
-
-                {/* Messaging Channels Grid: Limited to WhatsApp & SMS */}
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  {/* WhatsApp */}
-                  <button
-                    type="button"
-                    id="exec-blast-whatsapp-btn"
-                    onClick={() => {
-                      const webUrl =
-                        typeof window !== 'undefined'
-                          ? `${window.location.origin}/?ref=dept_exec_blast`
-                          : 'https://kohot.com/?ref=dept_exec_blast';
-                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
-                      window.open(
-                        `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`,
-                        '_blank'
-                      );
-                    }}
-                    className="p-3.5 rounded-2xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/40 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-bold cursor-pointer transition-all hover:scale-[1.02]"
-                  >
-                    <MessageCircle className="w-4 h-4 text-[#25D366]" />
-                    <span>Send via WhatsApp</span>
-                  </button>
-
-                  {/* SMS */}
-                  <button
-                    type="button"
-                    id="exec-blast-sms-btn"
-                    onClick={() => {
-                      const webUrl =
-                        typeof window !== 'undefined'
-                          ? `${window.location.origin}/?ref=dept_exec_blast`
-                          : 'https://kohot.com/?ref=dept_exec_blast';
-                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
-                      window.location.href = `sms:?body=${encodeURIComponent(msg)}`;
-                    }}
-                    className="p-3.5 rounded-2xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-white flex items-center justify-center gap-2 font-mono-tech text-xs font-bold cursor-pointer transition-all hover:scale-[1.02]"
-                  >
-                    <Smartphone className="w-4 h-4 text-sky-400" />
-                    <span>Send via SMS</span>
-                  </button>
-                </div>
-
-                {/* Copy Helpers */}
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const webUrl =
-                        typeof window !== 'undefined'
-                          ? `${window.location.origin}/?ref=dept_exec_blast`
-                          : 'https://kohot.com/?ref=dept_exec_blast';
-                      navigator.clipboard.writeText(webUrl);
-                      setCopiedBlastLink(true);
-                      setTimeout(() => setCopiedBlastLink(false), 3000);
-                    }}
-                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all"
-                  >
-                    {copiedBlastLink ? (
-                      <Check className="w-4 h-4 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                    <span>{copiedBlastLink ? 'Link Copied!' : 'Copy Link'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const webUrl =
-                        typeof window !== 'undefined'
-                          ? `${window.location.origin}/?ref=dept_exec_blast`
-                          : 'https://kohot.com/?ref=dept_exec_blast';
-                      const msg = blastMessageClip.replace(/{{website_url}}/g, webUrl);
-                      navigator.clipboard.writeText(msg);
-                      setCopiedBlastMessage(true);
-                      setTimeout(() => setCopiedBlastMessage(false), 3000);
-                    }}
-                    className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white flex items-center justify-center gap-2 font-mono-tech text-xs cursor-pointer transition-all"
-                  >
-                    {copiedBlastMessage ? (
-                      <Check className="w-4 h-4 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                    <span>{copiedBlastMessage ? 'Message Copied!' : 'Copy Message'}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+      {toastMessage && (
+        <div className="px-4 py-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-body flex items-center gap-2 animate-fadeIn">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{toastMessage}</span>
         </div>
       )}
 
       {/* =========================================================================
-          SUB-CLIP 2: MESSAGE REGISTERED ALBUM ADMINS (WHATSAPP & SMS USING EXISTING DATA)
+          TAB 1: OUTREACH MESSAGE (MATCHING SCREENSHOTS 1 & 3)
+          ========================================================================= */}
+      {communicationsTab === 'executive_blast' && (
+        <div
+          id="executive-blast-section"
+          className="rounded-3xl bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 p-5 sm:p-6 space-y-5 shadow-xs"
+        >
+          {/* Card Header */}
+          <div className="space-y-1">
+            <h2 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
+              Outreach message
+            </h2>
+            <p className="font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400 leading-relaxed">
+              Invite department executives to create their class album. Links open the KoHot homepage.
+            </p>
+          </div>
+
+          {/* Send to */}
+          <div className="space-y-2">
+            <label className="block font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
+              Send to
+            </label>
+            <div className="relative">
+              <select
+                value={targetBlastAudience}
+                onChange={(e) => setTargetBlastAudience(e.target.value)}
+                className="w-full appearance-none px-4 py-3.5 pr-10 rounded-2xl bg-white dark:bg-[#12151e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-body text-sm focus:outline-none focus:border-[#d4af37] cursor-pointer"
+              >
+                <option value="all">All universities and departments</option>
+                {universities.map((uni) => (
+                  <option key={uni.id} value={uni.id}>
+                    {uni.name} ({uni.departments?.length || 0} departments)
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-4 h-4 text-slate-400 dark:text-zinc-400 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Message */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
+                Message
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isEditingOutreachMessage && onUpdateContentOverride && contentOverride) {
+                    onUpdateContentOverride({
+                      ...contentOverride,
+                      executiveBlastMessageTemplate: blastMessageClip,
+                    });
+                    showToast('Outreach message saved.');
+                  }
+                  setIsEditingOutreachMessage((prev) => !prev);
+                }}
+                className="font-body font-semibold text-xs sm:text-sm text-[#9a7b1c] dark:text-[#d4af37] hover:underline cursor-pointer"
+              >
+                {isEditingOutreachMessage ? 'Done' : 'Edit'}
+              </button>
+            </div>
+
+            {isEditingOutreachMessage ? (
+              <div className="space-y-2">
+                <textarea
+                  rows={5}
+                  value={blastMessageClip}
+                  onChange={(e) => setBlastMessageClip(e.target.value)}
+                  className="w-full p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24] border border-[#d4af37] text-slate-900 dark:text-white font-body text-sm leading-relaxed focus:outline-none resize-y"
+                />
+                <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-500 dark:text-zinc-400">
+                  <span>Include {'{{website_url}}'} to place the link automatically</span>
+                  <button
+                    type="button"
+                    onClick={() => setBlastMessageClip((prev) => `${prev.trim()} {{website_url}}`)}
+                    className="text-[#9a7b1c] dark:text-[#d4af37] hover:underline cursor-pointer"
+                  >
+                    + Insert {'{{website_url}}'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                onClick={() => setIsEditingOutreachMessage(true)}
+                className="p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 text-slate-900 dark:text-zinc-100 font-body text-sm leading-relaxed max-h-36 overflow-y-auto cursor-pointer"
+              >
+                {blastMessageClip.replace(/\{\{website_url\}\}/g, displayOutreachLink)}
+              </div>
+            )}
+          </div>
+
+          {/* Link */}
+          <div className="space-y-2">
+            <label className="block font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
+              Link
+            </label>
+            <div className="flex items-center gap-2.5">
+              <div className="flex-1 min-w-0 px-4 py-3.5 rounded-2xl bg-white dark:bg-[#12151e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-body text-sm truncate select-all">
+                {displayOutreachLink}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(fullOutreachLink);
+                  setCopiedBlastLink(true);
+                  setTimeout(() => setCopiedBlastLink(false), 2500);
+                }}
+                className="px-5 py-3.5 rounded-2xl bg-white hover:bg-slate-50 dark:bg-[#161a24] dark:hover:bg-white/10 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-syne font-semibold text-sm transition-colors cursor-pointer shrink-0"
+              >
+                {copiedBlastLink ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          </div>
+
+          {/* Link preview image */}
+          <div className="space-y-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handlePreviewImageFileChange}
+              className="hidden"
+            />
+            <div className="p-3 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-14 h-10 rounded-xl overflow-hidden bg-slate-300 dark:bg-zinc-700 border border-slate-200 dark:border-white/10 shrink-0">
+                  {blastImageUrl && (
+                    <img
+                      src={blastImageUrl}
+                      alt="Link preview"
+                      className="w-full h-full object-cover"
+                    />
+                  )}
+                </div>
+                <span className="font-body font-medium text-sm text-slate-900 dark:text-white truncate">
+                  {isUploadingPreviewImage ? 'Uploading image...' : 'Link preview image'}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsChangingPreviewImage((prev) => !prev)}
+                className="font-body font-semibold text-xs sm:text-sm text-[#9a7b1c] dark:text-[#d4af37] hover:underline cursor-pointer shrink-0 pr-1"
+              >
+                {isChangingPreviewImage ? 'Close' : 'Change'}
+              </button>
+            </div>
+
+            {isChangingPreviewImage && (
+              <div className="p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24] border border-slate-200 dark:border-white/10 space-y-3 animate-fadeIn">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploadingPreviewImage}
+                    className="px-4 py-2 rounded-xl bg-[#d4af37] hover:bg-[#c49f27] text-black font-syne font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{isUploadingPreviewImage ? 'Uploading...' : 'Upload Photo'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleUpdateBlastImage(
+                        'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1600&auto=format&fit=crop&q=85'
+                      );
+                      setIsChangingPreviewImage(false);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-zinc-300 text-xs font-body cursor-pointer"
+                  >
+                    Reset Default
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="url"
+                    value={blastImageUrl}
+                    onChange={(e) => setBlastImageUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="flex-1 px-3.5 py-2 rounded-xl bg-white dark:bg-[#12151e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white text-xs font-mono-tech focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleUpdateBlastImage(blastImageUrl);
+                      setIsChangingPreviewImage(false);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-black text-xs font-syne font-bold cursor-pointer"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* WhatsApp & SMS Action Pill Buttons */}
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <button
+              type="button"
+              id="exec-blast-whatsapp-btn"
+              onClick={() => {
+                window.open(
+                  `https://api.whatsapp.com/send?text=${encodeURIComponent(resolvedOutreachMessage)}`,
+                  '_blank'
+                );
+              }}
+              className="h-12 rounded-full bg-[#e6f5ec] hover:bg-[#d5eedf] dark:bg-[#0d2818] dark:hover:bg-[#133822] border border-[#b8e2c8] dark:border-[#1e4d30] text-[#15803d] dark:text-[#34d399] font-syne font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>WhatsApp</span>
+            </button>
+
+            <button
+              type="button"
+              id="exec-blast-sms-btn"
+              onClick={() => {
+                window.location.href = `sms:?body=${encodeURIComponent(resolvedOutreachMessage)}`;
+              }}
+              className="h-12 rounded-full bg-white hover:bg-slate-50 dark:bg-[#161a24] dark:hover:bg-white/10 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-syne font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>SMS</span>
+            </button>
+          </div>
+
+          <p className="text-center font-body text-xs text-slate-500 dark:text-zinc-400">
+            Opens your WhatsApp or SMS app. Nothing is sent automatically.
+          </p>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 2: ADMINS (CLEAN UNIFIED CARD MATCHING OUTREACH DESIGN)
           ========================================================================= */}
       {communicationsTab === 'album_admins' && (
-        <div className="space-y-8 animate-fadeIn" id="registered-album-admins-messaging-section">
-          {/* Overview Header & Quick Metrics */}
-          <div className="p-6 sm:p-7 rounded-3xl bg-[#0c0d14] border border-white/15 flex flex-col lg:flex-row lg:items-center justify-between gap-6 shadow-xl">
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-[#25D366] font-mono-tech text-[11px] uppercase tracking-wider font-bold">
-                <MessageCircle className="w-4 h-4" />
-                <span>Direct Cohort Admin Outreach • WhatsApp &amp; SMS Only</span>
-              </div>
-              <h3 className="font-syne font-bold text-xl sm:text-2xl text-white">
-                Message Registered Class Album Admins
-              </h3>
-              <p className="font-body text-xs sm:text-sm text-zinc-400 max-w-2xl leading-relaxed">
-                Reach out directly to already-registered Class Album Admins and Co-Admins via WhatsApp or SMS using their existing contact records from album registration.
-              </p>
-            </div>
+        <div
+          id="registered-album-admins-messaging-section"
+          className="rounded-3xl bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 p-5 sm:p-6 space-y-5 shadow-xs"
+        >
+          <div className="space-y-1">
+            <h2 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
+              Registered album admins
+            </h2>
+            <p className="font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400 leading-relaxed">
+              Reach out to class album admins and co-admins using their registered contact details.
+            </p>
+          </div>
 
-            {/* Quick Counts */}
-            <div className="flex flex-wrap items-center gap-3 shrink-0 font-mono-tech text-xs">
-              <div className="px-4 py-2.5 rounded-2xl bg-white/[0.04] border border-white/10">
-                <span className="text-[10px] uppercase text-zinc-500 block">Registered Admins</span>
-                <span className="font-bold text-base text-white">{registeredAdmins.length}</span>
-              </div>
-              <div className="px-4 py-2.5 rounded-2xl bg-[#25D366]/10 border border-[#25D366]/25">
-                <span className="text-[10px] uppercase text-[#25D366]/80 block">With Phone / WhatsApp</span>
-                <span className="font-bold text-base text-[#25D366]">
-                  {registeredAdmins.filter((a) => Boolean(a.phone)).length}
-                </span>
-              </div>
+          {/* Filter by university */}
+          <div className="space-y-2">
+            <label className="block font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
+              Filter by institution
+            </label>
+            <div className="relative">
+              <select
+                value={adminUniFilter}
+                onChange={(e) => setAdminUniFilter(e.target.value)}
+                className="w-full appearance-none px-4 py-3.5 pr-10 rounded-2xl bg-white dark:bg-[#12151e] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-body text-sm focus:outline-none focus:border-[#d4af37] cursor-pointer"
+              >
+                <option value="all">All universities and departments ({registeredAdmins.length})</option>
+                {universities.map((uni) => (
+                  <option key={uni.id} value={uni.id}>
+                    {uni.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-4 h-4 text-slate-400 dark:text-zinc-400 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
           </div>
 
-          {adminMessageToast && (
-            <div className="p-4 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs font-mono-tech flex items-center gap-3 animate-fadeIn shadow-xl">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>{adminMessageToast}</span>
+          {/* Message Template */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
+                Message
+              </label>
+              <button
+                type="button"
+                onClick={() => setIsEditingAdminMessage((prev) => !prev)}
+                className="font-body font-semibold text-xs sm:text-sm text-[#9a7b1c] dark:text-[#d4af37] hover:underline cursor-pointer"
+              >
+                {isEditingAdminMessage ? 'Done' : 'Edit'}
+              </button>
             </div>
-          )}
 
-          {/* Message Template Composer + Bulk SMS/WhatsApp Bar */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 p-6 rounded-3xl bg-[#0c0d14] border border-white/10 space-y-4 shadow-xl">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-white/10">
-                <div className="flex items-center gap-2">
-                  <Edit3 className="w-4 h-4 text-[#25D366]" />
-                  <h4 className="font-syne font-bold text-sm text-white">
-                    Album Admin WhatsApp &amp; SMS Message Composer
-                  </h4>
-                </div>
-                <span className="text-[10px] font-mono-tech text-zinc-400">
-                  Auto-fills each admin&apos;s existing data
-                </span>
-              </div>
-
-              {/* Dynamic Variable Insertion Pills */}
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[10px] font-mono-tech uppercase text-zinc-500 mr-1">
-                  Insert Variable:
-                </span>
-                {[
-                  '{{admin_name}}',
-                  '{{department_name}}',
-                  '{{institution_name}}',
-                  '{{graduation_year}}',
-                  '{{album_url}}',
-                ].map((token) => (
-                  <button
-                    key={token}
-                    type="button"
-                    onClick={() => setAdminMessageTemplate((prev) => `${prev} ${token}`)}
-                    className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[#d4af37] font-mono-tech text-[11px] cursor-pointer transition-colors"
-                  >
-                    {token}
-                  </button>
-                ))}
-              </div>
-
+            {isEditingAdminMessage ? (
               <textarea
-                rows={5}
+                rows={4}
                 value={adminMessageTemplate}
                 onChange={(e) => setAdminMessageTemplate(e.target.value)}
-                placeholder="Write WhatsApp or SMS message for registered Album Admins..."
-                className="w-full p-4 rounded-2xl bg-black/60 border border-white/15 text-white text-xs font-body leading-relaxed focus:outline-none focus:border-[#25D366] resize-y"
+                className="w-full p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24] border border-[#d4af37] text-slate-900 dark:text-white font-body text-sm leading-relaxed focus:outline-none resize-y"
               />
-            </div>
-
-            {/* Bulk Actions & Existing Data Dispatch Card */}
-            <div className="lg:col-span-5 p-6 rounded-3xl bg-[#0c0d14] border border-white/10 flex flex-col justify-between space-y-4 shadow-xl">
-              <div className="space-y-2">
-                <h4 className="font-syne font-bold text-sm text-white flex items-center gap-2">
-                  <Smartphone className="w-4 h-4 text-[#25D366]" />
-                  <span>Quick Broadcast to Registered Admins</span>
-                </h4>
-                <p className="text-zinc-400 text-xs font-body leading-relaxed">
-                  Use the buttons below to launch a multi-recipient SMS or WhatsApp broadcast using the phone numbers already captured from registered Album Admins, or message individual admins in the table below.
-                </p>
+            ) : (
+              <div
+                onClick={() => setIsEditingAdminMessage(true)}
+                className="p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 text-slate-900 dark:text-zinc-100 font-body text-sm leading-relaxed cursor-pointer"
+              >
+                {adminMessageTemplate}
               </div>
-
-              <div className="space-y-2.5 pt-2">
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const genericMsg = adminMessageTemplate
-                        .replace(/\{\{admin_name\}\}/g, 'Class Album Admin')
-                        .replace(/\{\{department_name\}\}/g, 'your department')
-                        .replace(/\{\{institution_name\}\}/g, 'your institution')
-                        .replace(/\{\{graduation_year\}\}/g, 'your graduating class')
-                        .replace(
-                          /\{\{album_url\}\}/g,
-                          typeof window !== 'undefined' ? window.location.origin : 'https://kohot.com'
-                        );
-                      window.open(
-                        `https://api.whatsapp.com/send?text=${encodeURIComponent(genericMsg)}`,
-                        '_blank'
-                      );
-                    }}
-                    className="p-3 rounded-2xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/40 text-white font-mono-tech text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
-                  >
-                    <MessageCircle className="w-4 h-4 text-[#25D366]" />
-                    <span>WhatsApp Broadcast</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleBulkSmsAllFilteredAdmins}
-                    className="p-3 rounded-2xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-white font-mono-tech text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
-                  >
-                    <Smartphone className="w-4 h-4 text-sky-400" />
-                    <span>SMS All Admins</span>
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={handleCopyAllAdminPhones}
-                    className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                  >
-                    {copiedAllPhones ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                    <span>{copiedAllPhones ? 'Phones Copied!' : 'Copy All Phone Nos'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(adminMessageTemplate);
-                      setCopiedAdminTemplate(true);
-                      setTimeout(() => setCopiedAdminTemplate(false), 2500);
-                    }}
-                    className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                  >
-                    {copiedAdminTemplate ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                    <span>{copiedAdminTemplate ? 'Template Copied!' : 'Copy Message Text'}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
 
-          {/* Filter & Search Bar */}
-          <div className="p-4 rounded-2xl bg-[#0c0d14] border border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="relative w-full sm:max-w-md">
-              <Search className="w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+          {/* Search input if admins exist */}
+          {registeredAdmins.length > 0 && (
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 dark:text-zinc-400 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={adminSearchQuery}
                 onChange={(e) => setAdminSearchQuery(e.target.value)}
-                placeholder="Search admin name, WhatsApp/phone, department, or institution..."
-                className="w-full pl-9 pr-4 py-2 rounded-xl bg-black/60 border border-white/10 text-white font-mono-tech text-xs placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
+                placeholder="Search admin name, department, or phone..."
+                className="w-full pl-10 pr-4 py-3 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 text-slate-900 dark:text-white font-body text-sm focus:outline-none focus:border-[#d4af37]"
               />
             </div>
+          )}
 
-            <div className="flex items-center gap-3 w-full sm:w-auto">
-              <select
-                value={adminUniFilter}
-                onChange={(e) => setAdminUniFilter(e.target.value)}
-                className="w-full sm:w-auto px-3.5 py-2 rounded-xl bg-black/60 border border-white/10 text-zinc-300 font-mono-tech text-xs focus:outline-none"
-              >
-                <option value="all">All Institutions ({universities.length})</option>
-                {universities.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
-                ))}
-              </select>
+          {/* Admin List */}
+          {filteredAdmins.length === 0 ? (
+            <div className="p-6 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/60 border border-slate-200/90 dark:border-white/10 text-center space-y-1">
+              <p className="font-syne font-bold text-sm text-slate-900 dark:text-white">
+                No registered album admins yet
+              </p>
+              <p className="font-body text-xs text-slate-500 dark:text-zinc-400">
+                When class representatives create their department albums, their contact cards appear here.
+              </p>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {filteredAdmins.map((admin) => (
+                <div
+                  key={admin.id}
+                  className="p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h4 className="font-syne font-bold text-sm text-slate-900 dark:text-white truncate">
+                        {admin.adminName}
+                      </h4>
+                      <p className="font-body text-xs text-slate-500 dark:text-zinc-400 truncate">
+                        {admin.departmentName} · {admin.institutionName} ({admin.graduationYear})
+                      </p>
+                      {admin.phone && (
+                        <p className="font-mono-tech text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                          {admin.phone}
+                        </p>
+                      )}
+                    </div>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech font-semibold shrink-0 ${
+                        admin.isPublished
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+                      }`}
+                    >
+                      {admin.isPublished ? 'Published' : 'Draft'}
+                    </span>
+                  </div>
 
-          {/* Registered Album Admins Table */}
-          <div className="rounded-3xl bg-[#0c0d14] border border-white/10 overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-white/10 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <GraduationCap className="w-4 h-4 text-[#25D366]" />
-                <span className="font-syne font-bold text-sm text-white">
-                  Registered Class Album Admins Directory
-                </span>
-                <span className="px-2 py-0.5 rounded-full bg-white/10 text-zinc-400 text-[10px] font-mono-tech">
-                  {filteredAdmins.length} admins
-                </span>
-              </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => handleSendAdminMessage(admin, 'whatsapp')}
+                      className="h-10 rounded-full bg-[#e6f5ec] hover:bg-[#d5eedf] dark:bg-[#0d2818] dark:hover:bg-[#133822] border border-[#b8e2c8] dark:border-[#1e4d30] text-[#15803d] dark:text-[#34d399] font-syne font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      <span>WhatsApp</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSendAdminMessage(admin, 'sms')}
+                      className="h-10 rounded-full bg-white hover:bg-slate-50 dark:bg-[#12151e] dark:hover:bg-white/10 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-syne font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>SMS</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
+          )}
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-white/10 bg-black/40 font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                    <th className="p-4">Album Admin</th>
-                    <th className="p-4">Department &amp; Institution</th>
-                    <th className="p-4">Cohort / Set</th>
-                    <th className="p-4">WhatsApp / SMS Phone</th>
-                    <th className="p-4 text-right">Direct Messaging (WhatsApp &amp; SMS)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5 font-mono-tech">
-                  {filteredAdmins.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-10 text-center text-zinc-500 font-mono-tech text-xs">
-                        No registered Class Album Admins match your filter criteria yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredAdmins.map((admin) => (
-                      <tr key={admin.id} className="hover:bg-white/[0.02] transition-colors">
-                        <td className="p-4">
-                          <div className="space-y-0.5">
-                            <p className="font-body font-bold text-white text-sm">
-                              {admin.adminName}
-                            </p>
-                            <span className="inline-block px-2 py-0.5 rounded bg-white/10 text-[#d4af37] text-[10px] uppercase">
-                              {admin.roleLabel}
-                            </span>
-                          </div>
-                        </td>
-
-                        <td className="p-4">
-                          <p className="font-body font-semibold text-zinc-200">
-                            {admin.departmentName}
-                          </p>
-                          <p className="text-[11px] text-zinc-500 flex items-center gap-1 mt-0.5">
-                            <Building2 className="w-3 h-3" />
-                            <span>{admin.institutionName}</span>
-                          </p>
-                        </td>
-
-                        <td className="p-4">
-                          <span className="text-white font-semibold">
-                            Class of {admin.graduationYear}
-                          </span>
-                          <span className="block text-[10px] text-zinc-500 mt-0.5">
-                            {admin.isPublished ? 'Published Live' : 'In Progress'}
-                          </span>
-                        </td>
-
-                        <td className="p-4">
-                          {admin.phone ? (
-                            <div className="flex items-center gap-2">
-                              <span className="text-emerald-400 font-semibold">
-                                {admin.phone}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  navigator.clipboard.writeText(admin.phone);
-                                  setCopiedAdminPhone(admin.id);
-                                  setTimeout(() => setCopiedAdminPhone(null), 2000);
-                                }}
-                                title="Copy phone number"
-                                className="text-zinc-500 hover:text-white cursor-pointer"
-                              >
-                                {copiedAdminPhone === admin.id ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-zinc-600 italic">No phone on record</span>
-                          )}
-                        </td>
-
-                        <td className="p-4 text-right space-x-2 whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => handleSendAdminMessage(admin, 'whatsapp')}
-                            className="px-3.5 py-2 rounded-xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/40 text-[#25D366] font-mono-tech text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer"
-                          >
-                            <MessageCircle className="w-3.5 h-3.5" />
-                            <span>WhatsApp</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleSendAdminMessage(admin, 'sms')}
-                            className="px-3.5 py-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-400 font-mono-tech text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer"
-                          >
-                            <Smartphone className="w-3.5 h-3.5" />
-                            <span>SMS</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <p className="text-center font-body text-xs text-slate-500 dark:text-zinc-400">
+            Opens your WhatsApp or SMS app. Nothing is sent automatically.
+          </p>
         </div>
       )}
 
       {/* =========================================================================
-          SUB-CLIP 3: NEXT-CLASS HANDOFFS (WHATSAPP & SMS RELAY TRACKER)
+          TAB 3: HANDOFFS (CLEAN UNIFIED CARD MATCHING OUTREACH DESIGN)
           ========================================================================= */}
       {communicationsTab === 'handoffs' && (
-        <MasterNextClassHandoffsSection
-          sets={sets}
-          universities={universities}
-          onViewDepartmentLegacyWall={onViewDepartmentLegacyWall}
-        />
+        <div
+          id="next-class-handoffs-section"
+          className="rounded-3xl bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 p-5 sm:p-6 space-y-5 shadow-xs"
+        >
+          <div className="space-y-1">
+            <h2 className="font-syne font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
+              Next-class handoffs
+            </h2>
+            <p className="font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400 leading-relaxed">
+              Follow up with incoming class representatives nominated by graduating sets.
+            </p>
+          </div>
+
+          {/* Message Template */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="font-body text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
+                Message
+              </label>
+              <button
+                type="button"
+                onClick={() => setIsEditingHandoffMessage((prev) => !prev)}
+                className="font-body font-semibold text-xs sm:text-sm text-[#9a7b1c] dark:text-[#d4af37] hover:underline cursor-pointer"
+              >
+                {isEditingHandoffMessage ? 'Done' : 'Edit'}
+              </button>
+            </div>
+
+            {isEditingHandoffMessage ? (
+              <textarea
+                rows={4}
+                value={handoffMessageTemplate}
+                onChange={(e) => setHandoffMessageTemplate(e.target.value)}
+                className="w-full p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24] border border-[#d4af37] text-slate-900 dark:text-white font-body text-sm leading-relaxed focus:outline-none resize-y"
+              />
+            ) : (
+              <div
+                onClick={() => setIsEditingHandoffMessage(true)}
+                className="p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 text-slate-900 dark:text-zinc-100 font-body text-sm leading-relaxed cursor-pointer"
+              >
+                {handoffMessageTemplate}
+              </div>
+            )}
+          </div>
+
+          {handoffRecords.length > 0 && (
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 dark:text-zinc-400 absolute left-4 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={handoffSearchQuery}
+                onChange={(e) => setHandoffSearchQuery(e.target.value)}
+                placeholder="Search incoming representative or department..."
+                className="w-full pl-10 pr-4 py-3 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 text-slate-900 dark:text-white font-body text-sm focus:outline-none focus:border-[#d4af37]"
+              />
+            </div>
+          )}
+
+          {filteredHandoffs.length === 0 ? (
+            <div className="p-6 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/60 border border-slate-200/90 dark:border-white/10 text-center space-y-1">
+              <p className="font-syne font-bold text-sm text-slate-900 dark:text-white">
+                No next-class handoffs recorded yet
+              </p>
+              <p className="font-body text-xs text-slate-500 dark:text-zinc-400">
+                When album admins enter the next set representative during publishing, their handoff details appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {filteredHandoffs.map((rec) => (
+                <div
+                  key={`${rec.set.id}-${rec.nextYear}`}
+                  className="p-4 rounded-2xl bg-[#f8f7f4] dark:bg-[#161a24]/80 border border-slate-200/90 dark:border-white/10 space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h4 className="font-syne font-bold text-sm text-slate-900 dark:text-white truncate">
+                        {rec.contact?.name || `Class of ${rec.nextYear} Representative`}
+                      </h4>
+                      <p className="font-body text-xs text-slate-500 dark:text-zinc-400 truncate">
+                        {rec.set.departmentName} · {rec.set.institutionName} (Class of {rec.nextYear})
+                      </p>
+                      {rec.contact?.phoneOrWhatsapp && (
+                        <p className="font-mono-tech text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                          {rec.contact.phoneOrWhatsapp}
+                        </p>
+                      )}
+                    </div>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono-tech font-semibold shrink-0 ${
+                        rec.status === 'approved'
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+                      }`}
+                    >
+                      {rec.status === 'approved' ? 'Onboarded' : 'Invited'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => handleDispatchHandoff(rec, 'whatsapp')}
+                      className="h-10 rounded-full bg-[#e6f5ec] hover:bg-[#d5eedf] dark:bg-[#0d2818] dark:hover:bg-[#133822] border border-[#b8e2c8] dark:border-[#1e4d30] text-[#15803d] dark:text-[#34d399] font-syne font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      <span>WhatsApp</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDispatchHandoff(rec, 'sms')}
+                      className="h-10 rounded-full bg-white hover:bg-slate-50 dark:bg-[#12151e] dark:hover:bg-white/10 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-syne font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>SMS</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="text-center font-body text-xs text-slate-500 dark:text-zinc-400">
+            Opens your WhatsApp or SMS app. Nothing is sent automatically.
+          </p>
+        </div>
       )}
     </div>
   );

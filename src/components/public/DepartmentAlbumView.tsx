@@ -447,6 +447,13 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     return 'moments';
   });
 
+  // Sticky filter clip state for Moments categories ('all' or event.id)
+  const [selectedMomentCategoryId, setSelectedMomentCategoryId] = useState<string>('all');
+
+  useEffect(() => {
+    setSelectedMomentCategoryId('all');
+  }, [currentSet.id]);
+
   // Mutual context awareness: keep admin dashboard tab & subtab synced whenever user switches sections on the album
   useEffect(() => {
     try {
@@ -1479,9 +1486,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                   </h3>
                 </div>
 
-                {/* Horizontally Swipeable Minimal Highlights Carousel (Same Size as Moments Photo Cards) */}
+                {/* Horizontally Swipeable Minimal Highlights Carousel (Same Size as People & Moments Cards) */}
                 <div
-                  className="flex items-start gap-4 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
+                  className="flex items-start gap-3 sm:gap-5 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
                 >
                   {highlightVideos.map((vid) => {
                     const ytId = extractYouTubeId(vid.youtubeUrl);
@@ -1498,13 +1505,13 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                           setSelectedVideo(vid);
                           setIsVideoModalOpen(true);
                         }}
-                        className={`group snap-start shrink-0 w-[260px] sm:w-[300px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border cursor-pointer ${
+                        className={`group snap-start shrink-0 w-[172px] sm:w-[216px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border cursor-pointer ${
                           isLightMode
                             ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400'
                             : 'bg-[#0e1017] border-white/[0.08] text-white hover:border-white/30'
                         }`}
                       >
-                        {/* Strictly Square Video Container Matching Moments Photo Cards (Direct Video Stream Only, No Thumbnail) */}
+                        {/* Strictly Square Video Container Matching People & Moments Cards */}
                         <div className="relative aspect-square w-full overflow-hidden bg-black">
                           {streamSrc && (
                             <iframe
@@ -1522,8 +1529,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
                           {/* Date Badge */}
                           {vid.dateStr && (
-                            <div className="absolute top-3 left-3 pointer-events-none">
-                              <span className="px-2.5 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 text-[10px] font-mono-tech text-white uppercase tracking-wider font-semibold">
+                            <div className="absolute top-2.5 left-2.5 pointer-events-none">
+                              <span className="px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 text-[9px] font-mono-tech text-white uppercase tracking-wider font-semibold">
                                 {vid.dateStr}
                               </span>
                             </div>
@@ -1531,14 +1538,14 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
                           {/* Minimal Center Play Button Overlay */}
                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#ef4444]/95 text-white flex items-center justify-center shadow-2xl group-hover:scale-110 transition-transform">
-                              <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
+                            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#ef4444]/95 text-white flex items-center justify-center shadow-2xl group-hover:scale-110 transition-transform">
+                              <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-white ml-0.5" />
                             </div>
                           </div>
 
                           {/* Minimal Bottom Title Overlay */}
-                          <div className="absolute inset-x-3 bottom-3 pointer-events-none">
-                            <h4 className="kohot-keep-color font-syne font-bold text-xs sm:text-sm text-white leading-snug line-clamp-2 drop-shadow-md">
+                          <div className="absolute inset-x-2.5 bottom-2.5 pointer-events-none">
+                            <h4 className="kohot-keep-color font-syne font-bold text-xs text-white leading-snug line-clamp-2 drop-shadow-md">
                               {vid.title}
                             </h4>
                           </div>
@@ -1550,9 +1557,20 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               </div>
             )}
 
-            {/* 2. MOMENTS SECTION (Photo Categories in Saved Order, No Category Filter Clips, Subtle Full-View Hint) */}
-            {hasPhotoCategories && (
-              <div id="moments-view-showcase" className="space-y-8">
+            {/* 2. MOMENTS SECTION (Sticky Category Filter Clips + People-Sized Swipable Cards) */}
+            {hasPhotoCategories && (() => {
+              const totalMomentsPhotoCount = sortedMemories.reduce(
+                (acc, cat) => acc + (cat.images?.length || 0),
+                0
+              );
+              const visibleMemories =
+                selectedMomentCategoryId === 'all' ||
+                !sortedMemories.some((m) => m.id === selectedMomentCategoryId)
+                  ? sortedMemories
+                  : sortedMemories.filter((m) => m.id === selectedMomentCategoryId);
+
+              return (
+              <div id="moments-view-showcase" className="space-y-6">
                 <div className={`flex items-baseline justify-between gap-3 border-b pb-3 ${isLightMode ? 'border-zinc-200' : 'border-white/10'}`}>
                   <h3
                     className={`font-syne font-bold text-xl sm:text-2xl tracking-tight ${
@@ -1566,8 +1584,93 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                   </span>
                 </div>
 
-                <div className="space-y-12">
-                  {sortedMemories.map((event) => (
+                {/* Sticky Filter Clips Bar for Moments (All + Each Category) */}
+                <div
+                  id="moments-sticky-filter-clips"
+                  className={`sticky top-[113px] z-20 -mx-4 px-4 sm:mx-0 sm:px-4 py-2.5 rounded-2xl border backdrop-blur-md transition-colors ${
+                    isLightMode
+                      ? 'bg-white/95 border-slate-200 shadow-xs'
+                      : 'bg-[#121214]/95 border-white/10 shadow-lg'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                    <button
+                      type="button"
+                      id="moments-filter-clip-all"
+                      onClick={(e) => {
+                        setSelectedMomentCategoryId('all');
+                        e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                      }}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-mono-tech uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                        selectedMomentCategoryId === 'all'
+                          ? isLightMode
+                            ? 'bg-slate-900 text-white font-bold shadow-xs'
+                            : 'bg-white text-black font-bold shadow-md'
+                          : isLightMode
+                            ? 'bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200'
+                            : 'bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                      }`}
+                    >
+                      <span>All</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                          selectedMomentCategoryId === 'all'
+                            ? isLightMode
+                              ? 'bg-white/20 text-white'
+                              : 'bg-black/15 text-black'
+                            : isLightMode
+                              ? 'bg-slate-200 text-slate-800'
+                              : 'bg-white/10 text-zinc-300'
+                        }`}
+                      >
+                        {totalMomentsPhotoCount}
+                      </span>
+                    </button>
+
+                    {sortedMemories.map((cat) => {
+                      const isActiveClip = selectedMomentCategoryId === cat.id;
+                      const count = cat.images?.length || 0;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          id={`moments-filter-clip-${cat.id}`}
+                          onClick={(e) => {
+                            setSelectedMomentCategoryId(cat.id);
+                            e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                          }}
+                          className={`px-3.5 py-1.5 rounded-full text-xs font-mono-tech uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                            isActiveClip
+                              ? isLightMode
+                                ? 'bg-slate-900 text-white font-bold shadow-xs'
+                                : 'bg-white text-black font-bold shadow-md'
+                              : isLightMode
+                                ? 'bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200'
+                                : 'bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10'
+                          }`}
+                        >
+                          <span>{cat.title}</span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                              isActiveClip
+                                ? isLightMode
+                                  ? 'bg-white/20 text-white'
+                                  : 'bg-black/15 text-black'
+                                : isLightMode
+                                  ? 'bg-slate-200 text-slate-800'
+                                  : 'bg-white/10 text-zinc-300'
+                            }`}
+                          >
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-10">
+                  {visibleMemories.map((event) => (
                     <div key={event.id} id={`memory-event-${event.id}`} className="space-y-3">
                       <div
                         className={`border-b pb-3.5 ${
@@ -1607,10 +1710,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                         </div>
                       </div>
 
-                      {/* Horizontal Touch-Swipeable Carousel */}
+                      {/* Horizontal Touch-Swipeable Carousel Matching People Card Size */}
                       <div
                         id={`carousel-${event.id}`}
-                        className="flex items-start gap-4 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
+                        className="flex items-start gap-3 sm:gap-5 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
                       >
                         {(event.images || []).map((img) => {
                           const displayCaption =
@@ -1618,7 +1721,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                           return (
                             <div
                               key={img.id}
-                              className={`snap-start shrink-0 w-[260px] sm:w-[300px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border ${
+                              className={`snap-start shrink-0 w-[172px] sm:w-[216px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border ${
                                 isLightMode
                                   ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400'
                                   : 'bg-[#0e1017] border-white/[0.08] text-white hover:border-white/30'
@@ -1710,7 +1813,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                   ))}
                 </div>
               </div>
-            )}
+              );
+            })()}
           </section>
         );
       })()}

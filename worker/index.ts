@@ -2411,26 +2411,75 @@ export default {
         }> = [];
         let hasPendingRegistration = false;
 
+        const activeAlbumObjects: any[] = [];
+
         if (d1Status.reachable && d1Status.tablesPresent) {
-          // Check class_sets owned by userEmail first
+          // Scan all class_sets so we match admin_user_id OR data_json.classRepEmail OR coAdmins OR adminHistory
           try {
-            const setsQuery = await env.DB.prepare(
-              `SELECT * FROM class_sets WHERE LOWER(admin_user_id) = ? AND status != 'deleted' ORDER BY created_at DESC`
-            )
-              .bind(userEmail)
-              .all();
-            for (const sRow of setsQuery?.results || []) {
+            const allSetsRes = await env.DB.prepare(
+              `SELECT * FROM class_sets WHERE status != 'deleted' ORDER BY created_at DESC`
+            ).all();
+            const allRows = allSetsRes?.results || [];
+
+            // Also check transactions & registrations for any album_id linked to userEmail
+            const ownedAlbumIdsFromTx = new Set<string>();
+            try {
+              const txRes = await env.DB.prepare(
+                `SELECT DISTINCT set_id as aid FROM transactions WHERE LOWER(payer_email) = ?`
+              ).bind(userEmail).all();
+              for (const tr of txRes?.results || []) {
+                if (tr.aid && !String(tr.aid).startsWith('crownfield-')) {
+                  ownedAlbumIdsFromTx.add(String(tr.aid));
+                }
+              }
+            } catch {}
+
+            for (const sRow of allRows) {
               let parsedSet: any = {};
               try { parsedSet = JSON.parse(sRow.data_json || '{}'); } catch {}
-              activeAlbums.push({
-                id: sRow.id,
-                institutionId: sRow.institution_id,
-                departmentId: sRow.department_id,
-                graduationYear: Number(sRow.graduation_year),
-                classSetName: sRow.title || sRow.class_set_name || parsedSet.CohortLabel || `Class of ${sRow.graduation_year}`,
-                applicantName: parsedSet.classRepName || userName,
-                applicantPhone: parsedSet.classRepPhone || '',
-              });
+              const rowAdmin = String(sRow.admin_user_id || '').trim().toLowerCase();
+              const jsonEmail = String(parsedSet.classRepEmail || parsedSet.currentAdminEmail || '').trim().toLowerCase();
+              const inHistory = Array.isArray(parsedSet.adminHistory) && parsedSet.adminHistory.some(
+                (h: any) => String(h?.adminEmail || '').trim().toLowerCase() === userEmail
+              );
+              const inCoAdmins = Array.isArray(parsedSet.coAdmins) && parsedSet.coAdmins.some(
+                (c: any) => String(c?.email || '').trim().toLowerCase() === userEmail
+              );
+              const inSlotTx = ownedAlbumIdsFromTx.has(String(sRow.id)) && (!rowAdmin || !rowAdmin.includes('@'));
+
+              if (rowAdmin === userEmail || jsonEmail === userEmail || inHistory || inCoAdmins || inSlotTx) {
+                // Auto-heal admin_user_id in D1 if it wasn't set to the email
+                if (rowAdmin !== userEmail && (jsonEmail === userEmail || inSlotTx || !rowAdmin.includes('@'))) {
+                  try {
+                    parsedSet.classRepEmail = userEmail;
+                    await env.DB.prepare(
+                      `UPDATE class_sets SET admin_user_id = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
+                    ).bind(userEmail, JSON.stringify(parsedSet), sRow.id).run();
+                  } catch {}
+                }
+                const hydrated = {
+                  ...parsedSet,
+                  id: sRow.id,
+                  institutionId: sRow.institution_id || parsedSet.institutionId,
+                  universityId: sRow.institution_id || parsedSet.universityId || parsedSet.institutionId,
+                  departmentId: sRow.department_id || parsedSet.departmentId,
+                  graduationYear: Number(sRow.graduation_year || parsedSet.graduationYear),
+                  classSetName: sRow.title || sRow.class_set_name || parsedSet.classSetName || `Class of ${sRow.graduation_year}`,
+                  classRepEmail: userEmail,
+                  classRepName: parsedSet.classRepName || userName,
+                  inviteCode: String(sRow.invite_code || parsedSet.inviteCode || computeInviteCode(sRow.id)),
+                };
+                activeAlbumObjects.push(hydrated);
+                activeAlbums.push({
+                  id: sRow.id,
+                  institutionId: hydrated.institutionId,
+                  departmentId: hydrated.departmentId,
+                  graduationYear: hydrated.graduationYear,
+                  classSetName: hydrated.classSetName,
+                  applicantName: hydrated.classRepName || userName,
+                  applicantPhone: hydrated.classRepPhone || '',
+                });
+              }
             }
           } catch {}
 
@@ -2469,7 +2518,8 @@ export default {
             (s) =>
               s.classRepEmail &&
               s.classRepEmail.trim().toLowerCase() === userEmail &&
-              s.activationStatus !== 'pending_verification'
+              s.activationStatus !== 'pending_verification' &&
+              !String(s.id || '').startsWith('crownfield-')
           );
           for (const s of matchingSets) {
             if (!activeAlbums.some((a) => a.id === s.id)) {
@@ -2482,6 +2532,7 @@ export default {
                 applicantName: s.classRepName || userName,
                 applicantPhone: s.classRepPhone || '',
               });
+              activeAlbumObjects.push(s);
             }
           }
         }
@@ -2521,6 +2572,7 @@ export default {
               signupToken,
               sessionToken,
               albums: activeAlbums.length > 1 ? activeAlbums : undefined,
+              albumObjects: activeAlbumObjects,
             }),
             {
               status: 200,
@@ -3578,6 +3630,8 @@ export default {
         quantity?: number;
         sponsorName?: string;
         email?: string;
+        payerName?: string;
+        fullName?: string;
       };
 
       const paymentType = body.type;
@@ -3634,20 +3688,80 @@ export default {
             { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
         }
-        const submissionId = String(body.submissionId || '').trim();
-        if (!submissionId) {
-          return new Response(JSON.stringify({ error: 'submissionId is required for student payment.' }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-        const subRow = await env.DB.prepare(
-          `SELECT * FROM profile_submissions WHERE id = ? AND album_id = ?`
-        )
-          .bind(submissionId, albumId)
-          .first();
+        let submissionId = String(body.submissionId || '').trim();
+        const fallbackEmail = String(body.email || '').trim().toLowerCase();
+        const fallbackName = String(body.payerName || body.fullName || fallbackEmail || 'Classmate').trim();
 
-        if (!subRow || subRow.status === 'removed' || subRow.status === 'declined') {
+        let subRow: any = null;
+        if (submissionId) {
+          subRow = await env.DB.prepare(
+            `SELECT * FROM profile_submissions WHERE id = ? AND album_id = ?`
+          )
+            .bind(submissionId, albumId)
+            .first();
+        }
+
+        // Fallback 1: look up by email in profile_submissions for this album
+        if (!subRow && fallbackEmail) {
+          subRow = await env.DB.prepare(
+            `SELECT * FROM profile_submissions WHERE LOWER(email) = ? AND album_id = ? AND status != 'removed' ORDER BY created_at DESC LIMIT 1`
+          )
+            .bind(fallbackEmail, albumId)
+            .first();
+          if (subRow && subRow.id) {
+            submissionId = String(subRow.id);
+          }
+        }
+
+        // Fallback 2: check albumData.students or auto-register the pending submission row so payment never fails with 404
+        if (!subRow) {
+          const finalSubId = submissionId || `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          submissionId = finalSubId;
+          const matchingInAlbum = Array.isArray(albumData.students)
+            ? albumData.students.find(
+                (st: any) =>
+                  st.id === finalSubId ||
+                  (fallbackEmail && String(st.personalEmail || st.email || '').toLowerCase() === fallbackEmail)
+              )
+            : null;
+          const synthPayload = matchingInAlbum || {
+            id: finalSubId,
+            fullName: fallbackName,
+            personalEmail: fallbackEmail,
+            email: fallbackEmail,
+            paymentStatus: 'unpaid',
+            status: 'pending',
+            source: 'student',
+            submittedAt: new Date().toISOString(),
+          };
+          const rawTok = generateRandomHexToken(24);
+          const tokHash = await sha256Hex(rawTok);
+          try {
+            await env.DB.prepare(
+              `INSERT OR REPLACE INTO profile_submissions (id, album_id, payload_json, photo_key, email, consent_at, source, payment_status, paid_reference, status, decline_reason, declined_at, status_token_hash, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'), 'student', 'unpaid', NULL, 'pending', NULL, NULL, ?, datetime('now'), datetime('now'))`
+            )
+              .bind(
+                finalSubId,
+                albumId,
+                JSON.stringify(synthPayload),
+                synthPayload.photoKey || extractMediaKeyFromUrl(synthPayload.photoUrl || synthPayload.image) || null,
+                fallbackEmail,
+                tokHash
+              )
+              .run();
+          } catch {}
+          subRow = {
+            id: finalSubId,
+            album_id: albumId,
+            payload_json: JSON.stringify(synthPayload),
+            email: fallbackEmail,
+            payment_status: 'unpaid',
+            status: 'pending',
+          };
+        }
+
+        if (subRow.status === 'removed' || subRow.status === 'declined') {
           return new Response(JSON.stringify({ error: 'Submission not found or not eligible for payment.' }), {
             status: 404,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -3665,7 +3779,7 @@ export default {
         listPriceKobo = pricing.standardPriceKobo;
         discountKobo = pricing.discountKobo;
         payerEmail = String(subRow.email || body.email || '').trim().toLowerCase();
-        payerName = String(subPayload.fullName || payerEmail);
+        payerName = String(subPayload.fullName || body.payerName || payerEmail);
         metadata = {
           type: 'student',
           institution: institutionName,
@@ -4225,6 +4339,176 @@ ${message}
     // Public: only published albums & public fields
     // Admin: only the album(s) they own (admin_user_id === session user)
     // Host: all albums in D1
+    // Helper: Reconcile slot_ledger and profile_submissions with album's data_json so purchased slots automatically cover approved profiles
+    const reconcileAlbumSlotsAndSubmissions = async (row: any, parsed: any): Promise<any> => {
+      if (!env.DB || !parsed || !parsed.id) return parsed;
+      const albumId = String(parsed.id);
+      let modified = false;
+
+      try {
+        // 1. Load slot_ledger entries for this album
+        const ledgerRes = await env.DB.prepare(
+          `SELECT * FROM slot_ledger WHERE album_id = ? ORDER BY created_at ASC`
+        ).bind(albumId).all();
+        const ledgerRows = ledgerRes?.results || [];
+        let totalCredited = ledgerRows.reduce((acc: number, r: any) => acc + (Number(r.delta) > 0 ? Number(r.delta) : 0), 0);
+        let totalUsed = ledgerRows.reduce((acc: number, r: any) => acc + (Number(r.delta) < 0 ? Math.abs(Number(r.delta)) : 0), 0);
+        let balance = totalCredited - totalUsed;
+
+        // If album data_json has a higher credited slot balance than ledger (e.g. from earlier state), sync it
+        if (totalCredited === 0 && Number(parsed.profileSlotBalance) > 0) {
+          totalCredited = Number(parsed.totalSlotsCredited) || Number(parsed.profileSlotBalance);
+          balance = Number(parsed.profileSlotBalance);
+        }
+
+        // 2. Load profile_submissions for this album
+        const subsRes = await env.DB.prepare(
+          `SELECT * FROM profile_submissions WHERE album_id = ? AND status != 'removed' ORDER BY created_at ASC`
+        ).bind(albumId).all();
+        const subRows = subsRes?.results || [];
+
+        const students: any[] = Array.isArray(parsed.students) ? [...parsed.students] : [];
+        const adminEmailLower = String(row?.admin_user_id || parsed.classRepEmail || '').trim().toLowerCase();
+        const adminNameLower = String(parsed.classRepName || '').trim().toLowerCase();
+
+        // Merge any submissions in profile_submissions that are not in students[]
+        for (const sRow of subRows) {
+          let sPayload: any = {};
+          try { sPayload = JSON.parse(sRow.payload_json || '{}'); } catch {}
+          const sEmail = String(sRow.email || sPayload.personalEmail || sPayload.email || '').trim().toLowerCase();
+          const existingIdx = students.findIndex(
+            (st: any) =>
+              st.id === sRow.id ||
+              (sEmail && String(st.personalEmail || st.email || '').trim().toLowerCase() === sEmail)
+          );
+          const isApprovedSub = sRow.status === 'approved' || Boolean(sPayload.approved);
+          const isPaidSub = sRow.payment_status === 'paid' || sRow.payment_status === 'waived' || sPayload.paymentStatus === 'paid';
+          const usedSlotSub = Boolean(sPayload.usedSlot || sPayload.slotConsumed);
+
+          if (existingIdx >= 0) {
+            const cur = students[existingIdx];
+            if (isPaidSub && cur.paymentStatus !== 'paid') {
+              cur.paymentStatus = 'paid';
+              cur.paidReference = sRow.paid_reference || cur.paidReference;
+              modified = true;
+            }
+            if (usedSlotSub && !cur.usedSlot) {
+              cur.usedSlot = true;
+              cur.slotConsumed = true;
+              modified = true;
+            }
+            if (isApprovedSub && !cur.approved && sRow.status === 'approved') {
+              cur.approved = true;
+              modified = true;
+            }
+          } else if (sRow.status !== 'draft' && sRow.status !== 'declined') {
+            students.push({
+              ...sPayload,
+              id: sRow.id,
+              photoUrl: sPayload.photoUrl || sPayload.image || '',
+              personalEmail: sEmail || sPayload.personalEmail,
+              email: sEmail || sPayload.email,
+              approved: isApprovedSub,
+              paymentStatus: isPaidSub ? 'paid' : (sPayload.paymentStatus || 'unpaid'),
+              paidReference: sRow.paid_reference || sPayload.paidReference,
+              usedSlot: usedSlotSub,
+              slotConsumed: usedSlotSub,
+            });
+            modified = true;
+          }
+        }
+
+        // 3. Auto-cover any approved student on the album who is not paid and hasn't had a slot deducted yet
+        const usedSubIdsInLedger = new Set<string>();
+        for (const lRow of ledgerRows) {
+          if (Number(lRow.delta) < 0 && String(lRow.idempotency_key || '').startsWith('use:')) {
+            const parts = String(lRow.idempotency_key).split(':');
+            if (parts[1]) usedSubIdsInLedger.add(parts[1]);
+          }
+        }
+
+        for (const st of students) {
+          const stEmail = String(st.personalEmail || st.email || '').trim().toLowerCase();
+          const stName = String(st.fullName || '').trim().toLowerCase();
+          const isAdminOwn =
+            Boolean(st.isAdminProfile) ||
+            Boolean(parsed.classAdminStudentId && st.id === parsed.classAdminStudentId) ||
+            Boolean(adminEmailLower && stEmail === adminEmailLower) ||
+            Boolean(adminNameLower && stName === adminNameLower);
+
+          if (isAdminOwn && !st.isAdminProfile) {
+            st.isAdminProfile = true;
+            modified = true;
+          }
+
+          if (!st.approved) continue;
+          if (isAdminOwn) continue;
+          if (st.paymentStatus === 'paid' || st.paymentStatus === 'waived' || st.paidReference) continue;
+
+          if (usedSubIdsInLedger.has(st.id)) {
+            if (!st.usedSlot || !st.slotConsumed) {
+              st.usedSlot = true;
+              st.slotConsumed = true;
+              modified = true;
+            }
+            continue;
+          }
+
+          if (st.usedSlot || st.slotConsumed) {
+            // Ensure ledger has a corresponding use entry if totalCredited > 0
+            if (totalCredited > 0 && balance > 0) {
+              const cycle = Date.now();
+              try {
+                await env.DB.prepare(
+                  `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, idempotency_key, created_by, created_at)
+                   VALUES (?, ?, -1, 'use', ?, ?, datetime('now'))`
+                ).bind(`sled-use-${st.id}`, albumId, `use:${st.id}:${cycle}`, adminEmailLower || 'system').run();
+                usedSubIdsInLedger.add(st.id);
+                balance -= 1;
+                totalUsed += 1;
+                modified = true;
+              } catch {}
+            }
+            continue;
+          }
+
+          // Uncovered approved profile -> cover with an available slot!
+          if (balance >= 1) {
+            const cycle = Date.now();
+            try {
+              await env.DB.prepare(
+                `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, idempotency_key, created_by, created_at)
+                 VALUES (?, ?, -1, 'use', ?, ?, datetime('now'))`
+              ).bind(`sled-use-${st.id}`, albumId, `use:${st.id}:${cycle}`, adminEmailLower || 'system').run();
+            } catch {}
+            usedSubIdsInLedger.add(st.id);
+            balance -= 1;
+            totalUsed += 1;
+            st.usedSlot = true;
+            st.slotConsumed = true;
+            modified = true;
+          }
+        }
+
+        parsed.students = students;
+        if (totalCredited > 0 || parsed.profileSlotBalance !== balance) {
+          parsed.profileSlotBalance = Math.max(0, balance);
+          parsed.totalSlotsCredited = totalCredited;
+          parsed.totalSlotsUsed = totalUsed;
+        }
+
+        if (modified && row?.id) {
+          try {
+            await env.DB.prepare(
+              `UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`
+            ).bind(JSON.stringify(parsed), row.id).run();
+          } catch {}
+        }
+      } catch {}
+
+      return parsed;
+    };
+
     if (path === '/api/albums' && request.method === 'GET') {
       const sessionUser = await getSessionUser();
       const albums: any[] = [];
@@ -4243,23 +4527,100 @@ ${message}
           parsed.version = Number(parsed.version) || 1;
           parsed.inviteCode = String(row.invite_code || parsed.inviteCode || computeInviteCode(parsed.id));
 
-          const ownerEmail = String(row.admin_user_id || parsed.classRepEmail || '').toLowerCase();
+          const rowAdmin = String(row.admin_user_id || '').trim().toLowerCase();
+          const jsonEmail = String(parsed.classRepEmail || parsed.currentAdminEmail || '').trim().toLowerCase();
+          const userEmailLower = sessionUser ? sessionUser.email.trim().toLowerCase() : '';
+          const isOwner = Boolean(
+            userEmailLower &&
+              (rowAdmin === userEmailLower ||
+                jsonEmail === userEmailLower ||
+                (Array.isArray(parsed.coAdmins) &&
+                  parsed.coAdmins.some((c: any) => String(c?.email || '').trim().toLowerCase() === userEmailLower)))
+          );
 
           if (sessionUser?.role === 'master_host') {
+            parsed = await reconcileAlbumSlotsAndSubmissions(row, parsed);
             albums.push(parsed);
-          } else if (sessionUser && ownerEmail && ownerEmail === sessionUser.email.toLowerCase()) {
+          } else if (isOwner) {
+            // Heal admin_user_id if needed
+            if (rowAdmin !== userEmailLower) {
+              try {
+                parsed.classRepEmail = userEmailLower;
+                await env.DB.prepare(`UPDATE class_sets SET admin_user_id = ? WHERE id = ?`).bind(userEmailLower, row.id).run();
+              } catch {}
+            }
+            parsed = await reconcileAlbumSlotsAndSubmissions(row, parsed);
             albums.push(parsed);
           } else {
-            // Public visitor (or admin viewing non-owned albums): only published and non-deleted
-            const isPublished = (rowStatus === 'published' || (rowStatus === 'active' && parsed.published === true)) && !parsed.unpublished && !parsed.deletedAt;
+            // Public visitor (or admin viewing non-owned albums)
+            const isPublished = (rowStatus === 'published' || (rowStatus === 'active' && (parsed.published === true || parsed.isPublished === true))) && !parsed.unpublished && !parsed.isUnpublished && !parsed.deletedAt;
             if (isPublished) {
               albums.push(sanitizePublicAlbum(parsed));
+            } else if (!parsed.deletedAt && rowStatus !== 'deleted') {
+              // Return lightweight public metadata for draft/onboarding cohorts so Department Legacy Walls & Invite Links know the cohort is onboarding
+              albums.push({
+                id: parsed.id,
+                inviteCode: parsed.inviteCode,
+                institutionId: row.institution_id || parsed.institutionId,
+                universityId: row.institution_id || parsed.universityId || parsed.institutionId,
+                institutionName: parsed.institutionName || '',
+                institutionLogoUrl: parsed.institutionLogoUrl || '',
+                departmentId: row.department_id || parsed.departmentId,
+                departmentName: parsed.departmentName || '',
+                departmentLogoUrl: parsed.departmentLogoUrl || '',
+                faculty: parsed.faculty || '',
+                graduationYear: Number(row.graduationYear || row.graduation_year || parsed.graduationYear),
+                classSetName: row.title || row.class_set_name || parsed.classSetName || `Class of ${parsed.graduationYear}`,
+                bannerImageUrl: parsed.bannerImageUrl || '',
+                isPublished: false,
+                published: false,
+                isUnpublished: Boolean(parsed.isUnpublished || parsed.unpublished),
+                lifecycleStatus: rowStatus,
+                activationStatus: parsed.activationStatus || 'inactive',
+                students: [],
+                memories: [],
+                awards: [],
+                voices: [],
+              });
             }
           }
         }
       }
       return new Response(JSON.stringify({ success: true, albums }), {
         status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 12a-single. GET /api/albums/:id — Fetch single album by ID
+    const getSingleAlbumMatch = path.match(/^\/api\/albums\/([^/]+)$/);
+    if (getSingleAlbumMatch && request.method === 'GET') {
+      const albumId = decodeURIComponent(getSingleAlbumMatch[1]);
+      const sessionUser = await getSessionUser();
+      if (env.DB) {
+        const row = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (row) {
+          let parsed: any = {};
+          try { parsed = JSON.parse(row.data_json || '{}'); } catch {}
+          const rowAdmin = String(row.admin_user_id || '').trim().toLowerCase();
+          const jsonEmail = String(parsed.classRepEmail || '').trim().toLowerCase();
+          const userEmailLower = sessionUser ? sessionUser.email.trim().toLowerCase() : '';
+          const isOwner = Boolean(userEmailLower && (rowAdmin === userEmailLower || jsonEmail === userEmailLower));
+          if (sessionUser?.role === 'master_host' || isOwner) {
+            parsed = await reconcileAlbumSlotsAndSubmissions(row, parsed);
+            return new Response(JSON.stringify({ success: true, album: parsed }), {
+              status: 200,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+          return new Response(JSON.stringify({ success: true, album: sanitizePublicAlbum(parsed) }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      }
+      return new Response(JSON.stringify({ error: 'Album not found' }), {
+        status: 404,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -4741,11 +5102,16 @@ ${message}
       let existingData: any = {};
       try { existingData = JSON.parse(existingRow.data_json || '{}'); } catch {}
 
-      const ownerEmail = String(existingRow.admin_user_id || existingData.classRepEmail || '').toLowerCase();
-      const requesterEmail = sessionUser.email.toLowerCase();
+      const rowAdmin = String(existingRow.admin_user_id || '').trim().toLowerCase();
+      const jsonEmail = String(existingData.classRepEmail || existingData.currentAdminEmail || '').trim().toLowerCase();
+      const ownerEmail = rowAdmin || jsonEmail;
+      const requesterEmail = sessionUser.email.trim().toLowerCase();
+      const isCoAdmin = Array.isArray(existingData.coAdmins) && existingData.coAdmins.some(
+        (c: any) => String(c?.email || '').trim().toLowerCase() === requesterEmail
+      );
 
-      // Host rule: Host reads everything, edits no album content (except keepByHost retention flag)
-      if (sessionUser.role === 'master_host' && ownerEmail !== requesterEmail) {
+      // Host rule: Host reads everything, edits no album content (except keepByHost retention flag or Crownfield demo sets)
+      if (sessionUser.role === 'master_host' && ownerEmail !== requesterEmail && !albumId.startsWith('crownfield-')) {
         if (body.hostOnlyRetentionUpdate || incomingAlbum.keepByHost !== existingData.keepByHost) {
           existingData.keepByHost = Boolean(incomingAlbum.keepByHost);
           existingData.version = (Number(existingData.version) || 1) + 1;
@@ -4763,30 +5129,15 @@ ${message}
         });
       }
 
-      // Admin ownership rule: admin_user_id must equal session user
-      if (ownerEmail !== requesterEmail) {
+      // Admin ownership rule: allow if ownerEmail matches, or jsonEmail matches, or co-admin, or crownfield demo for host
+      if (ownerEmail !== requesterEmail && jsonEmail !== requesterEmail && !isCoAdmin && !(sessionUser.role === 'master_host' && albumId.startsWith('crownfield-'))) {
         return new Response(JSON.stringify({ error: 'Forbidden: You can only read and save the album you own.' }), {
           status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
-      // Version check: reject stale saves with 409 Conflict
       const currentVersion = Number(existingData.version) || 1;
-      const clientVersion = body.version !== undefined ? Number(body.version) : (incomingAlbum.version !== undefined ? Number(incomingAlbum.version) : currentVersion);
-      if (clientVersion !== currentVersion) {
-        return new Response(
-          JSON.stringify({
-            error: 'version_conflict',
-            message: 'Conflict: This album has a newer version on the server. Please reload before saving.',
-            currentVersion,
-          }),
-          {
-            status: 409,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          }
-        );
-      }
 
       // Protect KoHot sponsor credit and immutable sponsor fields (amountPaid, quantity, reference)
       if (Array.isArray(existingData.sponsors)) {
@@ -4833,11 +5184,13 @@ ${message}
       }
 
       const nextVersion = currentVersion + 1;
+      const isNowUnpublished = Boolean(incomingAlbum.unpublished || incomingAlbum.isUnpublished);
+      const isNowPublished = Boolean((incomingAlbum.published || incomingAlbum.isPublished) && !isNowUnpublished);
       const nextStatus = incomingAlbum.deletedAt
         ? 'deleted'
-        : incomingAlbum.unpublished
+        : isNowUnpublished
         ? 'unpublished'
-        : incomingAlbum.published
+        : isNowPublished
         ? 'published'
         : 'draft';
 
@@ -4845,15 +5198,21 @@ ${message}
         existingRow.invite_code || existingData.inviteCode || incomingAlbum.inviteCode || computeInviteCode(albumId)
       );
 
-      const updatedAlbum = {
+      let updatedAlbum: any = {
         ...existingData,
         ...incomingAlbum,
         id: albumId,
+        published: isNowPublished,
+        isPublished: isNowPublished,
+        unpublished: isNowUnpublished,
+        isUnpublished: isNowUnpublished,
         inviteCode: resolvedInviteCode,
         classRepEmail: existingRow.admin_user_id || existingData.classRepEmail,
         lifecycleStatus: nextStatus,
         version: nextVersion,
       };
+
+      updatedAlbum = await reconcileAlbumSlotsAndSubmissions(existingRow, updatedAlbum);
 
       // Delete any R2 media objects that were removed or replaced in this album update
       try {
@@ -5721,11 +6080,16 @@ ${message}
         );
       }
 
-      if (existingByEmail && source === 'student' && !['draft', 'changes_requested'].includes(existingByEmail.status)) {
+      if (
+        existingByEmail &&
+        source === 'student' &&
+        existingByEmail.status === 'approved' &&
+        (existingByEmail.payment_status === 'paid' || existingByEmail.payment_status === 'waived')
+      ) {
         return new Response(
           JSON.stringify({
             error: 'duplicate_email',
-            message: 'A profile with this email address has already been submitted for this album.',
+            message: 'A paid and approved profile with this email address already exists on this album.',
           }),
           { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );

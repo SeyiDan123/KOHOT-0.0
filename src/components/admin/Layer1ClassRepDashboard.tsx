@@ -1036,36 +1036,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     let updatedStudents: StudentProfile[];
     const exists = currentSet.students.some((s) => s.id === updatedStudent.id);
 
-    if (approveNow) {
-      const trimmedPos = updatedStudent.position?.trim() || '';
-      const isLeader = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
-
-      const approvedStudent: StudentProfile = {
-        ...updatedStudent,
-        approved: true,
-        approvedAt: Date.now(),
-        leaderOrder: isLeader && !updatedStudent.leaderOrder ? calculateIntuitiveHierarchyRank(trimmedPos) : updatedStudent.leaderOrder,
-      };
-
-      // Move recently approved student to the very top of the list
-      const remainingStudents = currentSet.students.filter((s) => s.id !== updatedStudent.id);
-      updatedStudents = [approvedStudent, ...remainingStudents];
-
-      // Cleanly transition to directory view without showing any empty form
-      setIsAddingStudent(false);
-      setEditingStudent(null);
-      setStudentDirectoryTab('all');
-      setStudentSortMode('recent');
-    } else {
-      if (exists) {
-        updatedStudents = currentSet.students.map((s) => (s.id === updatedStudent.id ? updatedStudent : s));
-      } else {
-        // Newly added admin profile: place at the beginning of the class roster
-        updatedStudents = [updatedStudent, ...currentSet.students];
-      }
-      setEditingStudent(null);
-    }
-
     // Determine if this profile is the Admin's own profile
     const adminEmail = (currentUser?.email || currentSet.classRepEmail || '').toLowerCase().trim();
     const adminName = (currentUser?.fullName || currentSet.classRepName || '').toLowerCase().trim();
@@ -1075,12 +1045,95 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       (updatedStudent.fullName && updatedStudent.fullName.toLowerCase().trim() === adminName) ||
       (updatedStudent as any).isClassRep === true;
 
+    const alreadyCovered = Boolean(
+      updatedStudent.usedSlot ||
+        updatedStudent.slotConsumed ||
+        updatedStudent.paymentStatus === 'paid' ||
+        updatedStudent.paymentStatus === 'waived' ||
+        updatedStudent.feeChoice === 'paid' ||
+        updatedStudent.feeChoice === 'waived'
+    );
+
+    const shouldConsumeSlot =
+      !isThisAdmin &&
+      !alreadyCovered &&
+      (approveNow || !exists || updatedStudent.id.startsWith('std-new-')) &&
+      slotBalance > 0;
+
+    const normalizedStudentId = updatedStudent.id.startsWith('std-new-')
+      ? `std-${Date.now()}`
+      : updatedStudent.id;
+
+    const studentWithSlotState: StudentProfile = {
+      ...updatedStudent,
+      id: normalizedStudentId,
+      ...(shouldConsumeSlot
+        ? {
+            usedSlot: true,
+            slotConsumed: true,
+            paymentStatus: updatedStudent.paymentStatus || ('waived' as const),
+          }
+        : {}),
+    };
+
+    if (approveNow) {
+      const trimmedPos = studentWithSlotState.position?.trim() || '';
+      const isLeader = trimmedPos.length > 0 && isLeaderProfile({ position: trimmedPos });
+
+      const approvedStudent: StudentProfile = {
+        ...studentWithSlotState,
+        approved: true,
+        status: 'approved',
+        submissionStatus: 'approved',
+        approvedAt: Date.now(),
+        leaderOrder:
+          isLeader && !studentWithSlotState.leaderOrder
+            ? calculateIntuitiveHierarchyRank(trimmedPos)
+            : studentWithSlotState.leaderOrder,
+      };
+
+      // Move recently approved or newly added student to the very top of the list
+      const remainingStudents = currentSet.students.filter(
+        (s) => s.id !== updatedStudent.id && s.id !== normalizedStudentId
+      );
+      updatedStudents = [approvedStudent, ...remainingStudents];
+
+      // Cleanly transition to directory view without showing any empty form
+      setIsAddingStudent(false);
+      setEditingStudent(null);
+      setStudentDirectoryTab('all');
+      setStudentSortMode('recent');
+    } else {
+      if (exists) {
+        updatedStudents = currentSet.students.map((s) =>
+          s.id === updatedStudent.id ? studentWithSlotState : s
+        );
+      } else {
+        updatedStudents = [studentWithSlotState, ...currentSet.students];
+      }
+      setIsAddingStudent(false);
+      setEditingStudent(null);
+    }
+
+    const nextSlotBalance = shouldConsumeSlot ? Math.max(0, slotBalance - 1) : slotBalance;
+    const nextSlotsUsed = shouldConsumeSlot ? totalSlotsUsed + 1 : totalSlotsUsed;
+    if (shouldConsumeSlot) {
+      setSlotBalance(nextSlotBalance);
+      setTotalSlotsUsed(nextSlotsUsed);
+    }
+
     const updatedSet: ClassSet = {
       ...currentSet,
       students: updatedStudents,
-      classRepName: isThisAdmin ? updatedStudent.fullName : currentSet.classRepName,
-      classRepEmail: isThisAdmin ? (updatedStudent.email || currentSet.classRepEmail) : currentSet.classRepEmail,
-      classRepPhone: isThisAdmin ? (updatedStudent.whatsappNumber || currentSet.classRepPhone) : currentSet.classRepPhone,
+      profileSlotBalance: shouldConsumeSlot ? nextSlotBalance : currentSet.profileSlotBalance,
+      totalSlotsUsed: shouldConsumeSlot ? nextSlotsUsed : currentSet.totalSlotsUsed,
+      classRepName: isThisAdmin ? studentWithSlotState.fullName : currentSet.classRepName,
+      classRepEmail: isThisAdmin
+        ? studentWithSlotState.email || currentSet.classRepEmail
+        : currentSet.classRepEmail,
+      classRepPhone: isThisAdmin
+        ? studentWithSlotState.whatsappNumber || currentSet.classRepPhone
+        : currentSet.classRepPhone,
     };
 
     onUpdateSet(updatedSet);
@@ -1089,20 +1142,23 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     if (isThisAdmin) {
       try {
         if (currentUser) {
-          if (updatedStudent.photoUrl) currentUser.avatarUrl = updatedStudent.photoUrl;
-          if (updatedStudent.fullName) currentUser.fullName = updatedStudent.fullName;
-          if (updatedStudent.email) currentUser.email = updatedStudent.email;
-          if (updatedStudent.whatsappNumber) currentUser.phone = updatedStudent.whatsappNumber;
+          if (studentWithSlotState.photoUrl) currentUser.avatarUrl = studentWithSlotState.photoUrl;
+          if (studentWithSlotState.fullName) currentUser.fullName = studentWithSlotState.fullName;
+          if (studentWithSlotState.email) currentUser.email = studentWithSlotState.email;
+          if (studentWithSlotState.whatsappNumber)
+            currentUser.phone = studentWithSlotState.whatsappNumber;
           localStorage.setItem('kohot_current_user', JSON.stringify(currentUser));
         }
-        window.dispatchEvent(new CustomEvent('kohot_user_profile_updated', {
-          detail: {
-            avatarUrl: updatedStudent.photoUrl || currentUser?.avatarUrl,
-            fullName: updatedStudent.fullName,
-            email: updatedStudent.email,
-            phone: updatedStudent.whatsappNumber
-          }
-        }));
+        window.dispatchEvent(
+          new CustomEvent('kohot_user_profile_updated', {
+            detail: {
+              avatarUrl: studentWithSlotState.photoUrl || currentUser?.avatarUrl,
+              fullName: studentWithSlotState.fullName,
+              email: studentWithSlotState.email,
+              phone: studentWithSlotState.whatsappNumber,
+            },
+          })
+        );
       } catch (e) {
         console.error('Failed to sync admin user profile:', e);
       }
@@ -1110,8 +1166,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
     setHierarchyToast(
       approveNow
-        ? `✓ Approved ${updatedStudent.fullName} — now visible at the top of the Graduates section!`
-        : `✓ Updated profile details for ${updatedStudent.fullName}!`
+        ? `✓ Added ${studentWithSlotState.fullName}${shouldConsumeSlot ? ` (1 slot used · ${nextSlotBalance} left)` : ''}!`
+        : `✓ Updated profile details for ${studentWithSlotState.fullName}!`
     );
     setTimeout(() => setHierarchyToast(null), 3500);
   };
@@ -1226,6 +1282,60 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         .catch(() => {});
     }
   }, [currentSet.id]);
+
+  // Automatically reconcile any approved non-admin profiles that haven't consumed a slot yet whenever slotBalance > 0
+  useEffect(() => {
+    if (slotBalance <= 0) return;
+    const adminEmailNorm = (currentUser?.email || currentSet.classRepEmail || '').toLowerCase().trim();
+    let available = slotBalance;
+    let newlyCovered = 0;
+
+    const updatedStudents = (currentSet.students || []).map((s) => {
+      const isApp =
+        s.submissionStatus !== 'removed' &&
+        s.submissionStatus !== 'declined' &&
+        s.submissionStatus !== 'changes_requested' &&
+        s.submissionStatus !== 'pending' &&
+        s.approved !== false;
+      const isAdm =
+        s.isAdminProfile ||
+        s.isClassRep ||
+        s.id?.startsWith('admin-') ||
+        (adminEmailNorm && s.email?.toLowerCase().trim() === adminEmailNorm);
+      const isCovered = Boolean(
+        s.usedSlot ||
+          s.slotConsumed ||
+          s.paymentStatus === 'paid' ||
+          s.paymentStatus === 'waived' ||
+          s.feeChoice === 'paid' ||
+          s.feeChoice === 'waived'
+      );
+
+      if (isApp && !isAdm && !isCovered && available > 0) {
+        available -= 1;
+        newlyCovered += 1;
+        return {
+          ...s,
+          usedSlot: true,
+          slotConsumed: true,
+          paymentStatus: s.paymentStatus || ('waived' as const),
+        };
+      }
+      return s;
+    });
+
+    if (newlyCovered > 0) {
+      const nextUsed = totalSlotsUsed + newlyCovered;
+      setSlotBalance(available);
+      setTotalSlotsUsed(nextUsed);
+      onUpdateSet({
+        ...currentSet,
+        students: updatedStudents,
+        profileSlotBalance: available,
+        totalSlotsUsed: nextUsed,
+      });
+    }
+  }, [slotBalance, currentSet.id, currentSet.students.length]);
 
   // Helper to determine profile status across legacy `approved` boolean and new `submissionStatus`
   const getStudentEffectiveStatus = (
@@ -4487,7 +4597,20 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               <button
                 id="add-student-btn"
                 type="button"
-                onClick={() => setIsAddingStudent(true)}
+                onClick={() => {
+                  setEditingStudent({
+                    id: `std-new-${Date.now()}`,
+                    setId: currentSet.id,
+                    fullName: '',
+                    position: '',
+                    photoUrl: '',
+                    email: '',
+                    approved: true,
+                    status: 'approved',
+                    submissionStatus: 'approved',
+                    submittedAt: new Date().toISOString().split('T')[0],
+                  });
+                }}
                 className={`h-11 px-4 rounded-full border font-mono-tech text-xs uppercase tracking-wider font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer ${
                   isLightMode
                     ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-900'
@@ -4838,271 +4961,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </div>
             )}
 
-            {/* Add Classmate Pop-up Window Modal */}
-            <UniversalModal
-              isOpen={isAddingStudent}
-              onClose={() => setIsAddingStudent(false)}
-              title="Add Classmate Profile"
-              subtitle="Only add people who asked you to."
-              maxWidth="3xl"
-            >
-              <form onSubmit={handleSaveStudent} className="space-y-5 text-xs font-body p-1">
-                <div className="p-3 rounded-xl bg-amber-400/10 border border-amber-400/25 flex items-center gap-2 text-amber-200 font-mono-tech text-xs">
-                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>Only add people who asked you to.</span>
-                </div>
-
-                {/* Portrait Photo Upload First at the Top */}
-                <div className="p-5 rounded-2xl bg-[#08090e] border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300">
-                      Portrait Photograph *
-                    </label>
-                    <span className="text-[10px] font-mono-tech text-white/60">
-                      Gallery &amp; Camera Upload
-                    </span>
-                  </div>
-
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    accept="image/*,.heic,.heif,.avif,.webp,.png,.jpg,.jpeg,.jfif,.bmp,.gif"
-                    onChange={handlePhotoUpload}
-                    className="hidden"
-                  />
-
-                  <div className="flex flex-wrap items-center gap-4">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isCompressing}
-                      className="py-2.5 px-5 rounded-full bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs tracking-wider uppercase transition-colors flex items-center gap-2 cursor-pointer"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>
-                        {isCompressing
-                          ? 'Processing Photo...'
-                          : newStudentPhotoUrl
-                          ? 'Change Portrait'
-                          : 'Upload Student Photo'}
-                      </span>
-                    </button>
-                  </div>
-
-                  {newStudentPhotoUrl && (
-                    <div className="flex items-center justify-between pt-2">
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={newStudentPhotoUrl}
-                          alt="Preview"
-                          className="w-11 h-11 rounded-lg object-cover border border-white/20"
-                        />
-                        <span className="text-xs text-zinc-400 font-mono-tech">Photo preview ready</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          triggerCropForImage(
-                            newStudentPhotoUrl,
-                            '1:1',
-                            `Resize Portrait: ${newStudentName || 'New Classmate'}`,
-                            (croppedUrl) => {
-                              setNewStudentPhotoUrl(croppedUrl);
-                            }
-                          );
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-[#d4af37] border border-white/15 text-xs font-mono-tech transition-colors cursor-pointer flex items-center gap-1.5"
-                      >
-                        <Crop className="w-3.5 h-3.5 text-[#d4af37]" />
-                        <span>Resize Portrait</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Full Name *
-                    </label>
-                    <input
-                      required
-                      type="text"
-                      value={newStudentName}
-                      onChange={(e) => setNewStudentName(e.target.value)}
-                      placeholder="e.g. Oluwaseun Adeleke"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Nickname / Moniker
-                    </label>
-                    <input
-                      type="text"
-                      value={newStudentNickname}
-                      onChange={(e) => setNewStudentNickname(e.target.value)}
-                      placeholder="e.g. Code Maestro"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400 mb-1.5">
-                      Set Role / Leadership Title
-                    </label>
-                    <input
-                      type="text"
-                      value={newStudentPosition}
-                      onChange={(e) => setNewStudentPosition(e.target.value)}
-                      placeholder="e.g. Department President or Class Rep"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Optional Extended Profile Reflections: My Story, More about me (optional), and Final words (optional) */}
-                <div className="space-y-4 pt-1">
-                  <div>
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold mb-1.5">
-                      My Story <span className="text-zinc-500 lowercase font-normal">(optional)</span>
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={newStudentBio}
-                      onChange={(e) => setNewStudentBio(e.target.value)}
-                      placeholder="Celebrate what the class achieved. Keep it respectful."
-                      className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none text-xs"
-                    />
-                  </div>
-
-                  {/* More about me (optional) Card */}
-                  <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/10 space-y-3.5">
-                    <div>
-                      <span className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-200 font-bold">
-                        More about me (optional)
-                      </span>
-                      <span className="block text-[11px] text-zinc-400">
-                        Favourite campus memory, fun fact, and what&apos;s next
-                      </span>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold">
-                          Favourite Campus Memory <span className="text-zinc-500 lowercase font-normal">(optional · max 140 chars)</span>
-                        </label>
-                        <span className="text-[10px] font-mono-tech text-zinc-500">
-                          {newStudentFavouriteMemory.length}/140
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        maxLength={140}
-                        value={newStudentFavouriteMemory}
-                        onChange={(e) => setNewStudentFavouriteMemory(e.target.value.slice(0, 140))}
-                        placeholder="e.g. Winning the Inter-Chambers Moot Court finals at the Faculty Auditorium"
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none text-xs"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold">
-                          Fun Fact <span className="text-zinc-500 lowercase font-normal">(optional · max 140 chars)</span>
-                        </label>
-                        <span className="text-[10px] font-mono-tech text-zinc-500">
-                          {newStudentFunFact.length}/140
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        maxLength={140}
-                        value={newStudentFunFact}
-                        onChange={(e) => setNewStudentFunFact(e.target.value.slice(0, 140))}
-                        placeholder="e.g. Can recite all fundamental rights sections of the Constitution from memory."
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none text-xs"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold">
-                          What&apos;s Next <span className="text-zinc-500 lowercase font-normal">(optional · max 140 chars)</span>
-                        </label>
-                        <span className="text-[10px] font-mono-tech text-zinc-500">
-                          {newStudentWhatsNext.length}/140
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        maxLength={140}
-                        value={newStudentWhatsNext}
-                        onChange={(e) => setNewStudentWhatsNext(e.target.value.slice(0, 140))}
-                        placeholder="e.g. Nigerian Law School & Corporate Litigation Practice"
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none text-xs"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Final words (optional) Card */}
-                  <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/10 space-y-3.5">
-                    <div>
-                      <span className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-200 font-bold">
-                        Final words (optional)
-                      </span>
-                      <span className="block text-[11px] text-zinc-400">
-                        A message to my classmates and a message to future set
-                      </span>
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold mb-1">
-                        A Message to My Classmates <span className="text-zinc-500 lowercase font-normal">(optional)</span>
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={newStudentMessageToClassmates}
-                        onChange={(e) => setNewStudentMessageToClassmates(e.target.value)}
-                        placeholder="e.g. See you all at the very top of the profession!"
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none text-xs"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-bold mb-1">
-                        A Message to Future Set <span className="text-zinc-500 lowercase font-normal">(optional)</span>
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={newStudentMessageToFutureSet}
-                        onChange={(e) => setNewStudentMessageToFutureSet(e.target.value)}
-                        placeholder="e.g. Stay consistent, build friendships, and enjoy every semester..."
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/10 text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none resize-none text-xs"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddingStudent(false)}
-                    className="px-5 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 font-mono-tech text-xs tracking-wider uppercase transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!newStudentName || !newStudentPhotoUrl}
-                    className="bg-[#d4af37] hover:bg-[#c49f27] disabled:opacity-40 text-black font-tech text-xs tracking-wider uppercase font-bold py-2.5 px-6 rounded-full transition-colors cursor-pointer shadow-lg"
-                  >
-                    Save Classmate Profile
-                  </button>
-                </div>
-              </form>
-            </UniversalModal>
+            {/* Add Classmate & Edit Classmate both use the unified EditStudentModal aligned with the Invite Form */}
 
             {/* =====================================================================
                 VIEW 1: ALL VIEW (RESIZED PROFILE CARDS MATCHING SCREENSHOT 1 + DETAILS)

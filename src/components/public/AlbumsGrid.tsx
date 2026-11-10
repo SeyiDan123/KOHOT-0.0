@@ -45,7 +45,12 @@ interface AlbumsGridProps {
   onSelectUniversity?: (uniId: string | null) => void;
   onSelectDepartment?: (deptId: string | null) => void;
   onSelectSet: (setId: string) => void;
-  onOpenOnboarding: () => void;
+  onOpenOnboarding: (context?: {
+    universityId?: string;
+    departmentId?: string;
+    departmentName?: string;
+    graduationYear?: number;
+  }) => void;
   onOpenLogin: () => void;
   onOpenDashboard: () => void;
   onLogout: () => void;
@@ -333,6 +338,28 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
       .sort((a, b) => b.graduationYear - a.graduationYear);
     return validMerged.length > 0 ? validMerged : CROWNFIELD_PUBLIC_LAW_SETS.filter((s) => !s.deletedAt && !s.isUnpublished);
   }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.id, targetSharedDept.name, targetSharedUni.id, isMasterHost, currentUser]);
+
+  // Identify any draft / currently onboarding graduating years for this department
+  const onboardingDepartmentYears = useMemo(() => {
+    if (!isDirectSharedDept || isCrownfieldPublicLaw) return [];
+    const matchingDrafts = sets.filter((s) => {
+      if (s.deletedAt || s.keptByHostOnly) return false;
+      const isSetPublished = (s.isPublished === true || s.activationStatus === 'active') && !s.isUnpublished;
+      if (isSetPublished) return false;
+      if (s.departmentId === controlledDeptId || s.departmentId === targetSharedDept.id) return true;
+      if (targetSharedDept.name && s.departmentName?.toLowerCase().trim() === targetSharedDept.name.toLowerCase().trim()) {
+        if (!targetSharedUni.id || s.institutionId === targetSharedUni.id) return true;
+      }
+      return false;
+    });
+    return Array.from(
+      new Set(
+        matchingDrafts
+          .map((s) => Number(s.graduationYear))
+          .filter((yr) => yr > 1990)
+      )
+    ).sort((a, b) => b - a);
+  }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.id, targetSharedDept.name, targetSharedUni.id]);
 
   // Total student portraits archived in this selection
   const totalPortraits = useMemo(() => {
@@ -673,7 +700,12 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                           fromYear: inviteContext.fromClassYear,
                         });
                       } else {
-                        onOpenOnboarding();
+                        onOpenOnboarding({
+                          universityId: currentUniversity.id,
+                          departmentId: currentDepartment.id,
+                          departmentName: currentDepartment.name,
+                          graduationYear: inviteContext.targetNextYear,
+                        });
                       }
                     }}
                     className="px-6 py-3 rounded-full bg-slate-900 text-white hover:bg-black font-syne font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-md active:scale-95"
@@ -691,13 +723,25 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
             <div className="text-center py-20 space-y-4 bg-zinc-50 border border-zinc-200 rounded-3xl p-8 text-black">
               <GraduationCap className="w-12 h-12 text-[#b89728] mx-auto" />
               <div className="space-y-1">
-                <h3 className="text-base font-sans font-bold text-black">No Class Set Albums Registered Yet</h3>
+                <h3 className="text-base font-sans font-bold text-black">No Class Album Published Yet</h3>
                 <p className="text-xs text-black max-w-md mx-auto">
-                  Graduating classes for {currentDepartment.name} are currently onboarding their class albums.
+                  {onboardingDepartmentYears.length > 0
+                    ? `Graduating ${
+                        onboardingDepartmentYears.length === 1
+                          ? `Class of ${onboardingDepartmentYears[0]}`
+                          : `Classes of ${onboardingDepartmentYears.join(', ')}`
+                      } for ${currentDepartment.name} are currently onboarding their class albums.`
+                    : `Graduating classes for ${currentDepartment.name} are yet to onboard their class albums.`}
                 </p>
               </div>
               <button
-                onClick={onOpenOnboarding}
+                onClick={() =>
+                  onOpenOnboarding({
+                    universityId: currentUniversity.id,
+                    departmentId: currentDepartment.id,
+                    departmentName: currentDepartment.name,
+                  })
+                }
                 className="px-5 py-2.5 rounded-full bg-black text-white font-tech font-bold text-xs uppercase tracking-wider hover:bg-zinc-800 transition-colors cursor-pointer inline-flex items-center gap-2 shadow-sm"
               >
                 <PlusCircle className="w-4 h-4 text-[#d4af37]" />
