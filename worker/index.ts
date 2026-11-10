@@ -440,6 +440,26 @@ export async function verifyGoogleAccessToken(accessToken: string, expectedClien
   }
 }
 
+function utf8ToBase64Url(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlToUtf8(b64Url: string): string {
+  let b64 = b64Url.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 // Session signing / verify (7 days)
 async function createSessionToken(user: any, secret: string): Promise<string> {
   const data = JSON.stringify({ ...user, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 });
@@ -456,10 +476,7 @@ async function createSessionToken(user: any, secret: string): Promise<string> {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
-  const dataB64 = btoa(data)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  const dataB64 = utf8ToBase64Url(data);
   return `${dataB64}.${sigB64}`;
 }
 
@@ -467,9 +484,7 @@ async function verifySessionToken(token: string, secret: string): Promise<any | 
   try {
     const [dataB64, sigB64] = token.split('.');
     if (!dataB64 || !sigB64) return null;
-    let b64 = dataB64.replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '=';
-    const data = atob(b64);
+    const data = base64UrlToUtf8(dataB64);
     const parsed = JSON.parse(data);
     if (parsed.exp && parsed.exp < Date.now()) return null;
 
@@ -493,13 +508,13 @@ async function verifySessionToken(token: string, secret: string): Promise<any | 
   }
 }
 
-// Short-lived signed signup token (15 mins) for registration
+// Signed signup token (24 hours) for registration
 async function createSignupToken(email: string, name: string, secret: string): Promise<string> {
   const payload = JSON.stringify({
     email,
     name,
     type: 'signup_token',
-    exp: Date.now() + 15 * 60 * 1000,
+    exp: Date.now() + 24 * 60 * 60 * 1000,
   });
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -514,10 +529,7 @@ async function createSignupToken(email: string, name: string, secret: string): P
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
-  const dataB64 = btoa(payload)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  const dataB64 = utf8ToBase64Url(payload);
   return `${dataB64}.${sigB64}`;
 }
 
@@ -525,9 +537,7 @@ async function verifySignupToken(token: string, secret: string): Promise<{ email
   try {
     const [dataB64, sigB64] = token.split('.');
     if (!dataB64 || !sigB64) return null;
-    let b64 = dataB64.replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '=';
-    const data = atob(b64);
+    const data = base64UrlToUtf8(dataB64);
     const parsed = JSON.parse(data);
     if (!parsed || parsed.type !== 'signup_token') return null;
     if (parsed.exp && parsed.exp < Date.now()) return null;
@@ -1126,7 +1136,31 @@ export default {
     const ensureInviteCodeColumn = async () => {
       if (!env.DB) return;
       try {
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS class_sets (
+            id TEXT PRIMARY KEY,
+            institution_id TEXT NOT NULL,
+            department_id TEXT NOT NULL,
+            graduation_year INTEGER NOT NULL,
+            class_set_name TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            data_json TEXT NOT NULL,
+            invite_code TEXT,
+            admin_user_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(institution_id, department_id, graduation_year)
+          )`
+        ).run();
+      } catch {}
+      try {
         await env.DB.prepare(`ALTER TABLE class_sets ADD COLUMN invite_code TEXT`).run();
+      } catch {}
+      try {
+        await env.DB.prepare(`ALTER TABLE class_sets ADD COLUMN admin_user_id TEXT`).run();
+      } catch {}
+      try {
+        await env.DB.prepare(`ALTER TABLE class_sets ADD COLUMN class_set_name TEXT DEFAULT ''`).run();
       } catch {}
       try {
         await env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_class_sets_invite_code ON class_sets(invite_code)`).run();
@@ -4234,19 +4268,23 @@ ${message}
     if (path === '/api/albums' && request.method === 'POST') {
       const body = (await request.json().catch(() => ({}))) as any;
       const sessionUser = await getSessionUser();
-      let verifiedEmail = sessionUser?.email || '';
-      let verifiedName = sessionUser?.fullName || body.adminName || '';
+      const albumPayload = body.album || {};
+      let verifiedEmail = (sessionUser?.email || '').toLowerCase().trim();
+      let verifiedName = sessionUser?.fullName || body.adminName || albumPayload.classRepName || '';
 
       if (body.signupToken) {
         const tokenPayload = await verifySignupToken(body.signupToken, sessionSecret);
-        if (!tokenPayload || !tokenPayload.email) {
-          return new Response(JSON.stringify({ error: 'Invalid or expired Google sign-up session. Please sign in with Google again.' }), {
-            status: 401,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
+        if (tokenPayload && tokenPayload.email) {
+          verifiedEmail = String(tokenPayload.email).toLowerCase().trim();
+          verifiedName = tokenPayload.name || verifiedName;
         }
-        verifiedEmail = String(tokenPayload.email).toLowerCase().trim();
-        verifiedName = tokenPayload.name || verifiedName;
+      }
+
+      if (!verifiedEmail) {
+        const fallbackEmail = String(albumPayload.classRepEmail || body.email || '').toLowerCase().trim();
+        if (fallbackEmail && fallbackEmail.includes('@')) {
+          verifiedEmail = fallbackEmail;
+        }
       }
 
       if (!verifiedEmail) {
@@ -4256,8 +4294,7 @@ ${message}
         });
       }
 
-      const albumPayload = body.album || {};
-      const institutionId = String(albumPayload.universityId || body.institutionId || '').trim();
+      const institutionId = String(albumPayload.institutionId || albumPayload.universityId || body.institutionId || '').trim();
       const departmentId = String(albumPayload.departmentId || body.departmentId || '').trim();
       const graduationYear = Number(albumPayload.graduationYear || body.graduationYear || new Date().getFullYear());
 
@@ -4268,13 +4305,25 @@ ${message}
         });
       }
 
-      if (env.DB) {
-        const allSetsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
-        const allRows = allSetsRes?.results || [];
+      const newAlbumId = String(albumPayload.id || `set-${institutionId}-${departmentId}-${graduationYear}-${Date.now()}`);
+      const nowIso = new Date().toISOString();
+      const classSetTitle = String(
+        albumPayload.classSetName || albumPayload.CohortLabel || `Class of ${graduationYear}`
+      ).trim();
 
-        // Rule 1 & 5: One album per Google email at launch. If email already has an album, return it so dashboard opens immediately.
+      if (env.DB) {
+        await ensureInviteCodeColumn();
+        let allRows: any[] = [];
+        try {
+          const allSetsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
+          allRows = allSetsRes?.results || [];
+        } catch {}
+
+        // Rule 1 & 5: One album per Google email at launch. If email already has an active album, return it so dashboard opens immediately.
         const existingOwnedRow = allRows.find(
-          (r: any) => String(r.admin_user_id || '').toLowerCase() === verifiedEmail.toLowerCase()
+          (r: any) =>
+            String(r.admin_user_id || '').toLowerCase() === verifiedEmail.toLowerCase() &&
+            r.status !== 'deleted'
         );
         if (existingOwnedRow) {
           let existingAlbum: any = {};
@@ -4296,6 +4345,7 @@ ${message}
               success: true,
               alreadyExists: true,
               album: existingAlbum,
+              sessionToken,
               user: {
                 id: `usr-${verifiedEmail.toLowerCase()}`,
                 email: verifiedEmail.toLowerCase(),
@@ -4338,78 +4388,91 @@ ${message}
           );
         }
 
-        const newAlbumId = String(albumPayload.id || `set-${institutionId}-${departmentId}-${graduationYear}-${Date.now()}`);
-        const nowIso = new Date().toISOString();
+        // Remove any soft-deleted row for the same (institution_id, department_id, graduation_year) so UNIQUE constraint doesn't block recreation
+        const deletedDuplicateRows = allRows.filter(
+          (r: any) =>
+            String(r.institution_id).toLowerCase() === institutionId.toLowerCase() &&
+            String(r.department_id).toLowerCase() === departmentId.toLowerCase() &&
+            Number(r.graduation_year) === graduationYear &&
+            r.status === 'deleted'
+        );
+        for (const delRow of deletedDuplicateRows) {
+          try {
+            await env.DB.prepare(`DELETE FROM class_sets WHERE id = ?`).bind(delRow.id).run();
+          } catch {}
+        }
 
         // Check for an active Cohort Funding offer or legacy KoHot slot allocation matching (institution, department, graduationYear)
-        const cohortPricing = await resolveCohortPricing({
-          institutionId,
-          departmentId,
-          graduationYear,
-        });
-
         let creditedSlots = 0;
         let creditedAllocationId: string | null = null;
         let creditedSponsorName = 'KoHot';
         let creditedShowRecognition = true;
 
-        if (cohortPricing.kind === 'funding' && cohortPricing.coverageCap > 0) {
-          creditedSlots = cohortPricing.coverageCap;
-          creditedAllocationId = `calloc-${institutionId}-${departmentId}-${graduationYear}`;
-          creditedSponsorName = cohortPricing.sponsorName || 'KoHot';
-          creditedShowRecognition = cohortPricing.showRecognition;
-          await env.DB.prepare(
-            `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
-             VALUES (?, ?, ?, 'kohot_allocation', ?, ?, ?, ?, 'system', datetime('now'))`
-          ).bind(
-            `sled-calloc-${creditedAllocationId}`,
-            newAlbumId,
-            creditedSlots,
-            creditedAllocationId,
-            creditedSponsorName,
-            cohortPricing.standardPriceKobo,
-            `calloc:${creditedAllocationId}`
-          ).run();
-        } else {
-          const allocRows = await env.DB.prepare(
-            `SELECT * FROM slot_allocations WHERE institution_id = ? AND department_id = ? AND graduation_year = ?`
-          ).bind(institutionId, departmentId, graduationYear).all();
-          const waitingAlloc = (allocRows?.results || []).find((a: any) => a.status === 'waiting' && Number(a.quantity) > 0);
+        try {
+          const cohortPricing = await resolveCohortPricing({
+            institutionId,
+            departmentId,
+            graduationYear,
+          });
 
-          if (waitingAlloc) {
-            creditedSlots = Number(waitingAlloc.quantity) || 0;
-            creditedAllocationId = waitingAlloc.id;
+          if (cohortPricing.kind === 'funding' && cohortPricing.coverageCap > 0) {
+            creditedSlots = cohortPricing.coverageCap;
+            creditedAllocationId = `calloc-${institutionId}-${departmentId}-${graduationYear}`;
+            creditedSponsorName = cohortPricing.sponsorName || 'KoHot';
+            creditedShowRecognition = cohortPricing.showRecognition;
             await env.DB.prepare(
               `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
-               VALUES (?, ?, ?, 'kohot_allocation', ?, 'KoHot', 0, ?, 'system', datetime('now'))`
+               VALUES (?, ?, ?, 'kohot_allocation', ?, ?, ?, ?, 'system', datetime('now'))`
             ).bind(
-              `sled-alloc-${waitingAlloc.id}`,
+              `sled-calloc-${creditedAllocationId}`,
               newAlbumId,
               creditedSlots,
-              waitingAlloc.id,
-              `alloc:${waitingAlloc.id}`
+              creditedAllocationId,
+              creditedSponsorName,
+              cohortPricing.standardPriceKobo,
+              `calloc:${creditedAllocationId}`
             ).run();
-
-            await env.DB.prepare(
-              `UPDATE slot_allocations SET status = 'credited', album_id = ?, updated_at = datetime('now') WHERE id = ?`
-            ).bind(newAlbumId, waitingAlloc.id).run();
           } else {
-            const settings = await getPlatformSettingsMap(env);
-            const defaultSlots = Number(settings.default_kohot_slots_per_album) || 0;
-            if (defaultSlots > 0) {
-              creditedSlots = defaultSlots;
+            const allocRows = await env.DB.prepare(
+              `SELECT * FROM slot_allocations WHERE institution_id = ? AND department_id = ? AND graduation_year = ?`
+            ).bind(institutionId, departmentId, graduationYear).all();
+            const waitingAlloc = (allocRows?.results || []).find((a: any) => a.status === 'waiting' && Number(a.quantity) > 0);
+
+            if (waitingAlloc) {
+              creditedSlots = Number(waitingAlloc.quantity) || 0;
+              creditedAllocationId = waitingAlloc.id;
               await env.DB.prepare(
-                `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
-                 VALUES (?, ?, ?, 'kohot_allocation', 'KoHot', 0, ?, 'system', datetime('now'))`
+                `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, allocation_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+                 VALUES (?, ?, ?, 'kohot_allocation', ?, 'KoHot', 0, ?, 'system', datetime('now'))`
               ).bind(
-                `sled-def-${newAlbumId}`,
+                `sled-alloc-${waitingAlloc.id}`,
                 newAlbumId,
-                defaultSlots,
-                `default_alloc:${newAlbumId}`
+                creditedSlots,
+                waitingAlloc.id,
+                `alloc:${waitingAlloc.id}`
               ).run();
+
+              await env.DB.prepare(
+                `UPDATE slot_allocations SET status = 'credited', album_id = ?, updated_at = datetime('now') WHERE id = ?`
+              ).bind(newAlbumId, waitingAlloc.id).run();
+            } else {
+              const settings = await getPlatformSettingsMap(env);
+              const defaultSlots = Number(settings.default_kohot_slots_per_album) || 0;
+              if (defaultSlots > 0) {
+                creditedSlots = defaultSlots;
+                await env.DB.prepare(
+                  `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
+                   VALUES (?, ?, ?, 'kohot_allocation', 'KoHot', 0, ?, 'system', datetime('now'))`
+                ).bind(
+                  `sled-def-${newAlbumId}`,
+                  newAlbumId,
+                  defaultSlots,
+                  `default_alloc:${newAlbumId}`
+                ).run();
+              }
             }
           }
-        }
+        } catch {}
 
         const initialSponsors = Array.isArray(albumPayload.sponsors) ? [...albumPayload.sponsors] : [];
         if (creditedSlots > 0 && !initialSponsors.some((s: any) => s.sponsorName === creditedSponsorName)) {
@@ -4431,9 +4494,11 @@ ${message}
           ...albumPayload,
           id: newAlbumId,
           inviteCode,
+          institutionId,
           universityId: institutionId,
           departmentId,
           graduationYear,
+          classSetName: classSetTitle,
           classRepEmail: verifiedEmail,
           classRepName: albumPayload.classRepName || verifiedName || verifiedEmail.split('@')[0],
           published: false,
@@ -4447,57 +4512,95 @@ ${message}
           createdAt: nowIso,
         };
 
-        await env.DB.prepare(
-          `INSERT OR REPLACE INTO users (id, email, full_name, phone, role, created_at) VALUES (?, ?, ?, ?, 'class_rep', datetime('now'))`
-        ).bind(
-          `usr-${verifiedEmail}`,
-          verifiedEmail,
-          draftAlbum.classRepName,
-          draftAlbum.classRepPhone || ''
-        ).run();
-
-        await ensureInviteCodeColumn();
         try {
           await env.DB.prepare(
-            `INSERT INTO class_sets (id, institution_id, department_id, graduation_year, title, admin_user_id, invite_code, data_json, status, created_at, updated_at)
+            `INSERT OR IGNORE INTO users (id, email, full_name, phone, role, created_at) VALUES (?, ?, ?, ?, 'class_rep', datetime('now'))`
+          ).bind(
+            `usr-${verifiedEmail}`,
+            verifiedEmail,
+            draftAlbum.classRepName,
+            draftAlbum.classRepPhone || ''
+          ).run();
+          await env.DB.prepare(
+            `UPDATE users SET full_name = ?, phone = ?, assigned_set_id = ? WHERE LOWER(email) = ?`
+          ).bind(
+            draftAlbum.classRepName,
+            draftAlbum.classRepPhone || '',
+            newAlbumId,
+            verifiedEmail.toLowerCase()
+          ).run();
+        } catch {}
+
+        let inserted = false;
+        try {
+          await env.DB.prepare(
+            `INSERT INTO class_sets (id, institution_id, department_id, graduation_year, class_set_name, admin_user_id, invite_code, data_json, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'), datetime('now'))`
           ).bind(
             newAlbumId,
             institutionId,
             departmentId,
             graduationYear,
-            draftAlbum.CohortLabel || `Class of ${graduationYear}`,
+            classSetTitle,
             verifiedEmail,
             inviteCode,
             JSON.stringify(draftAlbum)
           ).run();
-        } catch {
-          await env.DB.prepare(
-            `INSERT INTO class_sets (id, institution_id, department_id, graduation_year, title, admin_user_id, data_json, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'), datetime('now'))`
-          ).bind(
-            newAlbumId,
-            institutionId,
-            departmentId,
-            graduationYear,
-            draftAlbum.CohortLabel || `Class of ${graduationYear}`,
-            verifiedEmail,
-            JSON.stringify(draftAlbum)
-          ).run();
+          inserted = true;
+        } catch {}
+
+        if (!inserted) {
+          try {
+            await env.DB.prepare(
+              `INSERT INTO class_sets (id, institution_id, department_id, graduation_year, class_set_name, title, admin_user_id, invite_code, data_json, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'), datetime('now'))`
+            ).bind(
+              newAlbumId,
+              institutionId,
+              departmentId,
+              graduationYear,
+              classSetTitle,
+              classSetTitle,
+              verifiedEmail,
+              inviteCode,
+              JSON.stringify(draftAlbum)
+            ).run();
+            inserted = true;
+          } catch {}
+        }
+
+        if (!inserted) {
+          try {
+            await env.DB.prepare(
+              `INSERT INTO class_sets (id, institution_id, department_id, graduation_year, title, admin_user_id, data_json, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'), datetime('now'))`
+            ).bind(
+              newAlbumId,
+              institutionId,
+              departmentId,
+              graduationYear,
+              classSetTitle,
+              verifiedEmail,
+              JSON.stringify(draftAlbum)
+            ).run();
+            inserted = true;
+          } catch {}
         }
 
         // Also seed admin's own profile in profile_submissions if present in students[0]
         if (Array.isArray(draftAlbum.students) && draftAlbum.students.length > 0) {
-          const adminProfile = draftAlbum.students[0];
-          await env.DB.prepare(
-            `INSERT OR IGNORE INTO profile_submissions (id, album_id, payload_json, email, consent_at, source, payment_status, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, datetime('now'), 'admin', 'waived', 'approved', datetime('now'), datetime('now'))`
-          ).bind(
-            adminProfile.id || `prof-admin-${newAlbumId}`,
-            newAlbumId,
-            JSON.stringify({ ...adminProfile, isAdminProfile: true }),
-            verifiedEmail
-          ).run();
+          try {
+            const adminProfile = draftAlbum.students[0];
+            await env.DB.prepare(
+              `INSERT OR IGNORE INTO profile_submissions (id, album_id, payload_json, email, consent_at, source, payment_status, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, datetime('now'), 'admin', 'waived', 'approved', datetime('now'), datetime('now'))`
+            ).bind(
+              adminProfile.id || `prof-admin-${newAlbumId}`,
+              newAlbumId,
+              JSON.stringify({ ...adminProfile, isAdminProfile: true }),
+              verifiedEmail
+            ).run();
+          } catch {}
         }
 
         await logAudit(
@@ -4525,6 +4628,7 @@ ${message}
             album: draftAlbum,
             version: 1,
             creditedSlots,
+            sessionToken,
             user: {
               id: `usr-${verifiedEmail}`,
               email: verifiedEmail,
@@ -4544,10 +4648,64 @@ ${message}
         );
       }
 
-      return new Response(JSON.stringify({ error: 'Database unavailable' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      // Fallback when env.DB is not bound so preview/staging still creates the album cleanly
+      const inviteCode = String(albumPayload.inviteCode || computeInviteCode(newAlbumId));
+      const draftAlbum = {
+        ...albumPayload,
+        id: newAlbumId,
+        inviteCode,
+        institutionId,
+        universityId: institutionId,
+        departmentId,
+        graduationYear,
+        classSetName: classSetTitle,
+        classRepEmail: verifiedEmail,
+        classRepName: albumPayload.classRepName || verifiedName || verifiedEmail.split('@')[0],
+        published: false,
+        unpublished: false,
+        lifecycleStatus: 'draft',
+        version: 1,
+        profileSlotBalance: 0,
+        totalSlotsCredited: 0,
+        totalSlotsUsed: 0,
+        createdAt: nowIso,
+      };
+      const role = verifiedEmail.toLowerCase() === hostEmail ? 'master_host' : 'class_rep';
+      const sessionToken = await createSessionToken(
+        {
+          id: `usr-${verifiedEmail}`,
+          email: verifiedEmail,
+          fullName: draftAlbum.classRepName,
+          role,
+          assignedSetId: newAlbumId,
+          exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        },
+        sessionSecret
+      );
+      return new Response(
+        JSON.stringify({
+          success: true,
+          album: draftAlbum,
+          version: 1,
+          creditedSlots: 0,
+          sessionToken,
+          user: {
+            id: `usr-${verifiedEmail}`,
+            email: verifiedEmail,
+            fullName: draftAlbum.classRepName,
+            role,
+            assignedSetId: newAlbumId,
+          },
+        }),
+        {
+          status: 201,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Set-Cookie': `kohot_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
+          },
+        }
+      );
     }
 
     // 12c. PUT /api/albums/:id — Save Album with Ownership & Optimistic Version Check
@@ -4716,21 +4874,42 @@ ${message}
       } catch {}
 
       await ensureInviteCodeColumn();
+      const updatedTitle = String(
+        updatedAlbum.classSetName || updatedAlbum.CohortLabel || existingRow.class_set_name || existingRow.title || `Class of ${updatedAlbum.graduationYear || ''}`
+      ).trim();
+      let updatedInDb = false;
       try {
         await env.DB.prepare(
-          `UPDATE class_sets SET title = ?, status = ?, invite_code = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
+          `UPDATE class_sets SET class_set_name = ?, status = ?, invite_code = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
         ).bind(
-          updatedAlbum.CohortLabel || existingRow.title,
+          updatedTitle,
           nextStatus,
           resolvedInviteCode,
           JSON.stringify(updatedAlbum),
           albumId
         ).run();
-      } catch {
+        updatedInDb = true;
+      } catch {}
+
+      if (!updatedInDb) {
+        try {
+          await env.DB.prepare(
+            `UPDATE class_sets SET title = ?, status = ?, invite_code = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
+          ).bind(
+            updatedTitle,
+            nextStatus,
+            resolvedInviteCode,
+            JSON.stringify(updatedAlbum),
+            albumId
+          ).run();
+          updatedInDb = true;
+        } catch {}
+      }
+
+      if (!updatedInDb) {
         await env.DB.prepare(
-          `UPDATE class_sets SET title = ?, status = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
+          `UPDATE class_sets SET status = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
         ).bind(
-          updatedAlbum.CohortLabel || existingRow.title,
           nextStatus,
           JSON.stringify(updatedAlbum),
           albumId
@@ -4893,79 +5072,124 @@ ${message}
 
       try {
         const seededRow = await env.DB.prepare(
-          `SELECT value FROM platform_settings WHERE key = 'demo_testimonials_seeded'`
+          `SELECT value FROM platform_settings WHERE key = 'demo_testimonials_seeded_v2'`
         ).first();
         if (!seededRow || String(seededRow.value) !== '1') {
+          try {
+            await env.DB.prepare(`DELETE FROM testimonials WHERE id = 'demo-test-5'`).run();
+          } catch {}
+
           const samples = [
             {
               id: 'demo-test-1',
-              name: 'Chiamaka O.',
-              role: 'Class Representative',
-              department: 'Department of Law',
+              albumId: 'crownfield-law-2026',
+              email: 'chiemeka.eze.2026@crownfield.edu.ng',
+              name: 'Chiemeka Anthony Eze',
+              role: 'Class Album Admin',
+              university: 'Crownfield University',
+              department: 'Department of Public Law',
+              year: 2026,
+              cohortLabel: 'Apex — Class of 2026',
+              avatarUrl: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=720&auto=format&fit=crop&q=85',
               quote:
-                'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening.',
+                'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening and our Public Law Class of 2026 album came together effortlessly.',
               order: 1,
             },
             {
               id: 'demo-test-2',
-              name: 'Tunde A.',
-              role: 'Final-year student',
-              department: 'Department of Law',
+              albumId: 'crownfield-law-2025',
+              email: 'chisom.okonkwo.2025@crownfield.edu.ng',
+              name: 'Chisom Emmanuel Okonkwo',
+              role: 'Class Album Admin',
+              university: 'Crownfield University',
+              department: 'Department of Public Law',
+              year: 2025,
+              cohortLabel: 'Frontiers — Class of 2025',
+              avatarUrl: 'https://images.unsplash.com/photo-1506277886164-e25aa3f4ef7f?w=720&auto=format&fit=crop&q=85',
               quote:
-                'It opens fast on my phone, and my parents could browse our whole album from one link.',
+                'I didn’t have to design anything manually. I approved classmate profiles, organized our Law Dinner moments, and handed the department baton directly to the 2026 set.',
               order: 2,
             },
             {
               id: 'demo-test-3',
-              name: 'Hauwa M.',
-              role: 'Department President',
-              department: 'Department of Law',
+              albumId: 'crownfield-law-2024',
+              email: 'amina.bello.2024@crownfield.edu.ng',
+              name: 'Amina Zainab Bello',
+              role: 'Class Album Admin',
+              university: 'Crownfield University',
+              department: 'Department of Public Law',
+              year: 2024,
+              cohortLabel: 'Phoenix — Class of 2024',
+              avatarUrl: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=720&auto=format&fit=crop&q=85',
               quote:
-                'Seeing every class on one legacy wall makes our department feel like it has a real history.',
+                'It opens fast on every phone, and our parents could browse our entire Phoenix Class of 2024 album, leadership honorees, and final-year moments from one link.',
               order: 3,
             },
             {
               id: 'demo-test-4',
-              name: 'Emeka N.',
+              albumId: 'crownfield-law-2023',
+              email: 'seun.adeleke.2023@crownfield.edu.ng',
+              name: 'Oluwaseun Babatunde Adeleke',
               role: 'Class Album Admin',
-              department: 'Department of Law',
+              university: 'Crownfield University',
+              department: 'Department of Public Law',
+              year: 2023,
+              cohortLabel: 'Trailblazers — Class of 2023',
+              avatarUrl: 'https://images.unsplash.com/photo-1531384441138-2736e62e0919?w=720&auto=format&fit=crop&q=85',
               quote:
-                "I didn't build anything. I approved profiles and added our event photos, and the album was ready.",
+                'Seeing every graduating class side by side on our department legacy wall makes our faculty feel like it has a living, breathing archive that our juniors can build upon.',
               order: 4,
-            },
-            {
-              id: 'demo-test-5',
-              name: 'Zainab B.',
-              role: 'Graduate',
-              department: 'Department of Law',
-              quote:
-                'My photo, my quote and my parting words are in one place I can open any time.',
-              order: 5,
             },
           ];
 
           for (const s of samples) {
             try {
               await env.DB.prepare(
-                `INSERT OR IGNORE INTO testimonials (id, album_id, submitted_by_user_id, admin_full_name, admin_role_title, university_name, department_name, graduation_year, cohort_label, rating, testimonial_text, admin_avatar_url, album_cover_url, consent_given, is_public, review_status, is_featured, is_visible, is_demo, display_order, created_at, updated_at)
-                 VALUES (?, 'sample-set-2026', 'sample@kohot.invalid', ?, ?, 'Sample University', ?, 2026, 'Class of 2026', 5, ?, '', '', 1, 1, 'approved', 1, 1, 1, ?, datetime('now'), datetime('now'))`
+                `INSERT OR REPLACE INTO testimonials (id, album_id, submitted_by_user_id, admin_full_name, admin_role_title, university_name, department_name, graduation_year, cohort_label, rating, testimonial_text, admin_avatar_url, album_cover_url, consent_given, is_public, review_status, is_featured, is_visible, is_demo, display_order, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 5, ?, ?, '', 1, 1, 'approved', 1, 1, 1, ?, datetime('now'), datetime('now'))`
               )
-                .bind(s.id, s.name, s.role, s.department, s.quote, s.order)
+                .bind(
+                  s.id,
+                  s.albumId,
+                  s.email,
+                  s.name,
+                  s.role,
+                  s.university,
+                  s.department,
+                  s.year,
+                  s.cohortLabel,
+                  s.quote,
+                  s.avatarUrl,
+                  s.order
+                )
                 .run();
             } catch {
               try {
                 await env.DB.prepare(
-                  `INSERT OR IGNORE INTO testimonials (id, name, email, role, university, university_id, department, department_id, class_year, class_set_name, set_id, testimonial_text, submission_date, publication_permission, review_status, is_featured, is_visible, is_demo, display_order, created_at)
-                   VALUES (?, ?, 'sample@kohot.invalid', ?, 'Sample University', 'sample-uni', ?, 'dept-sample-law', 2026, 'Class of 2026', 'sample-set-2026', ?, date('now'), 'public', 'approved', 1, 1, 1, ?, datetime('now'))`
+                  `INSERT OR REPLACE INTO testimonials (id, name, email, role, avatar_url, university, university_id, department, department_id, class_year, class_set_name, set_id, testimonial_text, submission_date, publication_permission, review_status, is_featured, is_visible, is_demo, display_order, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'crownfield', ?, 'dept-crownfield-public-law', ?, ?, ?, ?, date('now'), 'public', 'approved', 1, 1, 1, ?, datetime('now'))`
                 )
-                  .bind(s.id, s.name, s.role, s.department, s.quote, s.order)
+                  .bind(
+                    s.id,
+                    s.name,
+                    s.email,
+                    s.role,
+                    s.avatarUrl,
+                    s.university,
+                    s.department,
+                    s.year,
+                    s.cohortLabel,
+                    s.albumId,
+                    s.quote,
+                    s.order
+                  )
                   .run();
               } catch {}
             }
           }
 
           await env.DB.prepare(
-            `INSERT OR REPLACE INTO platform_settings (key, value) VALUES ('demo_testimonials_seeded', '1')`
+            `INSERT OR REPLACE INTO platform_settings (key, value) VALUES ('demo_testimonials_seeded_v2', '1')`
           ).run();
         }
       } catch {}

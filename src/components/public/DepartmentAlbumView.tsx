@@ -1768,6 +1768,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           if (!hasAnySocial) return null;
           return (
             <div id={containerId} className="flex items-center justify-center gap-2.5 text-zinc-300">
+              <span className="font-mono-tech text-[10px] sm:text-[11px] tracking-wider text-zinc-300 font-medium">
+                Follow us on:
+              </span>
               {ytHref && (
                 <a
                   href={ytHref}

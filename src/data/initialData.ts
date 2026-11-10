@@ -127,6 +127,8 @@ export function purgeLegacyDataLocalStorage(): void {
     'kohot_founding_requests_v1',
     'kohot_content_v2',
     'kohot_testimonials_records_v1',
+    'kohot_testimonials_records_v2',
+    'kohot_demo_testimonials_seeded_v2',
     'kohot_testimonial_request_statuses_v1',
     'kohot_class_album_requests_v1',
     'kohot_next_class_handoff_invites_v1',
@@ -205,207 +207,89 @@ export function calculateTotalImages(sets: ClassSet[]): number {
   }, 0);
 }
 
-export const STORAGE_KEY_TESTIMONIALS = 'kohot_testimonials_records_v2';
-export const STORAGE_KEY_DEMO_TESTIMONIALS_SEEDED = 'kohot_demo_testimonials_seeded_v2';
+export const STORAGE_KEY_TESTIMONIALS = 'kohot_testimonials_records_v3';
+export const STORAGE_KEY_DEMO_TESTIMONIALS_SEEDED = 'kohot_demo_testimonials_seeded_v3';
 export const STORAGE_KEY_TESTIMONIAL_REQUESTS = 'kohot_testimonial_request_statuses_v1';
 
-export const DEMO_SAMPLE_TESTIMONIALS: TestimonialRecord[] = [
-  {
-    id: 'demo-test-1',
-    name: 'Chiemeka Anthony Eze',
-    fullName: 'Chiemeka Anthony Eze',
-    authorName: 'Chiemeka Anthony Eze',
-    email: 'chiemeka.eze@crownfield.edu.ng',
-    role: 'Class Album Admin',
-    authorRole: 'Class Album Admin',
-    university: 'Crownfield University',
-    universityName: 'Crownfield University',
-    institutionName: 'Crownfield University',
-    universityId: 'crownfield',
-    department: 'Department of Public Law',
-    departmentName: 'Department of Public Law',
-    departmentId: 'dept-crownfield-law',
-    classYear: 2026,
-    graduationYear: 2026,
-    classSetName: 'Class of 2026 · Lex Invicta',
-    setId: 'crownfield-law-2026',
-    avatarUrl: 'https://images.unsplash.com/photo-1531384441138-2736e62e0919?w=400&auto=format&fit=crop&q=80',
-    photoUrl: 'https://images.unsplash.com/photo-1531384441138-2736e62e0919?w=400&auto=format&fit=crop&q=80',
-    testimonialText:
-      'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening and our Public Law album came together effortlessly.',
+const DEMO_ADMIN_QUOTES_BY_YEAR: Record<number, { quote: string; date: string }> = {
+  2026: {
     quote:
-      'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening and our Public Law album came together effortlessly.',
-    shortQuote:
-      'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening and our Public Law album came together effortlessly.',
-    submissionDate: '2026-01-15',
-    createdAt: '2026-01-15T10:00:00.000Z',
-    submittedAt: '2026-01-15T10:00:00.000Z',
-    publicationPermission: 'public',
-    permissionGranted: true,
-    status: 'Approved',
-    reviewStatus: 'approved',
-    isFeatured: true,
-    isVisible: true,
-    isDemo: true,
-    displayOrder: 1,
+      'We stopped chasing classmates for photos in WhatsApp groups. Everyone submitted their own profile in one evening and our Public Law Class of 2026 album came together effortlessly.',
+    date: '2026-01-15',
   },
-  {
-    id: 'demo-test-2',
-    name: 'Olumide Babatunde Bankole',
-    fullName: 'Olumide Babatunde Bankole',
-    authorName: 'Olumide Babatunde Bankole',
-    email: 'olumide.bankole@crownfield.edu.ng',
-    role: 'Class Album Admin',
-    authorRole: 'Class Album Admin',
-    university: 'Crownfield University',
-    universityName: 'Crownfield University',
-    institutionName: 'Crownfield University',
-    universityId: 'crownfield',
-    department: 'Department of Public Law',
-    departmentName: 'Department of Public Law',
-    departmentId: 'dept-crownfield-law',
-    classYear: 2025,
-    graduationYear: 2025,
-    classSetName: 'Class of 2025 · The Jurisprudents',
-    setId: 'crownfield-law-2025',
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&auto=format&fit=crop&q=80',
-    photoUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&auto=format&fit=crop&q=80',
-    testimonialText:
-      'I didn’t have to design anything manually. I approved classmate profiles, organized our Dinner Night moments, and handed the department baton directly to the 2026 set.',
+  2025: {
     quote:
-      'I didn’t have to design anything manually. I approved classmate profiles, organized our Dinner Night moments, and handed the department baton directly to the 2026 set.',
-    shortQuote:
-      'I didn’t have to design anything manually. I approved classmate profiles, organized our Dinner Night moments, and handed the department baton directly to the 2026 set.',
-    submissionDate: '2025-11-16',
-    createdAt: '2025-11-16T10:00:00.000Z',
-    submittedAt: '2025-11-16T10:00:00.000Z',
-    publicationPermission: 'public',
-    permissionGranted: true,
-    status: 'Approved',
-    reviewStatus: 'approved',
-    isFeatured: true,
-    isVisible: true,
-    isDemo: true,
-    displayOrder: 2,
+      'I didn’t have to design anything manually. I approved classmate profiles, organized our Law Dinner moments, and handed the department baton directly to the 2026 set.',
+    date: '2025-11-16',
   },
-  {
-    id: 'demo-test-3',
-    name: 'Hauwa Maryam Abdullahi',
-    fullName: 'Hauwa Maryam Abdullahi',
-    authorName: 'Hauwa Maryam Abdullahi',
-    email: 'hauwa.abdullahi@unilorin.edu.ng',
-    role: 'Class Album Admin',
-    authorRole: 'Class Album Admin',
-    university: 'University of Ilorin (UNILORIN)',
-    universityName: 'University of Ilorin (UNILORIN)',
-    institutionName: 'University of Ilorin (UNILORIN)',
-    universityId: 'unilorin',
-    department: 'Common Law',
-    departmentName: 'Common Law',
-    departmentId: 'dept-unilorin-law',
-    classYear: 2026,
-    graduationYear: 2026,
-    classSetName: 'Class of 2026',
-    setId: 'unilorin-law-2026',
-    avatarUrl: 'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?w=400&auto=format&fit=crop&q=80',
-    photoUrl: 'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?w=400&auto=format&fit=crop&q=80',
-    testimonialText:
-      'Seeing every graduating class side by side on our department legacy wall makes our faculty feel like it has a living, breathing archive that our juniors can build upon.',
+  2024: {
+    quote:
+      'It opens fast on every phone, and our parents could browse our entire Phoenix Class of 2024 album, leadership honorees, and final-year moments from one link.',
+    date: '2024-11-22',
+  },
+  2023: {
     quote:
       'Seeing every graduating class side by side on our department legacy wall makes our faculty feel like it has a living, breathing archive that our juniors can build upon.',
-    shortQuote:
-      'Seeing every graduating class side by side on our department legacy wall makes our faculty feel like it has a living, breathing archive that our juniors can build upon.',
-    submissionDate: '2026-01-17',
-    createdAt: '2026-01-17T10:00:00.000Z',
-    submittedAt: '2026-01-17T10:00:00.000Z',
-    publicationPermission: 'public',
-    permissionGranted: true,
-    status: 'Approved',
-    reviewStatus: 'approved',
-    isFeatured: true,
-    isVisible: true,
-    isDemo: true,
-    displayOrder: 3,
+    date: '2023-11-25',
   },
-  {
-    id: 'demo-test-4',
-    name: 'Adedayo Mofeoluwa',
-    fullName: 'Adedayo Mofeoluwa',
-    authorName: 'Adedayo Mofeoluwa',
-    email: 'adedayo.mofeoluwa@oauife.edu.ng',
-    role: 'Class Album Admin',
-    authorRole: 'Class Album Admin',
-    university: 'Obafemi Awolowo University (OAU)',
-    universityName: 'Obafemi Awolowo University (OAU)',
-    institutionName: 'Obafemi Awolowo University (OAU)',
-    universityId: 'oau',
-    department: 'Computer Science and Engineering',
-    departmentName: 'Computer Science and Engineering',
-    departmentId: 'dept-oau-cse',
-    classYear: 2026,
-    graduationYear: 2026,
-    classSetName: 'Class of 2026',
-    setId: 'oau-cse-2026',
-    avatarUrl: 'https://images.unsplash.com/photo-1506277886164-e25aa3f4ef7f?w=400&auto=format&fit=crop&q=80',
-    photoUrl: 'https://images.unsplash.com/photo-1506277886164-e25aa3f4ef7f?w=400&auto=format&fit=crop&q=80',
-    testimonialText:
-      'It opens fast on every phone, and our parents could browse our entire Great Ife class album, leadership honorees, and final-year moments from one link.',
-    quote:
-      'It opens fast on every phone, and our parents could browse our entire Great Ife class album, leadership honorees, and final-year moments from one link.',
-    shortQuote:
-      'It opens fast on every phone, and our parents could browse our entire Great Ife class album, leadership honorees, and final-year moments from one link.',
-    submissionDate: '2026-01-18',
-    createdAt: '2026-01-18T10:00:00.000Z',
-    submittedAt: '2026-01-18T10:00:00.000Z',
-    publicationPermission: 'public',
-    permissionGranted: true,
-    status: 'Approved',
-    reviewStatus: 'approved',
-    isFeatured: true,
-    isVisible: true,
-    isDemo: true,
-    displayOrder: 4,
-  },
-  {
-    id: 'demo-test-5',
-    name: 'Zainab Bukola Balogun',
-    fullName: 'Zainab Bukola Balogun',
-    authorName: 'Zainab Bukola Balogun',
-    email: 'zainab.balogun@kwasu.edu.ng',
-    role: 'Class Album Admin',
-    authorRole: 'Class Album Admin',
-    university: 'Kwara State University (KWASU)',
-    universityName: 'Kwara State University (KWASU)',
-    institutionName: 'Kwara State University (KWASU)',
-    universityId: 'kwasu',
-    department: 'Aeronautical and Astronautical Engineering',
-    departmentName: 'Aeronautical and Astronautical Engineering',
-    departmentId: 'dept-kwasu-aae',
-    classYear: 2026,
-    graduationYear: 2026,
-    classSetName: 'Class of 2026',
-    setId: 'kwasu-aae-2026',
-    avatarUrl: 'https://images.unsplash.com/photo-1567532939604-b6b5b0db2604?w=400&auto=format&fit=crop&q=80',
-    photoUrl: 'https://images.unsplash.com/photo-1567532939604-b6b5b0db2604?w=400&auto=format&fit=crop&q=80',
-    testimonialText:
-      'Our portraits, convocation memories, and parting words are preserved in one dignified home that our set can revisit every anniversary.',
-    quote:
-      'Our portraits, convocation memories, and parting words are preserved in one dignified home that our set can revisit every anniversary.',
-    shortQuote:
-      'Our portraits, convocation memories, and parting words are preserved in one dignified home that our set can revisit every anniversary.',
-    submissionDate: '2026-01-19',
-    createdAt: '2026-01-19T10:00:00.000Z',
-    submittedAt: '2026-01-19T10:00:00.000Z',
-    publicationPermission: 'public',
-    permissionGranted: true,
-    status: 'Approved',
-    reviewStatus: 'approved',
-    isFeatured: true,
-    isVisible: true,
-    isDemo: true,
-    displayOrder: 5,
-  },
-];
+};
+
+export const DEMO_SAMPLE_TESTIMONIALS: TestimonialRecord[] = [...CROWNFIELD_PUBLIC_LAW_SETS]
+  .sort((a, b) => b.graduationYear - a.graduationYear)
+  .map((demoSet, idx) => {
+    const adminStudent =
+      demoSet.students.find(
+        (s) => s.fullName.toLowerCase() === (demoSet.classRepName || '').toLowerCase()
+      ) || demoSet.students[0];
+    const adminPhoto =
+      adminStudent?.photoUrl ||
+      'https://images.unsplash.com/photo-1531384441138-2736e62e0919?w=400&auto=format&fit=crop&q=80';
+    const quoteEntry = DEMO_ADMIN_QUOTES_BY_YEAR[demoSet.graduationYear] || {
+      quote:
+        'Our portraits, convocation memories, and parting words are preserved in one dignified home that our set can revisit every anniversary.',
+      date: '2026-01-15',
+    };
+    const adminName = demoSet.classRepName || adminStudent?.fullName || 'Class Album Admin';
+    const adminEmail = demoSet.classRepEmail || adminStudent?.email || 'admin@crownfield.edu.ng';
+
+    return {
+      id: `demo-test-${idx + 1}`,
+      name: adminName,
+      fullName: adminName,
+      authorName: adminName,
+      email: adminEmail,
+      phone: demoSet.classRepPhone,
+      role: 'Class Album Admin',
+      authorRole: 'Class Album Admin',
+      university: demoSet.institutionName,
+      universityName: demoSet.institutionName,
+      institutionName: demoSet.institutionName,
+      universityId: demoSet.institutionId,
+      department: demoSet.departmentName,
+      departmentName: demoSet.departmentName,
+      departmentId: demoSet.departmentId,
+      classYear: demoSet.graduationYear,
+      graduationYear: demoSet.graduationYear,
+      classSetName: demoSet.classSetName,
+      setId: demoSet.id,
+      avatarUrl: adminPhoto,
+      photoUrl: adminPhoto,
+      testimonialText: quoteEntry.quote,
+      quote: quoteEntry.quote,
+      shortQuote: quoteEntry.quote,
+      submissionDate: quoteEntry.date,
+      createdAt: `${quoteEntry.date}T10:00:00.000Z`,
+      submittedAt: `${quoteEntry.date}T10:00:00.000Z`,
+      publicationPermission: 'public',
+      permissionGranted: true,
+      status: 'Approved',
+      reviewStatus: 'approved',
+      isFeatured: true,
+      isVisible: true,
+      isDemo: true,
+      displayOrder: idx + 1,
+    };
+  });
 
 export const INITIAL_TESTIMONIALS: TestimonialRecord[] = [...DEMO_SAMPLE_TESTIMONIALS];
 

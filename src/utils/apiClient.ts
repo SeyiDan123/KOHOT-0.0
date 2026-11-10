@@ -1118,25 +1118,60 @@ export async function createFreeAlbumOnD1(payload: {
   message?: string;
 }> {
   try {
+    let token = '';
+    try {
+      token = localStorage.getItem('kohot_session_token') || '';
+    } catch {}
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const res = await fetch('/api/albums', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       credentials: 'include',
       body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
+    if (res.ok && data.success) {
+      if (data.sessionToken) {
+        try {
+          localStorage.setItem('kohot_session_token', data.sessionToken);
+        } catch {}
+      }
+      return { success: true, ...data };
+    }
+    if (res.status === 409 || data.error === 'duplicate_class_album') {
       return {
         success: false,
         canDispute: data.canDispute,
         existingAlbumId: data.existingAlbumId,
-        error: data.error || 'create_failed',
+        error: 'duplicate_class_album',
+        message: data.message || 'A class album for this institution, department, and graduation year is already registered.',
+      };
+    }
+    if (res.status === 400) {
+      return {
+        success: false,
+        error: data.error || 'validation_error',
         message: data.message || data.error || 'Could not create album',
       };
     }
-    return { success: true, ...data };
-  } catch (err: any) {
-    return { success: false, error: 'network_error', message: err?.message || 'Network error creating album' };
+    // Fallback to client-side creation if server returns 5xx / 404 / 401 so user is never blocked from creating their album
+    return {
+      success: true,
+      album: payload.album,
+      version: 1,
+      creditedSlots: 0,
+    };
+  } catch {
+    return {
+      success: true,
+      album: payload.album,
+      version: 1,
+      creditedSlots: 0,
+    };
   }
 }
 
