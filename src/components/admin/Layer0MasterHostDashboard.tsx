@@ -703,25 +703,36 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     setTypedConfirmName('');
   };
 
+  // Ensure navigating away or switching tabs never leaves a deletion confirmation modal pending
+  useEffect(() => {
+    setAlbumToDelete(null);
+    setTypedConfirmName('');
+    const handleNavReset = () => {
+      setAlbumToDelete(null);
+      setTypedConfirmName('');
+    };
+    window.addEventListener('popstate', handleNavReset);
+    window.addEventListener('hashchange', handleNavReset);
+    return () => {
+      window.removeEventListener('popstate', handleNavReset);
+      window.removeEventListener('hashchange', handleNavReset);
+    };
+  }, [activeTab]);
+
   const handleConfirmHostDelete = () => {
     if (!albumToDelete) return;
-    const expectedName = (albumToDelete.set.classSetName || albumToDelete.set.departmentName).trim().toLowerCase();
-    const typed = typedConfirmName.trim().toLowerCase();
-
-    if (typed !== expectedName) {
-      showError('Name Mismatch', `Please type the exact album name "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" to confirm deletion.`);
-      return;
-    }
 
     if (albumToDelete.isPermanent) {
       apiClientPermanentDeleteAlbum(albumToDelete.set.id, albumToDelete.set.classSetName);
       onDeleteSetPermanently?.(albumToDelete.set.id);
-      showSuccess('Album Permanently Deleted', `"${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" and all associated data were permanently erased.`);
+      showSuccess('Album Permanently Deleted', `"${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" and all exclusively associated data were permanently erased.`);
     } else {
       const updated: ClassSet = {
         ...albumToDelete.set,
         deletedAt: new Date().toISOString(),
         deletedBy: currentUser.email || 'host',
+        isPublished: false,
+        isUnpublished: true,
         deletionRequest: albumToDelete.set.deletionRequest ? {
           ...albumToDelete.set.deletionRequest,
           status: 'approved',
@@ -729,7 +740,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       };
       onUpdateSingleSet?.(updated);
       apiClientSoftDeleteAlbum(albumToDelete.set.id, albumToDelete.set.classSetName);
-      showSuccess('Album Soft-Deleted', `"${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" has been moved to Recently Deleted and hidden from all public views.`);
+      showSuccess('Album Soft-Deleted', `"${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" has been moved to Recently Deleted (30-day recovery window) and hidden from all public views.`);
     }
 
     setAlbumToDelete(null);
@@ -2315,11 +2326,13 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               />
             ) : mediaSubTab === 'albums' ? (
               <MasterAlbumMediaSection
-                sets={liveSets}
+                sets={sets}
                 universities={universities}
                 contentOverride={contentOverride}
                 onUpdateContentOverride={onUpdateContentOverride}
                 onViewDepartmentAlbum={onViewDepartmentAlbum}
+                onUpdateSingleSet={onUpdateSingleSet}
+                onDeleteSetPermanently={onDeleteSetPermanently}
                 compressionResolution={editCompressionResolution}
                 onUpdateCompressionResolution={setEditCompressionResolution}
                 compressionQuality={editCompressionQuality}
@@ -3569,60 +3582,76 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
 
       {/* Host Album Deletion Confirmation Modal */}
       {albumToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn">
           <div className="relative w-full max-w-lg rounded-3xl bg-[#18181b] border-2 border-red-500/50 p-6 sm:p-8 text-white space-y-5 shadow-2xl">
-            <div className="flex items-center gap-3 pb-3 border-b border-red-500/20">
-              <div className="w-10 h-10 rounded-2xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
-                <AlertTriangle className="w-5 h-5" />
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-red-500/20">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-syne font-bold text-lg text-white">
+                    {albumToDelete.isPermanent ? 'Delete Album Permanently' : 'Delete Album (30-Day Recovery)'}
+                  </h3>
+                  <p className="font-mono-tech text-xs text-red-400">
+                    {albumToDelete.isPermanent ? 'Irreversible Action • Exclusive Data & R2 Media Erased' : 'Retained in Recently Deleted for 30 Days'}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-syne font-bold text-lg text-white">
-                  {albumToDelete.isPermanent ? 'Delete Album Permanently' : 'Soft-Delete Album'}
-                </h3>
-                <p className="font-mono-tech text-xs text-red-400">
-                  {albumToDelete.isPermanent ? 'Irreversible Action • Data Erased' : 'Retained in Recently Deleted for 30 Days'}
-                </p>
-              </div>
-            </div>
-
-            <p className="font-body text-xs text-zinc-300 leading-relaxed">
-              {albumToDelete.isPermanent
-                ? `You are about to permanently erase the album "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" and all associated student profiles, memories, and photos. This cannot be undone.`
-                : `This will soft-delete "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" and hide it everywhere, including the legacy wall. It will be retained in "Recently Deleted" for 30 days.`}
-            </p>
-
-            <div className="p-3.5 rounded-xl bg-black/60 border border-white/10 space-y-2">
-              <label className="block font-mono-tech text-[11px] text-zinc-400">
-                To confirm, type the exact album name <span className="text-white font-bold font-mono">"{albumToDelete.set.classSetName || albumToDelete.set.departmentName}"</span>:
-              </label>
-              <input
-                type="text"
-                autoFocus
-                value={typedConfirmName}
-                onChange={(e) => setTypedConfirmName(e.target.value)}
-                placeholder={albumToDelete.set.classSetName || albumToDelete.set.departmentName}
-                className="w-full px-3.5 py-2.5 rounded-lg bg-zinc-900 border border-white/20 text-white font-mono text-xs focus:border-red-400 focus:outline-none"
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => {
                   setAlbumToDelete(null);
                   setTypedConfirmName('');
                 }}
-                className="px-4 py-2.5 rounded-full bg-white/10 hover:bg-white/15 text-zinc-300 hover:text-white font-mono-tech text-xs font-semibold transition-colors cursor-pointer"
+                className="p-1.5 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 font-body text-xs text-zinc-300 leading-relaxed">
+              <p>
+                {albumToDelete.isPermanent
+                  ? `Are you sure you want to permanently delete "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" (${albumToDelete.set.institutionName} • Class of ${albumToDelete.set.graduationYear})?`
+                  : `Are you sure you want to delete "${albumToDelete.set.classSetName || albumToDelete.set.departmentName}" (${albumToDelete.set.institutionName} • Class of ${albumToDelete.set.graduationYear})? It will be hidden from public views and retained in Recently Deleted for 30 days.`}
+              </p>
+
+              <div className="p-3.5 rounded-2xl bg-black/60 border border-white/10 space-y-1.5 text-[11px] font-mono-tech text-zinc-300">
+                <p className="text-amber-300 font-bold uppercase">
+                  Album Impact Summary (ID: {albumToDelete.set.id}):
+                </p>
+                <p>• Admin Owner: <span className="text-white">{albumToDelete.set.classRepName || 'Unassigned'} ({albumToDelete.set.classRepEmail || 'No email'})</span></p>
+                <p>• Graduate Profiles: <span className="text-white">{albumToDelete.set.students?.length || 0}</span></p>
+                <p>• Memory Photos: <span className="text-white">{albumToDelete.set.memories?.reduce((acc, m) => acc + (m.images?.length || 0), 0) || 0}</span> across <span className="text-white">{albumToDelete.set.memories?.length || 0}</span> categories</p>
+                <p>• Highlight Videos: <span className="text-white">{albumToDelete.set.videos?.length || 0}</span></p>
+                {albumToDelete.isPermanent && (
+                  <p className="text-red-300 pt-1">
+                    Note: Only database rows and R2 media files exclusively belonging to this album will be permanently deleted. Shared institutional assets are preserved.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => {
+                  setAlbumToDelete(null);
+                  setTypedConfirmName('');
+                }}
+                className="px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/15 text-zinc-300 hover:text-white font-mono-tech text-xs font-semibold transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
+                id="host-confirm-delete-album-btn"
                 type="button"
                 onClick={handleConfirmHostDelete}
-                disabled={typedConfirmName.trim().toLowerCase() !== (albumToDelete.set.classSetName || albumToDelete.set.departmentName).trim().toLowerCase()}
-                className="px-5 py-2.5 rounded-full bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white font-mono-tech text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg shadow-red-600/30"
+                className="px-6 py-2.5 rounded-full bg-red-600 hover:bg-red-500 text-white font-mono-tech text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg shadow-red-600/30"
               >
-                {albumToDelete.isPermanent ? 'Delete Permanently' : 'Confirm Soft Delete'}
+                Delete Album
               </button>
             </div>
           </div>

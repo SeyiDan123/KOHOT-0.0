@@ -1200,7 +1200,13 @@ export async function createFreeAlbumOnD1(payload: {
 export async function saveAlbumToD1(
   albumId: string,
   album: any,
-  options?: { version?: number; hostOnlyRetentionUpdate?: boolean }
+  options?: {
+    version?: number;
+    hostOnlyRetentionUpdate?: boolean;
+    hostControlCenterUpdate?: boolean;
+    explicitClearStudents?: boolean;
+    explicitClearMemories?: boolean;
+  }
 ): Promise<{
   success: boolean;
   version?: number;
@@ -1219,6 +1225,9 @@ export async function saveAlbumToD1(
         album,
         version: options?.version ?? album?.version ?? 1,
         hostOnlyRetentionUpdate: options?.hostOnlyRetentionUpdate,
+        hostControlCenterUpdate: options?.hostControlCenterUpdate,
+        explicitClearStudents: options?.explicitClearStudents,
+        explicitClearMemories: options?.explicitClearMemories,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -2247,6 +2256,202 @@ export async function copyCohortOffersFromYearOnServer(payload: {
   }
 }
 
+// ============================================================================
+// STORAGE AUDIT, COHORT RECONCILIATION, MEDIA REPAIR & BACKUP EXPORT HELPERS
+// ============================================================================
 
+export interface StorageAuditResponse {
+  success: boolean;
+  environment: 'development' | 'staging' | 'production';
+  d1Available: boolean;
+  r2Available: boolean;
+  duplicateCohorts: Array<{
+    cohortKey: string;
+    institutionId: string;
+    departmentName: string;
+    graduationYear: number;
+    recommendedPrimaryAlbumId: string;
+    albums: Array<{
+      id: string;
+      canonicalAlbumId: string;
+      institutionId: string;
+      institutionName: string;
+      departmentId: string;
+      departmentName: string;
+      graduationYear: number;
+      classSetName: string;
+      adminEmail: string;
+      classRepName: string;
+      status: string;
+      isPublished: boolean;
+      studentsCount: number;
+      memoriesCount: number;
+      awardsCount: number;
+      submissionsCount: number;
+      slotBalance: number;
+      totalSlotsCredited: number;
+      mediaAssetsCount: number;
+      referencedMediaKeysCount: number;
+      r2PrefixObjectsCount: number;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+  }>;
+  albumsInventory: any[];
+  deletedAlbumsInventory: Array<{
+    id: string;
+    institutionId: string;
+    institutionName: string;
+    departmentId: string;
+    departmentName: string;
+    graduationYear: number;
+    classSetName: string;
+    adminEmail: string;
+    deletedAt: string;
+    daysRemaining: number;
+    keepByHost: boolean;
+    studentsCount: number;
+    memoriesCount: number;
+    submissionsCount: number;
+    mediaAssetsCount: number;
+    exclusiveMediaKeys: string[];
+  }>;
+  mediaHealth: {
+    totalR2Objects: number;
+    totalMediaAssetRows: number;
+    brokenReferences: Array<{
+      albumId: string;
+      albumName: string;
+      itemType: 'student_photo' | 'student_secondary_photo' | 'memory_photo' | 'banner' | 'logo';
+      itemId: string;
+      itemLabel: string;
+      referencedUrl: string;
+      extractedKey: string;
+      recoverableKey?: string;
+    }>;
+    orphanedR2Objects: Array<{
+      key: string;
+      albumIdFromPrefix: string;
+      section: string;
+      size: number;
+      url: string;
+    }>;
+    duplicateMediaGroups: Array<{
+      signature: string;
+      count: number;
+      items: Array<{
+        id: string;
+        setId: string;
+        section: string;
+        objectKey: string;
+        publicUrl: string;
+        sizeBytes: number;
+        isReferenced: boolean;
+      }>;
+    }>;
+  };
+}
 
+export async function fetchStorageAuditFromD1(): Promise<StorageAuditResponse> {
+  try {
+    const res = await fetch('/api/admin/storage-audit', {
+      headers: getStoredSessionAuthHeaders(),
+      credentials: 'include',
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return {
+    success: false,
+    environment: 'development',
+    d1Available: false,
+    r2Available: false,
+    duplicateCohorts: [],
+    albumsInventory: [],
+    deletedAlbumsInventory: [],
+    mediaHealth: {
+      totalR2Objects: 0,
+      totalMediaAssetRows: 0,
+      brokenReferences: [],
+      orphanedR2Objects: [],
+      duplicateMediaGroups: [],
+    },
+  };
+}
 
+export async function reconcileCohortAlbumsInD1(payload: {
+  primaryAlbumId: string;
+  secondaryAlbumId: string;
+  softDeleteSecondaryAfterMerge?: boolean;
+}): Promise<{
+  success: boolean;
+  primaryAlbumId?: string;
+  secondaryAlbumId?: string;
+  addedStudentsCount?: number;
+  addedMemoriesCount?: number;
+  album?: any;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/reconcile-cohort', {
+      method: 'POST',
+      headers: getStoredSessionAuthHeaders({ 'Content-Type': 'application/json' }),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return data;
+    }
+    return { success: false, error: data.error || 'Failed to reconcile cohort albums.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while reconciling albums.' };
+  }
+}
+
+export async function repairAlbumMediaInD1(albumId: string): Promise<{
+  success: boolean;
+  albumId?: string;
+  repairedLinksCount?: number;
+  recoveredMemoriesCount?: number;
+  album?: any;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/repair-media', {
+      method: 'POST',
+      headers: getStoredSessionAuthHeaders({ 'Content-Type': 'application/json' }),
+      credentials: 'include',
+      body: JSON.stringify({ albumId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return data;
+    }
+    return { success: false, error: data.error || 'Failed to repair album media links.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while repairing media.' };
+  }
+}
+
+export async function exportDatabaseBackupFromD1(): Promise<{
+  success: boolean;
+  data?: any;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/backup-export', {
+      headers: getStoredSessionAuthHeaders(),
+      credentials: 'include',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, data };
+    }
+    const err = await res.json().catch(() => ({}));
+    return { success: false, error: err.error || 'Failed to export database backup.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while exporting backup.' };
+  }
+}

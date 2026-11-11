@@ -48,6 +48,7 @@ import {
   apiClientUnpublishAlbum,
   apiClientSoftDeleteAlbum,
   apiClientRestoreAlbum,
+  apiClientPermanentDeleteAlbum,
   apiClientDeleteProfile,
   apiClientDeleteMemory,
   apiClientDeleteAward,
@@ -3967,6 +3968,24 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const daysRemainingToRecover = Math.max(0, 30 - daysSinceDeleted);
   const isHiddenFromClassAdmin = (isSoftDeleted || Boolean(currentSet.keptByHostOnly)) && currentUser.role !== 'master_host';
 
+  const [isPermanentDeleteModalOpen, setIsPermanentDeleteModalOpen] = useState(false);
+
+  // Guard: Navigating away or changing album/route must NEVER trigger deletion or leave deletion modals open
+  useEffect(() => {
+    setIsRequestDeletionModalOpen(false);
+    setIsPermanentDeleteModalOpen(false);
+    const closeDeletionModalsOnNav = () => {
+      setIsRequestDeletionModalOpen(false);
+      setIsPermanentDeleteModalOpen(false);
+    };
+    window.addEventListener('popstate', closeDeletionModalsOnNav);
+    window.addEventListener('hashchange', closeDeletionModalsOnNav);
+    return () => {
+      window.removeEventListener('popstate', closeDeletionModalsOnNav);
+      window.removeEventListener('hashchange', closeDeletionModalsOnNav);
+    };
+  }, [currentSet.id]);
+
   const handleConfirmSoftDelete = () => {
     const nowIso = new Date().toISOString();
     const updated: ClassSet = {
@@ -3988,6 +4007,17 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     );
   };
 
+  const handleConfirmPermanentDelete = async () => {
+    setIsPermanentDeleteModalOpen(false);
+    setIsRequestDeletionModalOpen(false);
+    await apiClientPermanentDeleteAlbum(currentSet.id, currentSet.classSetName || currentSet.departmentName);
+    showSuccess(
+      'Album Permanently Deleted',
+      'Your class album and all exclusively associated database records and media files have been permanently erased.'
+    );
+    onSwitchRole('visitor');
+  };
+
   const handleRecoverAlbum = () => {
     if (daysRemainingToRecover <= 0) {
       showError('Recovery Expired', 'The 30-day recovery window for this class album has expired.');
@@ -4006,6 +4036,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     onUpdateSet(updated);
     apiClientRestoreAlbum(currentSet.id);
     setIsRequestDeletionModalOpen(false);
+    setIsPermanentDeleteModalOpen(false);
     showSuccess('Album Recovered', 'Your class album and all cohort records have been restored to your dashboard.');
   };
 
@@ -4111,10 +4142,18 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
             currentUser={currentUser}
             roleTitle="Class Album Admin"
             showNotifications={false}
-            onLogout={() => onSwitchRole('visitor')}
+            onLogout={() => {
+              setIsRequestDeletionModalOpen(false);
+              setIsPermanentDeleteModalOpen(false);
+              onSwitchRole('visitor');
+            }}
             currentSet={currentSet}
             onUpdateSet={onUpdateSet}
-            onAdminTransferred={() => onSwitchRole('visitor')}
+            onAdminTransferred={() => {
+              setIsRequestDeletionModalOpen(false);
+              setIsPermanentDeleteModalOpen(false);
+              onSwitchRole('visitor');
+            }}
             onOpenInviteNextClass={() => setIsInviteNextClassModalOpen(true)}
             onOpenRequestDeletion={() => {
               if (isSoftDeleted && daysRemainingToRecover > 0) {
@@ -4208,8 +4247,20 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     Recover Class Album Now
                   </button>
                   <button
+                    id="permanent-delete-album-now-btn"
                     type="button"
-                    onClick={() => onSwitchRole('visitor')}
+                    onClick={() => setIsPermanentDeleteModalOpen(true)}
+                    className="w-full sm:w-auto px-6 py-3 rounded-full bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-300 hover:text-white font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
+                  >
+                    Delete Permanently
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRequestDeletionModalOpen(false);
+                      setIsPermanentDeleteModalOpen(false);
+                      onSwitchRole('visitor');
+                    }}
                     className="w-full sm:w-auto px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs uppercase tracking-wider transition-colors cursor-pointer"
                   >
                     Sign Out
@@ -8883,6 +8934,68 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 id="confirm-soft-delete-album-btn"
                 type="button"
                 onClick={handleConfirmSoftDelete}
+                className="px-6 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-syne font-bold text-xs uppercase shadow-md cursor-pointer transition-colors"
+              >
+                Delete Album
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Album Erasure Confirmation Modal */}
+      {isPermanentDeleteModalOpen && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[9995] flex items-center justify-center p-4 bg-black/85 backdrop-blur-xs animate-fadeIn">
+          <div className="relative w-full max-w-md rounded-3xl bg-[#121318] border border-red-500/40 p-6 sm:p-7 text-white space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-syne font-bold text-base text-white">
+                    Permanently Delete Class Album
+                  </h3>
+                  <p className="text-[11px] font-mono-tech text-red-400">
+                    Irreversible Action • Immediate Erasure
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPermanentDeleteModalOpen(false)}
+                className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 font-body text-xs text-zinc-300 leading-relaxed">
+              <p>
+                Are you sure you want to permanently erase <span className="text-white font-bold">{currentSet.departmentName} (Class of {currentSet.graduationYear})</span> now instead of keeping the 30-day recovery window?
+              </p>
+              <div className="p-3.5 rounded-2xl bg-red-500/10 border border-red-500/20 space-y-1 text-[11px] text-zinc-300">
+                <p className="font-mono-tech uppercase text-red-300 font-bold">
+                  Associated Data to Be Erased:
+                </p>
+                <p>• {currentSet.students?.length || 0} student profiles &amp; portraits</p>
+                <p>• {currentSet.memories?.reduce((acc, m) => acc + (m.images?.length || 0), 0) || 0} memory photographs</p>
+                <p>• All exclusively owned R2 storage objects &amp; D1 records</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setIsPermanentDeleteModalOpen(false)}
+                className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono-tech text-xs uppercase cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                id="confirm-permanent-delete-album-btn"
+                type="button"
+                onClick={handleConfirmPermanentDelete}
                 className="px-6 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-syne font-bold text-xs uppercase shadow-md cursor-pointer transition-colors"
               >
                 Delete Album

@@ -292,34 +292,33 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
 
   const isMasterHost = currentUser?.role === 'master_host';
 
-  // Filtered sets: once an album is published (isPublished === true or activationStatus === 'active'),
-  // it immediately appears on the Legacy Wall of its particular department.
+  // Filtered sets: ONLY published albums appear on the public Legacy Wall.
+  // Unpublished/draft or soft-deleted albums never appear on the public Legacy Wall grid.
   const displayedSets = useMemo(() => {
+    const matchesTargetDept = (s: ClassSet) => {
+      if (s.departmentId === controlledDeptId || s.departmentId === targetSharedDept.id) return true;
+      const sDeptClean = String(s.departmentId || '').replace(/^dept-/, '').replace(/-pubadmin$/, '-pad');
+      const targetClean = String(targetSharedDept.id || controlledDeptId || '').replace(/^dept-/, '').replace(/-pubadmin$/, '-pad');
+      if (sDeptClean && targetClean && sDeptClean === targetClean) return true;
+      if (targetSharedDept.name && s.departmentName?.toLowerCase().trim() === targetSharedDept.name.toLowerCase().trim()) {
+        if (!targetSharedUni.id || s.institutionId === targetSharedUni.id) return true;
+      }
+      return false;
+    };
+
     if (isDirectSharedDept && !isCrownfieldPublicLaw) {
       const deptSets = sets.filter((s) => {
-        if (s.deletedAt || s.keptByHostOnly) {
-          if (!isMasterHost) return false;
-          if (s.deletedAt) {
-            const daysPassed = Math.floor((Date.now() - new Date(s.deletedAt).getTime()) / (1000 * 60 * 60 * 24));
-            const daysRemaining = Math.max(0, 30 - daysPassed);
-            if (daysRemaining <= 0 && !s.keptByHostOnly) return false;
-          }
-        } else {
-          const isSetPublished = (s.isPublished === true || s.activationStatus === 'active') && !s.isUnpublished;
-          const isOwnedByCurrentAdmin =
-            currentUser?.role === 'class_rep' &&
-            (currentUser.assignedSetId === s.id ||
-              (currentUser.email && s.classRepEmail && currentUser.email.toLowerCase().trim() === s.classRepEmail.toLowerCase().trim()));
-          if (!isSetPublished && !isMasterHost && !isOwnedByCurrentAdmin) {
-            return false;
-          }
+        if (s.deletedAt || s.keptByHostOnly || s.lifecycleStatus === 'deleted') {
+          return false;
         }
-
-        if (s.departmentId === controlledDeptId || s.departmentId === targetSharedDept.id) return true;
-        if (targetSharedDept.name && s.departmentName?.toLowerCase().trim() === targetSharedDept.name.toLowerCase().trim()) {
-          if (!targetSharedUni.id || s.institutionId === targetSharedUni.id) return true;
+        const isSetPublished =
+          (s.isPublished === true || s.published === true || s.lifecycleStatus === 'published' || (s.activationStatus === 'active' && s.isPublished !== false && s.published !== false)) &&
+          !s.isUnpublished &&
+          !s.unpublished;
+        if (!isSetPublished) {
+          return false;
         }
-        return false;
+        return matchesTargetDept(s);
       });
       return deptSets.sort((a, b) => b.graduationYear - a.graduationYear);
     }
@@ -330,23 +329,29 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
       (s) =>
         !demoIds.includes(s.id) &&
         (s.departmentId === 'dept-crownfield-public-law' || s.institutionId === 'crownfield') &&
-        ((s.isPublished === true || s.activationStatus === 'active') && !s.isUnpublished && !s.deletedAt)
+        ((s.isPublished === true || s.published === true) && !s.isUnpublished && !s.unpublished && !s.deletedAt)
     );
     const allCrownfield = [...mergedDemos, ...additionalCrownfieldSets];
     const validMerged = allCrownfield
-      .filter((s) => s && !s.deletedAt && !s.isUnpublished && (s.isPublished !== false || s.activationStatus === 'active'))
+      .filter((s) => s && !s.deletedAt && !s.isUnpublished && !s.unpublished && (s.isPublished === true || s.published === true || demoIds.includes(s.id)))
       .sort((a, b) => b.graduationYear - a.graduationYear);
     return validMerged.length > 0 ? validMerged : CROWNFIELD_PUBLIC_LAW_SETS.filter((s) => !s.deletedAt && !s.isUnpublished);
-  }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.id, targetSharedDept.name, targetSharedUni.id, isMasterHost, currentUser]);
+  }, [sets, isDirectSharedDept, isCrownfieldPublicLaw, controlledDeptId, targetSharedDept.id, targetSharedDept.name, targetSharedUni.id]);
 
   // Identify any draft / currently onboarding graduating years for this department
   const onboardingDepartmentYears = useMemo(() => {
     if (!isDirectSharedDept || isCrownfieldPublicLaw) return [];
     const matchingDrafts = sets.filter((s) => {
-      if (s.deletedAt || s.keptByHostOnly) return false;
-      const isSetPublished = (s.isPublished === true || s.activationStatus === 'active') && !s.isUnpublished;
+      if (s.deletedAt || s.keptByHostOnly || s.lifecycleStatus === 'deleted') return false;
+      const isSetPublished =
+        (s.isPublished === true || s.published === true || s.lifecycleStatus === 'published' || (s.activationStatus === 'active' && s.isPublished !== false && s.published !== false)) &&
+        !s.isUnpublished &&
+        !s.unpublished;
       if (isSetPublished) return false;
       if (s.departmentId === controlledDeptId || s.departmentId === targetSharedDept.id) return true;
+      const sDeptClean = String(s.departmentId || '').replace(/^dept-/, '').replace(/-pubadmin$/, '-pad');
+      const targetClean = String(targetSharedDept.id || controlledDeptId || '').replace(/^dept-/, '').replace(/-pubadmin$/, '-pad');
+      if (sDeptClean && targetClean && sDeptClean === targetClean) return true;
       if (targetSharedDept.name && s.departmentName?.toLowerCase().trim() === targetSharedDept.name.toLowerCase().trim()) {
         if (!targetSharedUni.id || s.institutionId === targetSharedUni.id) return true;
       }

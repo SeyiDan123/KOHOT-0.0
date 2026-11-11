@@ -1486,9 +1486,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                   </h3>
                 </div>
 
-                {/* Horizontally Swipeable Minimal Highlights Carousel (Same Size as People & Moments Cards) */}
+                {/* Horizontally Swipeable Highlights Carousel */}
                 <div
-                  className="flex items-start gap-3 sm:gap-5 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
+                  className="flex items-start gap-4 sm:gap-5 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
                 >
                   {highlightVideos.map((vid) => {
                     const ytId = extractYouTubeId(vid.youtubeUrl);
@@ -1505,13 +1505,13 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                           setSelectedVideo(vid);
                           setIsVideoModalOpen(true);
                         }}
-                        className={`group snap-start shrink-0 w-[172px] sm:w-[216px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border cursor-pointer ${
+                        className={`group snap-start shrink-0 w-[260px] sm:w-[310px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border cursor-pointer ${
                           isLightMode
                             ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400'
                             : 'bg-[#0e1017] border-white/[0.08] text-white hover:border-white/30'
                         }`}
                       >
-                        {/* Strictly Square Video Container Matching People & Moments Cards */}
+                        {/* Strictly Square Video Container */}
                         <div className="relative aspect-square w-full overflow-hidden bg-black">
                           {streamSrc && (
                             <iframe
@@ -1529,8 +1529,8 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
                           {/* Date Badge */}
                           {vid.dateStr && (
-                            <div className="absolute top-2.5 left-2.5 pointer-events-none">
-                              <span className="px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 text-[9px] font-mono-tech text-white uppercase tracking-wider font-semibold">
+                            <div className="absolute top-3 left-3 pointer-events-none">
+                              <span className="px-2.5 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/15 text-[10px] font-mono-tech text-white uppercase tracking-wider font-semibold">
                                 {vid.dateStr}
                               </span>
                             </div>
@@ -1538,14 +1538,14 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
                           {/* Minimal Center Play Button Overlay */}
                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#ef4444]/95 text-white flex items-center justify-center shadow-2xl group-hover:scale-110 transition-transform">
-                              <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-white ml-0.5" />
+                            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#ef4444]/95 text-white flex items-center justify-center shadow-2xl group-hover:scale-110 transition-transform">
+                              <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
                             </div>
                           </div>
 
                           {/* Minimal Bottom Title Overlay */}
-                          <div className="absolute inset-x-2.5 bottom-2.5 pointer-events-none">
-                            <h4 className="kohot-keep-color font-syne font-bold text-xs text-white leading-snug line-clamp-2 drop-shadow-md">
+                          <div className="absolute inset-x-3.5 bottom-3.5 pointer-events-none">
+                            <h4 className="kohot-keep-color font-syne font-bold text-sm text-white leading-snug line-clamp-2 drop-shadow-md">
                               {vid.title}
                             </h4>
                           </div>
@@ -1710,10 +1710,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                         </div>
                       </div>
 
-                      {/* Horizontal Touch-Swipeable Carousel Matching People Card Size */}
+                      {/* Horizontal Touch-Swipeable Carousel */}
                       <div
                         id={`carousel-${event.id}`}
-                        className="flex items-start gap-3 sm:gap-5 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
+                        className="flex items-start gap-4 sm:gap-5 overflow-x-auto no-scrollbar py-2 scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory"
                       >
                         {(event.images || []).map((img) => {
                           const displayCaption =
@@ -1721,7 +1721,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                           return (
                             <div
                               key={img.id}
-                              className={`snap-start shrink-0 w-[172px] sm:w-[216px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border ${
+                              className={`snap-start shrink-0 w-[260px] sm:w-[310px] rounded-2xl overflow-hidden transition-all flex flex-col shadow-lg border ${
                                 isLightMode
                                   ? 'bg-white border-zinc-200 text-zinc-900 hover:border-zinc-400'
                                   : 'bg-[#0e1017] border-white/[0.08] text-white hover:border-white/30'
@@ -2244,16 +2244,14 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             momentTouchDistRef.current = dist;
             momentLastScaleRef.current = momentZoomScale;
           } else if (e.touches.length === 1) {
-            if (momentZoomScale > 1.05) {
-              isDraggingMomentRef.current = true;
-              hasMomentDraggedRef.current = false;
-              dragMomentStartRef.current = {
-                clientX: e.touches[0].clientX,
-                clientY: e.touches[0].clientY,
-                startX: momentPanPos.x,
-                startY: momentPanPos.y,
-              };
-            }
+            isDraggingMomentRef.current = true;
+            hasMomentDraggedRef.current = false;
+            dragMomentStartRef.current = {
+              clientX: e.touches[0].clientX,
+              clientY: e.touches[0].clientY,
+              startX: momentPanPos.x,
+              startY: momentPanPos.y,
+            };
             const now = Date.now();
             if (now - momentLastTapRef.current < 300) {
               setMomentZoomScale((prev) => {
@@ -2281,21 +2279,39 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             if (nextScale <= 1.05) {
               setMomentPanPos({ x: 0, y: 0 });
             }
-          } else if (e.touches.length === 1 && isDraggingMomentRef.current && momentZoomScale > 1.05) {
-            e.stopPropagation();
+          } else if (e.touches.length === 1 && isDraggingMomentRef.current) {
             const dx = e.touches[0].clientX - dragMomentStartRef.current.clientX;
             const dy = e.touches[0].clientY - dragMomentStartRef.current.clientY;
-            if (Math.hypot(dx, dy) > 5) {
+            if (momentZoomScale > 1.05) {
+              e.stopPropagation();
+              if (Math.hypot(dx, dy) > 5) {
+                hasMomentDraggedRef.current = true;
+              }
+              setMomentPanPos({
+                x: dragMomentStartRef.current.startX + dx,
+                y: dragMomentStartRef.current.startY + dy,
+              });
+            } else if (lightboxMomentsList.length > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
               hasMomentDraggedRef.current = true;
+              setMomentPanPos({ x: dx * 0.35, y: 0 });
             }
-            setMomentPanPos({
-              x: dragMomentStartRef.current.startX + dx,
-              y: dragMomentStartRef.current.startY + dy,
-            });
           }
         };
 
         const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+          if (isDraggingMomentRef.current && momentZoomScale <= 1.05 && e.changedTouches.length === 1) {
+            const dx = e.changedTouches[0].clientX - dragMomentStartRef.current.clientX;
+            const dy = e.changedTouches[0].clientY - dragMomentStartRef.current.clientY;
+            setMomentPanPos({ x: 0, y: 0 });
+            if (lightboxMomentsList.length > 1 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+              hasMomentDraggedRef.current = true;
+              if (dx < 0) {
+                handleLightboxNext();
+              } else {
+                handleLightboxPrev();
+              }
+            }
+          }
           isDraggingMomentRef.current = false;
           if (e.touches.length < 2) {
             momentTouchDistRef.current = null;
@@ -2308,24 +2324,23 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         };
 
         const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-          if (momentZoomScale > 1.05) {
-            e.preventDefault();
-            isDraggingMomentRef.current = true;
-            hasMomentDraggedRef.current = false;
-            dragMomentStartRef.current = {
-              clientX: e.clientX,
-              clientY: e.clientY,
-              startX: momentPanPos.x,
-              startY: momentPanPos.y,
-            };
-          }
+          e.preventDefault();
+          isDraggingMomentRef.current = true;
+          hasMomentDraggedRef.current = false;
+          dragMomentStartRef.current = {
+            clientX: e.clientX,
+            clientY: e.clientY,
+            startX: momentPanPos.x,
+            startY: momentPanPos.y,
+          };
         };
 
         const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-          if (isDraggingMomentRef.current && momentZoomScale > 1.05) {
-            e.preventDefault();
-            const dx = e.clientX - dragMomentStartRef.current.clientX;
-            const dy = e.clientY - dragMomentStartRef.current.clientY;
+          if (!isDraggingMomentRef.current) return;
+          e.preventDefault();
+          const dx = e.clientX - dragMomentStartRef.current.clientX;
+          const dy = e.clientY - dragMomentStartRef.current.clientY;
+          if (momentZoomScale > 1.05) {
             if (Math.hypot(dx, dy) > 5) {
               hasMomentDraggedRef.current = true;
             }
@@ -2333,10 +2348,26 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               x: dragMomentStartRef.current.startX + dx,
               y: dragMomentStartRef.current.startY + dy,
             });
+          } else if (lightboxMomentsList.length > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
+            hasMomentDraggedRef.current = true;
+            setMomentPanPos({ x: dx * 0.35, y: 0 });
           }
         };
 
-        const handleMouseUp = () => {
+        const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+          if (isDraggingMomentRef.current && momentZoomScale <= 1.05) {
+            const dx = e.clientX - dragMomentStartRef.current.clientX;
+            const dy = e.clientY - dragMomentStartRef.current.clientY;
+            setMomentPanPos({ x: 0, y: 0 });
+            if (lightboxMomentsList.length > 1 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+              hasMomentDraggedRef.current = true;
+              if (dx < 0) {
+                handleLightboxNext();
+              } else {
+                handleLightboxPrev();
+              }
+            }
+          }
           isDraggingMomentRef.current = false;
         };
 
@@ -2392,7 +2423,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                     <span>{currentMoment.dateStr}</span>
                   </span>
                 )}
-                <span className={`font-mono-tech text-xs hidden md:inline shrink-0 ${
+                <span className={`font-mono-tech text-xs shrink-0 ${
                   momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
                 }`}>
                   ({((currentMoment.imageIndexInCategory ?? 0) + 1)} / {(currentMoment.totalImagesInCategory ?? lightboxMomentsList.length)})
@@ -2423,52 +2454,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               </div>
             </div>
 
-            {/* Navigation Arrows: Positioned at the left and right middle points of the centralized picture */}
-            {lightboxMomentsList.length > 1 && momentZoomScale <= 1.05 && (
-              <button
-                type="button"
-                id="lightbox-prev-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMomentZoomScale(1);
-                  setMomentPanPos({ x: 0, y: 0 });
-                  handleLightboxPrev();
-                }}
-                className={`absolute left-3 sm:left-6 md:left-8 top-1/2 -translate-y-1/2 z-[10000] w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-2xl border ${
-                  momentCardMode === 'light'
-                    ? 'bg-white/90 hover:bg-white text-zinc-900 border-zinc-300 shadow-zinc-300/40'
-                    : 'bg-black/60 hover:bg-black/80 text-white border-white/20'
-                }`}
-                aria-label="Previous photo"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-            )}
-
-            {lightboxMomentsList.length > 1 && momentZoomScale <= 1.05 && (
-              <button
-                type="button"
-                id="lightbox-next-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMomentZoomScale(1);
-                  setMomentPanPos({ x: 0, y: 0 });
-                  handleLightboxNext();
-                }}
-                className={`absolute right-3 sm:right-6 md:right-8 top-1/2 -translate-y-1/2 z-[10000] w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95 shadow-2xl border ${
-                  momentCardMode === 'light'
-                    ? 'bg-white/90 hover:bg-white text-zinc-900 border-zinc-300 shadow-zinc-300/40'
-                    : 'bg-black/60 hover:bg-black/80 text-white border-white/20'
-                }`}
-                aria-label="Next photo"
-              >
-                <ChevronRight className="w-6 h-6" />
-              </button>
-            )}
-
-            {/* Centralized Photo Display Area - Perfectly centered in viewport */}
+            {/* Centralized Horizontally Swipable Photo Display Area - Perfectly centered in viewport */}
             <div 
-              className="absolute inset-0 w-full h-full flex items-center justify-center p-4 sm:p-10 md:p-14 overflow-hidden select-none"
+              className="absolute inset-0 w-full h-full flex items-center justify-center p-4 sm:p-10 md:p-14 overflow-hidden select-none touch-pan-y"
               onTouchStart={handleTouchStart}
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
@@ -2488,10 +2476,10 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                   // Clicking on image toggles background mode
                   setMomentCardMode((prev) => (prev === 'light' ? 'dark' : 'light'));
                 }}
-                className="w-full h-full flex items-center justify-center transition-transform duration-75 ease-out origin-center cursor-default"
+                className="w-full h-full flex items-center justify-center transition-transform duration-150 ease-out origin-center cursor-default"
                 style={{
                   transform: `translate(${momentPanPos.x}px, ${momentPanPos.y}px) scale(${momentZoomScale})`,
-                  cursor: momentZoomScale > 1.05 ? 'grab' : 'pointer',
+                  cursor: momentZoomScale > 1.05 ? 'grab' : lightboxMomentsList.length > 1 ? 'grab' : 'pointer',
                 }}
               >
                 <img

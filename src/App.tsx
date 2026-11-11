@@ -761,16 +761,19 @@ export default function App() {
   };
 
   const handleUpdateSingleSet = (updatedSet: ClassSet) => {
+    if ((updatedSet as any).isHydratingPlaceholder) {
+      return;
+    }
     const exists = sets.some((s) => s.id === updatedSet.id);
     const updated = exists ? sets.map((s) => (s.id === updatedSet.id ? updatedSet : s)) : [updatedSet, ...sets];
     setSets(updated);
 
     // Never store static Crownfield demo albums in D1
     if (!isCrownfieldDemoAlbum(updatedSet)) {
-      const isHostOnlyRetention = currentUser?.role === 'master_host' && currentUser?.email?.toLowerCase() !== updatedSet.classRepEmail?.toLowerCase();
+      const isHostUser = currentUser?.role === 'master_host';
       saveAlbumToD1(updatedSet.id, updatedSet, {
         version: updatedSet.version ?? 1,
-        hostOnlyRetentionUpdate: isHostOnlyRetention,
+        hostControlCenterUpdate: isHostUser,
       }).then((res) => {
         if (res.conflict) {
           setVersionConflictMessage(res.message || 'Conflict: This album was modified in another session. Please reload.');
@@ -1686,15 +1689,21 @@ export default function App() {
                 const matchedSet = sets.find(
                   (s) =>
                     !isCrownfieldDemoAlbum(s) &&
+                    !s.deletedAt &&
                     ((currentUser.assignedSetId && s.id === currentUser.assignedSetId) ||
                       (currentUser.email &&
-                        s.classRepEmail?.toLowerCase().trim() === currentUser.email.toLowerCase().trim()))
+                        s.classRepEmail?.toLowerCase().trim() === currentUser.email.toLowerCase().trim()) ||
+                      (currentUser.email &&
+                        Array.isArray((s as any).coAdmins) &&
+                        (s as any).coAdmins.some(
+                          (c: any) => String(c?.email || '').toLowerCase().trim() === currentUser.email.toLowerCase().trim()
+                        )))
                 );
                 if (matchedSet) {
                   activeSetForRep = matchedSet;
                 } else {
                   // Never fall back a real Class Admin to a Crownfield Demo Album while D1 is loading
-                  const assignedId = currentUser.assignedSetId || 'draft-album';
+                  const assignedId = currentUser.assignedSetId || 'unilorin-unilorin-pad-2026';
                   const matchedUni =
                     universities.find((u) => assignedId.startsWith(`${u.id}-`)) ||
                     universities.find((u) => u.id === selectedUniversityId) ||
@@ -1704,6 +1713,7 @@ export default function App() {
                       assignedId.includes(d.id.replace(/^dept-/, ''))
                     ) ||
                     matchedUni?.departments?.find((d) => d.id === selectedDepartmentId) ||
+                    matchedUni?.departments?.find((d) => d.id === 'dept-unilorin-pad') ||
                     matchedUni?.departments?.[0];
                   const yearMatch = assignedId.match(/(20\d{2})$/);
                   const resolvedYear = yearMatch ? Number(yearMatch[1]) : 2026;
@@ -1712,7 +1722,7 @@ export default function App() {
                     institutionId: matchedUni?.id || 'unilorin',
                     institutionName: matchedUni?.name || 'University of Ilorin',
                     institutionLogoUrl: matchedUni?.logoUrl || '',
-                    departmentId: matchedDept?.id || 'dept-unilorin-pubadmin',
+                    departmentId: matchedDept?.id || 'dept-unilorin-pad',
                     departmentName: matchedDept?.name || 'Public Administration',
                     departmentLogoUrl: matchedDept?.logoUrl || matchedUni?.logoUrl || '',
                     faculty: matchedDept?.faculty || 'Faculty of Management Sciences',
@@ -1741,6 +1751,7 @@ export default function App() {
                     awards: [],
                     voices: [],
                   };
+                  (activeSetForRep as any).isHydratingPlaceholder = true;
                 }
               }
 

@@ -1023,6 +1023,130 @@ export async function processAnnualReminders(
   };
 }
 
+// Helper: Canonicalize department slug / name so dept-unilorin-pad, dept-unilorin-pubadmin, and "Public Administration" match reliably
+export function normalizeDepartmentCohortSlug(institutionId: string, departmentId: string, departmentName?: string): string {
+  const inst = String(institutionId || '').trim().toLowerCase().replace(/^uni-/, '');
+  const rawDeptId = String(departmentId || '').trim().toLowerCase();
+  const rawDeptName = String(departmentName || '').trim().toLowerCase();
+
+  // Check common Public Administration aliases (especially UNILORIN Public Administration)
+  if (
+    rawDeptId.includes('pubadmin') ||
+    rawDeptId.endsWith('-pad') ||
+    rawDeptId === 'pad' ||
+    rawDeptId.includes('public-administration') ||
+    rawDeptName === 'public administration' ||
+    rawDeptName === 'department of public administration'
+  ) {
+    return inst === 'unilorin' ? 'dept-unilorin-pad' : `dept-${inst}-pad`;
+  }
+
+  if (rawDeptName) {
+    const nameSlug = rawDeptName
+      .replace(/^department\s+of\s+/i, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (nameSlug === 'public-administration') {
+      return inst === 'unilorin' ? 'dept-unilorin-pad' : `dept-${inst}-pad`;
+    }
+  }
+
+  // Strip redundant prefixes to compare core slug
+  const cleaned = rawDeptId
+    .replace(/^dept-/, '')
+    .replace(new RegExp(`^${inst}-`), '');
+  return cleaned ? `dept-${inst}-${cleaned}` : rawDeptId;
+}
+
+export function getCanonicalAlbumId(institutionId: string, departmentId: string, graduationYear: number, departmentName?: string): string {
+  const inst = String(institutionId || '').trim().toLowerCase();
+  const canonicalDept = normalizeDepartmentCohortSlug(inst, departmentId, departmentName);
+  const deptShort = canonicalDept.replace(/^dept-/, '');
+  return `${inst}-${deptShort}-${graduationYear}`;
+}
+
+// Automatic 30-day expired soft-deleted album cleanup (respects keepByHost / keptByHostOnly and shared R2 references)
+export async function cleanupExpiredSoftDeletedAlbums(env: Env): Promise<{ purgedAlbumIds: string[]; skippedHostKept: string[] }> {
+  const purgedAlbumIds: string[] = [];
+  const skippedHostKept: string[] = [];
+  if (!env.DB) return { purgedAlbumIds, skippedHostKept };
+
+  try {
+    const allSetsRes = await env.DB.prepare(`SELECT * FROM class_sets`).all();
+    const allRows = allSetsRes?.results || [];
+    const nowMs = Date.now();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+
+    // Collect all R2 keys referenced by non-expired albums so we NEVER delete a shared R2 object
+    const activeReferencedKeys = new Set<string>();
+    const expiredRows: Array<{ row: any; parsed: any }> = [];
+
+    for (const row of allRows) {
+      let parsed: any = {};
+      try { parsed = JSON.parse(row.data_json || '{}'); } catch {}
+      const isDeleted = row.status === 'deleted' || Boolean(parsed.deletedAt);
+      const deletedAtMs = parsed.deletedAt ? new Date(parsed.deletedAt).getTime() : 0;
+      const isExpired = isDeleted && deletedAtMs > 0 && (nowMs - deletedAtMs >= thirtyDaysMs);
+      const isHostKept = Boolean(parsed.keepByHost || parsed.keptByHostOnly);
+
+      if (isExpired && !isHostKept) {
+        expiredRows.push({ row, parsed });
+      } else {
+        if (isExpired && isHostKept) {
+          skippedHostKept.push(String(row.id));
+        }
+        for (const k of collectAlbumMediaKeys(parsed)) {
+          activeReferencedKeys.add(k);
+        }
+      }
+    }
+
+    for (const { row, parsed } of expiredRows) {
+      const albumId = String(row.id);
+      const candidateKeys = new Set<string>(collectAlbumMediaKeys(parsed));
+
+      try {
+        const subRows = await env.DB.prepare(`SELECT photo_key, payload_json FROM profile_submissions WHERE album_id = ?`).bind(albumId).all();
+        for (const sr of subRows?.results || []) {
+          const pk = extractMediaKeyFromUrl(sr.photo_key);
+          if (pk) candidateKeys.add(pk);
+          if (sr.payload_json) {
+            try {
+              for (const k of collectAlbumMediaKeys(JSON.parse(sr.payload_json))) candidateKeys.add(k);
+            } catch {}
+          }
+        }
+      } catch {}
+
+      try {
+        const assetRows = await env.DB.prepare(`SELECT object_key FROM media_assets WHERE set_id = ?`).bind(albumId).all();
+        for (const ar of assetRows?.results || []) {
+          const ak = extractMediaKeyFromUrl(ar.object_key);
+          if (ak) candidateKeys.add(ak);
+        }
+      } catch {}
+
+      for (const key of candidateKeys) {
+        if (!activeReferencedKeys.has(key)) {
+          if (env.BUCKET) {
+            try { await env.BUCKET.delete(key); } catch {}
+          }
+          try { await env.DB.prepare(`DELETE FROM media_assets WHERE object_key = ?`).bind(key).run(); } catch {}
+        }
+      }
+
+      try { await env.DB.prepare(`DELETE FROM profile_submissions WHERE album_id = ?`).bind(albumId).run(); } catch {}
+      try { await env.DB.prepare(`DELETE FROM slot_ledger WHERE album_id = ?`).bind(albumId).run(); } catch {}
+      try { await env.DB.prepare(`DELETE FROM class_sets WHERE id = ?`).bind(albumId).run(); } catch {}
+      purgedAlbumIds.push(albumId);
+    }
+  } catch (err: any) {
+    console.warn('30-day soft-delete cleanup error:', err.message);
+  }
+
+  return { purgedAlbumIds, skippedHostKept };
+}
+
 // ============================================================================
 // WORKER ENTRY POINT (fetch + scheduled cron)
 // ============================================================================
@@ -1033,6 +1157,11 @@ export default {
       await processAnnualReminders(env, { dryRun: false });
     } catch (cronErr: any) {
       console.error('Scheduled reminder cron run encountered error:', cronErr.message);
+    }
+    try {
+      await cleanupExpiredSoftDeletedAlbums(env);
+    } catch (cleanupErr: any) {
+      console.error('Scheduled 30-day album cleanup encountered error:', cleanupErr.message);
     }
   },
 
@@ -1061,10 +1190,44 @@ export default {
         { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
 
-    // Helper: delete R2 object from BUCKET and media_assets record
-    const deleteR2ObjectAndRecord = async (keyOrUrl: unknown) => {
+    // Helper: delete R2 object from BUCKET and media_assets record ONLY if no other album, submission, institution, or site content references it
+    const deleteR2ObjectAndRecord = async (keyOrUrl: unknown, excludingAlbumId?: string) => {
       const key = extractMediaKeyFromUrl(keyOrUrl);
       if (!key) return;
+      if (env.DB) {
+        try {
+          const otherSets = await env.DB.prepare(`SELECT id, data_json FROM class_sets WHERE status != 'deleted'`).all();
+          for (const sRow of otherSets?.results || []) {
+            if (excludingAlbumId && String(sRow.id) === String(excludingAlbumId)) continue;
+            if (String(sRow.data_json || '').includes(key)) {
+              // Key is still referenced by another album! Do NOT delete from R2.
+              return;
+            }
+          }
+          const otherSub = excludingAlbumId
+            ? await env.DB.prepare(
+                `SELECT id FROM profile_submissions WHERE album_id != ? AND status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
+              ).bind(excludingAlbumId, key, `%${key}%`).first()
+            : await env.DB.prepare(
+                `SELECT id FROM profile_submissions WHERE status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
+              ).bind(key, `%${key}%`).first();
+          if (otherSub) {
+            return;
+          }
+          const otherInst = await env.DB.prepare(
+            `SELECT id FROM institutions WHERE logo_url LIKE ? OR data_json LIKE ?`
+          ).bind(`%${key}%`, `%${key}%`).first().catch(() => null);
+          if (otherInst) {
+            return;
+          }
+          const otherSite = await env.DB.prepare(
+            `SELECT key FROM site_content WHERE value_json LIKE ?`
+          ).bind(`%${key}%`).first().catch(() => null);
+          if (otherSite) {
+            return;
+          }
+        } catch {}
+      }
       if (env.BUCKET) {
         try {
           await env.BUCKET.delete(key);
@@ -1906,15 +2069,23 @@ export default {
       if (env.DB) {
         const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
         if (albumRow) {
-          const isOwner = String(albumRow.admin_user_id || '').toLowerCase() === actorEmail.toLowerCase();
+          let parsed: any = {};
+          try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+          const actorLower = actorEmail.toLowerCase();
+          const coAdmins = Array.isArray(parsed.coAdmins) ? parsed.coAdmins : [];
+          const isOwner =
+            String(albumRow.admin_user_id || '').toLowerCase() === actorLower ||
+            String(parsed.classRepEmail || '').toLowerCase() === actorLower ||
+            coAdmins.some((c: any) => String(typeof c === 'string' ? c : c?.email || '').toLowerCase() === actorLower);
           if (!isOwner && sessionUser.role !== 'master_host') {
             return new Response(JSON.stringify({ error: 'Forbidden: You do not own this album' }), {
               status: 403,
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           }
-          let parsed: any = {};
-          try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+          parsed.wasPublishedBeforeDelete = Boolean(
+            parsed.published || parsed.isPublished || albumRow.status === 'published'
+          );
           parsed.deletedAt = deletedAt;
           parsed.published = false;
           parsed.lifecycleStatus = 'deleted';
@@ -1953,17 +2124,36 @@ export default {
       if (env.DB) {
         const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
         if (albumRow) {
-          const isOwner = String(albumRow.admin_user_id || '').toLowerCase() === actorEmail.toLowerCase();
+          let parsed: any = {};
+          try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+          const actorLower = actorEmail.toLowerCase();
+          const coAdmins = Array.isArray(parsed.coAdmins) ? parsed.coAdmins : [];
+          const isOwner =
+            String(albumRow.admin_user_id || '').toLowerCase() === actorLower ||
+            String(parsed.classRepEmail || '').toLowerCase() === actorLower ||
+            coAdmins.some((c: any) => String(typeof c === 'string' ? c : c?.email || '').toLowerCase() === actorLower);
           if (!isOwner && sessionUser.role !== 'master_host') {
             return new Response(JSON.stringify({ error: 'Forbidden: You do not own this album' }), {
               status: 403,
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           }
-          let parsed: any = {};
-          try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+          // Enforce 30-day recovery window for non-Host admins
+          if (sessionUser.role !== 'master_host' && parsed.deletedAt) {
+            const deletedMs = new Date(parsed.deletedAt).getTime();
+            const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+            if (!isNaN(deletedMs) && Date.now() - deletedMs > thirtyDaysMs) {
+              return new Response(
+                JSON.stringify({ error: 'Recovery window expired: Soft-deleted albums can only be restored within 30 days.' }),
+                { status: 410, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+          }
           delete parsed.deletedAt;
-          const nextStatus = parsed.published ? 'published' : 'draft';
+          const wasPublished = Boolean(parsed.wasPublishedBeforeDelete || parsed.published);
+          delete parsed.wasPublishedBeforeDelete;
+          parsed.published = wasPublished;
+          const nextStatus = wasPublished ? 'published' : 'draft';
           parsed.lifecycleStatus = nextStatus;
           parsed.version = (Number(parsed.version) || 1) + 1;
           await env.DB.prepare(
@@ -1984,64 +2174,84 @@ export default {
       });
     }
 
-    // 0f. Permanent Delete Album (Host only) — also deletes all R2 objects for this album
+    // 0f. Permanent Delete Album (Host or Album Owner confirming permanent purge) — deletes exclusive D1 & R2 objects
     const permDeleteMatch = path.match(/^\/api\/albums\/([^/]+)\/delete-permanent$/);
     if (permDeleteMatch && request.method === 'POST') {
       const albumId = decodeURIComponent(permDeleteMatch[1]);
       const sessionUser = await getSessionUser();
-      if (!sessionUser || sessionUser.role !== 'master_host') {
-        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
-          status: 403,
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       const actorEmail = sessionUser.email;
+      let deletedR2Count = 0;
 
       if (env.DB) {
+        const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (albumRow) {
+          let parsedCheck: any = {};
+          try { parsedCheck = JSON.parse(albumRow.data_json || '{}'); } catch {}
+          const ownerEmail = String(albumRow.admin_user_id || parsedCheck.classRepEmail || '').toLowerCase();
+          const isOwner = Boolean(ownerEmail && ownerEmail === actorEmail.toLowerCase());
+          if (!isOwner && sessionUser.role !== 'master_host') {
+            return new Response(JSON.stringify({ error: 'Forbidden: Only the album owner or Host can permanently delete this album.' }), {
+              status: 403,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+        }
+
         try {
-          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
+          const candidateKeys = new Set<string>();
           if (albumRow?.data_json) {
             try {
               const parsed = JSON.parse(albumRow.data_json);
-              for (const k of collectAlbumMediaKeys(parsed)) {
-                await deleteR2ObjectAndRecord(k);
-              }
+              for (const k of collectAlbumMediaKeys(parsed)) candidateKeys.add(k);
             } catch {}
           }
           const subRows = await env.DB.prepare(`SELECT photo_key, payload_json FROM profile_submissions WHERE album_id = ?`).bind(albumId).all();
           for (const sr of subRows?.results || []) {
-            if (sr.photo_key) await deleteR2ObjectAndRecord(sr.photo_key);
+            const pk = extractMediaKeyFromUrl(sr.photo_key);
+            if (pk) candidateKeys.add(pk);
             if (sr.payload_json) {
               try {
                 const sp = JSON.parse(sr.payload_json);
-                for (const k of collectAlbumMediaKeys(sp)) {
-                  await deleteR2ObjectAndRecord(k);
-                }
+                for (const k of collectAlbumMediaKeys(sp)) candidateKeys.add(k);
               } catch {}
             }
           }
           const assetRows = await env.DB.prepare(`SELECT object_key FROM media_assets WHERE set_id = ?`).bind(albumId).all();
           for (const ar of assetRows?.results || []) {
-            if (ar.object_key) await deleteR2ObjectAndRecord(ar.object_key);
+            const ak = extractMediaKeyFromUrl(ar.object_key);
+            if (ak) candidateKeys.add(ak);
           }
+
+          for (const k of candidateKeys) {
+            await deleteR2ObjectAndRecord(k, albumId);
+            deletedR2Count++;
+          }
+
           await env.DB.prepare(`DELETE FROM profile_submissions WHERE album_id = ?`).bind(albumId).run();
+          await env.DB.prepare(`DELETE FROM slot_ledger WHERE album_id = ?`).bind(albumId).run();
           await env.DB.prepare(`DELETE FROM class_sets WHERE id = ?`).bind(albumId).run();
         } catch {}
       }
 
       await logAudit(
         'album_permanently_deleted',
-        `Album ${albumId} permanently deleted by ${actorEmail}. All data and R2 media objects erased.`,
+        `Album ${albumId} permanently deleted by ${actorEmail}. Exclusive D1 records and ${deletedR2Count} R2 media objects erased.`,
         actorEmail
       );
 
-      return new Response(JSON.stringify({ success: true, permanentlyDeleted: true }), {
+      return new Response(JSON.stringify({ success: true, permanentlyDeleted: true, deletedR2Count }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // 0g. Delete Individual Profile (also deletes its R2 photo object)
+    // 0g. Delete Individual Profile (updates D1 data_json + profile_submissions and deletes exclusive R2 photo object)
     const deleteProfileMatch = path.match(/^\/api\/albums\/([^/]+)\/profiles\/([^/]+)$/);
     if (deleteProfileMatch && request.method === 'DELETE') {
       const albumId = decodeURIComponent(deleteProfileMatch[1]);
@@ -2051,23 +2261,39 @@ export default {
 
       if (env.DB) {
         try {
+          const keysToDelete = new Set<string>();
           const subRow = await env.DB.prepare(`SELECT photo_key, payload_json FROM profile_submissions WHERE id = ? AND album_id = ?`).bind(profileId, albumId).first();
           if (subRow) {
-            if (subRow.photo_key) await deleteR2ObjectAndRecord(subRow.photo_key);
+            const pk = extractMediaKeyFromUrl(subRow.photo_key);
+            if (pk) keysToDelete.add(pk);
             if (subRow.payload_json) {
               try {
                 const p = JSON.parse(subRow.payload_json);
-                for (const k of collectAlbumMediaKeys(p)) await deleteR2ObjectAndRecord(k);
+                for (const k of collectAlbumMediaKeys(p)) keysToDelete.add(k);
               } catch {}
             }
+            await env.DB.prepare(`UPDATE profile_submissions SET status = 'removed', updated_at = datetime('now') WHERE id = ? AND album_id = ?`).bind(profileId, albumId).run();
           }
+
           const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
           if (albumRow?.data_json) {
             try {
               const parsed = JSON.parse(albumRow.data_json);
               const st = (parsed.students || []).find((s: any) => s.id === profileId);
               if (st) {
-                for (const k of collectAlbumMediaKeys(st)) await deleteR2ObjectAndRecord(k);
+                for (const k of collectAlbumMediaKeys(st)) keysToDelete.add(k);
+              }
+              parsed.students = (parsed.students || []).filter((s: any) => s.id !== profileId);
+              parsed.version = (Number(parsed.version) || 1) + 1;
+              await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+                .bind(JSON.stringify(parsed), albumId)
+                .run();
+
+              const remainingKeys = collectAlbumMediaKeys(parsed);
+              for (const k of keysToDelete) {
+                if (!remainingKeys.has(k)) {
+                  await deleteR2ObjectAndRecord(k, albumId);
+                }
               }
             } catch {}
           }
@@ -2086,7 +2312,7 @@ export default {
       });
     }
 
-    // 0h. Delete Individual Memory (also deletes its R2 photo objects)
+    // 0h. Delete Individual Memory (updates D1 data_json and deletes exclusive R2 photo objects)
     const deleteMemoryMatch = path.match(/^\/api\/albums\/([^/]+)\/memories\/([^/]+)$/);
     if (deleteMemoryMatch && request.method === 'DELETE') {
       const albumId = decodeURIComponent(deleteMemoryMatch[1]);
@@ -2099,9 +2325,37 @@ export default {
           const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
           if (albumRow?.data_json) {
             const parsed = JSON.parse(albumRow.data_json);
-            const mem = (parsed.memories || []).find((m: any) => m.id === memoryId);
-            if (mem) {
-              for (const k of collectAlbumMediaKeys(mem)) await deleteR2ObjectAndRecord(k);
+            const keysToDelete = new Set<string>();
+            const rawMemories = Array.isArray(parsed.memories) ? parsed.memories : [];
+            const nextMemories: any[] = [];
+            for (const m of rawMemories) {
+              if (m.id === memoryId) {
+                for (const k of collectAlbumMediaKeys(m)) keysToDelete.add(k);
+                continue;
+              }
+              if (Array.isArray(m.images)) {
+                const targetImg = m.images.find((img: any) => img.id === memoryId);
+                if (targetImg) {
+                  for (const k of collectAlbumMediaKeys(targetImg)) keysToDelete.add(k);
+                  const remainingImgs = m.images.filter((img: any) => img.id !== memoryId);
+                  if (remainingImgs.length > 0) {
+                    nextMemories.push({ ...m, images: remainingImgs });
+                  }
+                  continue;
+                }
+              }
+              nextMemories.push(m);
+            }
+            parsed.memories = nextMemories;
+            parsed.version = (Number(parsed.version) || 1) + 1;
+            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+              .bind(JSON.stringify(parsed), albumId)
+              .run();
+            const remainingKeys = collectAlbumMediaKeys(parsed);
+            for (const k of keysToDelete) {
+              if (!remainingKeys.has(k)) {
+                await deleteR2ObjectAndRecord(k, albumId);
+              }
             }
           }
         } catch {}
@@ -2119,7 +2373,7 @@ export default {
       });
     }
 
-    // 0i. Delete Individual Award (also deletes its R2 photo object if any)
+    // 0i. Delete Individual Award (updates D1 data_json and deletes exclusive R2 photo object if any)
     const deleteAwardMatch = path.match(/^\/api\/albums\/([^/]+)\/awards\/([^/]+)$/);
     if (deleteAwardMatch && request.method === 'DELETE') {
       const albumId = decodeURIComponent(deleteAwardMatch[1]);
@@ -2133,8 +2387,17 @@ export default {
           if (albumRow?.data_json) {
             const parsed = JSON.parse(albumRow.data_json);
             const aw = (parsed.awards || []).find((a: any) => a.id === awardId);
-            if (aw) {
-              for (const k of collectAlbumMediaKeys(aw)) await deleteR2ObjectAndRecord(k);
+            const keysToDelete = aw ? collectAlbumMediaKeys(aw) : new Set<string>();
+            parsed.awards = (parsed.awards || []).filter((a: any) => a.id !== awardId);
+            parsed.version = (Number(parsed.version) || 1) + 1;
+            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+              .bind(JSON.stringify(parsed), albumId)
+              .run();
+            const remainingKeys = collectAlbumMediaKeys(parsed);
+            for (const k of keysToDelete) {
+              if (!remainingKeys.has(k)) {
+                await deleteR2ObjectAndRecord(k, albumId);
+              }
             }
           }
         } catch {}
@@ -2147,6 +2410,917 @@ export default {
       );
 
       return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 0i-2. Host & Owner Storage Audit, Duplicate Cohort Inventory & Media Health Inspector
+    if (path === '/api/admin/storage-audit' && request.method === 'GET') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const hostName = url.hostname.toLowerCase();
+      const explicitEnv = String((env as any).ENVIRONMENT || (env as any).ENV_MODE || '').trim().toLowerCase();
+      const environmentMode: 'development' | 'staging' | 'production' =
+        explicitEnv === 'production' || explicitEnv === 'staging' || explicitEnv === 'development'
+          ? (explicitEnv as 'development' | 'staging' | 'production')
+          : hostName.includes('localhost') || hostName.includes('127.0.0.1') || hostName.startsWith('ais-dev-')
+          ? 'development'
+          : hostName.startsWith('ais-pre-') || hostName.includes('staging') || hostName.includes('preview')
+          ? 'staging'
+          : 'production';
+
+      if (!env.DB) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            environment: environmentMode,
+            d1Available: false,
+            r2Available: Boolean(env.BUCKET),
+            duplicateCohorts: [],
+            albumsInventory: [],
+            deletedAlbumsInventory: [],
+            mediaHealth: {
+              totalR2Objects: 0,
+              totalMediaAssetRows: 0,
+              brokenReferences: [],
+              orphanedR2Objects: [],
+              duplicateMediaGroups: [],
+            },
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const allSetsRes = await env.DB.prepare(`SELECT * FROM class_sets ORDER BY created_at DESC`).all();
+      const allSets = allSetsRes?.results || [];
+      const allSubsRes = await env.DB.prepare(`SELECT * FROM profile_submissions`).all();
+      const allSubs = allSubsRes?.results || [];
+      const allAssetsRes = await env.DB.prepare(`SELECT * FROM media_assets`).all();
+      const allAssets = allAssetsRes?.results || [];
+      const allLedgerRes = await env.DB.prepare(`SELECT * FROM slot_ledger`).all();
+      const allLedgers = allLedgerRes?.results || [];
+
+      // List R2 objects (up to 1000) to verify physical presence in BUCKET
+      const r2ObjectMap = new Map<string, { key: string; size: number; uploaded?: string }>();
+      if (env.BUCKET && typeof env.BUCKET.list === 'function') {
+        try {
+          const listed = await env.BUCKET.list({ limit: 1000 });
+          for (const obj of listed?.objects || []) {
+            if (obj?.key) {
+              r2ObjectMap.set(String(obj.key), {
+                key: String(obj.key),
+                size: Number(obj.size) || 0,
+                uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : undefined,
+              });
+            }
+          }
+        } catch {}
+      }
+
+      const allReferencedKeys = new Set<string>();
+      const brokenReferences: Array<{
+        albumId: string;
+        albumName: string;
+        itemType: 'student_photo' | 'student_secondary_photo' | 'memory_photo' | 'banner' | 'logo';
+        itemId: string;
+        itemLabel: string;
+        referencedUrl: string;
+        extractedKey: string;
+        recoverableKey?: string;
+      }> = [];
+
+      const cohortGroups = new Map<string, any[]>();
+      const albumsInventory: any[] = [];
+      const deletedAlbumsInventory: any[] = [];
+
+      for (const row of allSets) {
+        let parsed: any = {};
+        try { parsed = JSON.parse(row.data_json || '{}'); } catch {}
+        const albumId = String(row.id || parsed.id || '');
+        const instId = String(row.institution_id || parsed.institutionId || '').trim();
+        const deptId = String(row.department_id || parsed.departmentId || '').trim();
+        const deptName = String(parsed.departmentName || '').trim();
+        const gradYear = Number(row.graduation_year || parsed.graduationYear) || 2026;
+        const canonicalDept = normalizeDepartmentCohortSlug(instId, deptId, deptName);
+        const canonicalAlbumId = getCanonicalAlbumId(instId, deptId, gradYear, deptName);
+        const cohortKey = `${instId.toLowerCase()}::${canonicalDept}::${gradYear}`;
+
+        const rowAdmin = String(row.admin_user_id || parsed.classRepEmail || '').trim().toLowerCase();
+        if (sessionUser.role !== 'master_host' && rowAdmin !== sessionUser.email.toLowerCase()) {
+          continue;
+        }
+
+        const students = Array.isArray(parsed.students) ? parsed.students : [];
+        const memories = Array.isArray(parsed.memories) ? parsed.memories : [];
+        const albumSubs = allSubs.filter((s: any) => String(s.album_id) === albumId);
+        const albumLedgers = allLedgers.filter((l: any) => String(l.album_id) === albumId);
+        const albumAssets = allAssets.filter((a: any) => String(a.set_id) === albumId);
+        const mediaKeys = collectAlbumMediaKeys(parsed);
+        for (const k of mediaKeys) allReferencedKeys.add(k);
+
+        // Check each student and memory media reference against R2
+        const findRecoverableKey = (missingKey: string): string | undefined => {
+          if (r2ObjectMap.has(missingKey)) return missingKey;
+          const fileName = missingKey.split('/').pop() || '';
+          if (!fileName) return undefined;
+          for (const existingKey of r2ObjectMap.keys()) {
+            if (existingKey.endsWith(`/${fileName}`)) return existingKey;
+          }
+          for (const asset of allAssets) {
+            const ak = String(asset.object_key || '');
+            if (ak && (ak.endsWith(`/${fileName}`) || (asset.file_name && missingKey.includes(String(asset.file_name))))) {
+              if (r2ObjectMap.size === 0 || r2ObjectMap.has(ak)) return ak;
+            }
+          }
+          return undefined;
+        };
+
+        for (const st of students) {
+          const pKey = extractMediaKeyFromUrl(st.photoUrl || st.image);
+          if (pKey && r2ObjectMap.size > 0 && !r2ObjectMap.has(pKey)) {
+            brokenReferences.push({
+              albumId,
+              albumName: `${deptName || deptId} (${gradYear})`,
+              itemType: 'student_photo',
+              itemId: String(st.id || ''),
+              itemLabel: String(st.fullName || 'Student'),
+              referencedUrl: String(st.photoUrl || st.image || ''),
+              extractedKey: pKey,
+              recoverableKey: findRecoverableKey(pKey),
+            });
+          }
+          const sKey = extractMediaKeyFromUrl(st.secondaryPhotoUrl);
+          if (sKey && r2ObjectMap.size > 0 && !r2ObjectMap.has(sKey)) {
+            brokenReferences.push({
+              albumId,
+              albumName: `${deptName || deptId} (${gradYear})`,
+              itemType: 'student_secondary_photo',
+              itemId: String(st.id || ''),
+              itemLabel: String(st.fullName || 'Student'),
+              referencedUrl: String(st.secondaryPhotoUrl || ''),
+              extractedKey: sKey,
+              recoverableKey: findRecoverableKey(sKey),
+            });
+          }
+        }
+
+        for (const mem of memories) {
+          if (Array.isArray(mem.images)) {
+            for (const img of mem.images) {
+              const imgKey = extractMediaKeyFromUrl(img.url || img.imageUrl);
+              if (imgKey && r2ObjectMap.size > 0 && !r2ObjectMap.has(imgKey)) {
+                brokenReferences.push({
+                  albumId,
+                  albumName: `${deptName || deptId} (${gradYear})`,
+                  itemType: 'memory_photo',
+                  itemId: String(img.id || mem.id || ''),
+                  itemLabel: String(img.caption || mem.title || 'Memory Photo'),
+                  referencedUrl: String(img.url || img.imageUrl || ''),
+                  extractedKey: imgKey,
+                  recoverableKey: findRecoverableKey(imgKey),
+                });
+              }
+            }
+          }
+          const mKey = extractMediaKeyFromUrl(mem.imageUrl || mem.url);
+          if (mKey && r2ObjectMap.size > 0 && !r2ObjectMap.has(mKey)) {
+            brokenReferences.push({
+              albumId,
+              albumName: `${deptName || deptId} (${gradYear})`,
+              itemType: 'memory_photo',
+              itemId: String(mem.id || ''),
+              itemLabel: String(mem.caption || mem.title || mem.category || 'Memory'),
+              referencedUrl: String(mem.imageUrl || mem.url || ''),
+              extractedKey: mKey,
+              recoverableKey: findRecoverableKey(mKey),
+            });
+          }
+        }
+
+        const r2ObjectsUnderPrefix = Array.from(r2ObjectMap.keys()).filter((k) => k.startsWith(`albums/${albumId}/`));
+
+        const summaryItem = {
+          id: albumId,
+          canonicalAlbumId,
+          cohortKey,
+          institutionId: instId,
+          institutionName: parsed.institutionName || instId.toUpperCase(),
+          departmentId: deptId,
+          canonicalDepartmentId: canonicalDept,
+          departmentName: deptName || deptId,
+          graduationYear: gradYear,
+          classSetName: row.class_set_name || parsed.classSetName || `Class of ${gradYear}`,
+          adminEmail: rowAdmin,
+          classRepName: parsed.classRepName || '',
+          status: row.status || parsed.lifecycleStatus || 'draft',
+          isPublished: Boolean((row.status === 'published' || parsed.published || parsed.isPublished) && !parsed.unpublished && !parsed.deletedAt),
+          deletedAt: parsed.deletedAt || null,
+          keepByHost: Boolean(parsed.keepByHost || parsed.keptByHostOnly),
+          studentsCount: students.length,
+          memoriesCount: memories.length,
+          awardsCount: Array.isArray(parsed.awards) ? parsed.awards.length : 0,
+          submissionsCount: albumSubs.length,
+          slotBalance: Number(parsed.profileSlotBalance) || 0,
+          totalSlotsCredited: Number(parsed.totalSlotsCredited) || 0,
+          ledgerEntriesCount: albumLedgers.length,
+          mediaAssetsCount: albumAssets.length,
+          referencedMediaKeysCount: mediaKeys.size,
+          r2PrefixObjectsCount: r2ObjectsUnderPrefix.length,
+          createdAt: row.created_at || parsed.createdAt || '',
+          updatedAt: row.updated_at || '',
+        };
+
+        albumsInventory.push(summaryItem);
+
+        if (row.status === 'deleted' || parsed.deletedAt) {
+          const deletedMs = parsed.deletedAt ? new Date(parsed.deletedAt).getTime() : Date.now();
+          const daysRemaining = Math.max(0, Math.ceil((deletedMs + 30 * 86400000 - Date.now()) / 86400000));
+          deletedAlbumsInventory.push({
+            ...summaryItem,
+            daysRemaining,
+            exclusiveMediaKeys: Array.from(mediaKeys),
+          });
+        } else {
+          const group = cohortGroups.get(cohortKey) || [];
+          group.push(summaryItem);
+          cohortGroups.set(cohortKey, group);
+        }
+      }
+
+      const duplicateCohorts = Array.from(cohortGroups.entries())
+        .filter(([_, list]) => list.length > 1)
+        .map(([cohortKey, albums]) => {
+          // Sort so the richest album (most students + memories + slots) is recommended as Primary
+          const sorted = [...albums].sort(
+            (a, b) =>
+              b.studentsCount * 10 +
+              b.memoriesCount * 5 +
+              b.totalSlotsCredited * 2 +
+              b.submissionsCount * 5 -
+              (a.studentsCount * 10 + a.memoriesCount * 5 + a.totalSlotsCredited * 2 + a.submissionsCount * 5)
+          );
+          return {
+            cohortKey,
+            institutionId: sorted[0].institutionId,
+            departmentName: sorted[0].departmentName,
+            graduationYear: sorted[0].graduationYear,
+            recommendedPrimaryAlbumId: sorted[0].id,
+            albums: sorted,
+          };
+        });
+
+      // Identify orphaned R2 objects (present in R2 or media_assets under albums/ but not referenced by any album or active submission)
+      for (const s of allSubs) {
+        if (s.status !== 'removed') {
+          const pk = extractMediaKeyFromUrl(s.photo_key);
+          if (pk) allReferencedKeys.add(pk);
+        }
+      }
+
+      const orphanedR2Objects: Array<{ key: string; albumIdFromPrefix: string; section: string; size: number; url: string }> = [];
+      for (const [key, meta] of r2ObjectMap.entries()) {
+        if (key.startsWith('albums/') && !key.startsWith('albums/site-hero/') && !allReferencedKeys.has(key)) {
+          const parts = key.split('/');
+          orphanedR2Objects.push({
+            key,
+            albumIdFromPrefix: parts[1] || 'unknown',
+            section: parts[2] || 'general',
+            size: meta.size,
+            url: `/media/${key}`,
+          });
+        }
+      }
+
+      // Identify genuine duplicate media assets by sha256 or (set_id + size_bytes + file_name)
+      const hashGroups = new Map<string, any[]>();
+      for (const asset of allAssets) {
+        const sig = asset.sha256
+          ? `sha256:${asset.sha256}`
+          : asset.size_bytes && asset.file_name
+          ? `file:${asset.set_id}:${asset.file_name}:${asset.size_bytes}`
+          : '';
+        if (!sig) continue;
+        const list = hashGroups.get(sig) || [];
+        list.push({
+          id: asset.id,
+          setId: asset.set_id,
+          section: asset.section,
+          objectKey: asset.object_key,
+          publicUrl: asset.public_url,
+          sizeBytes: asset.size_bytes,
+          isReferenced: allReferencedKeys.has(String(asset.object_key || '')),
+        });
+        hashGroups.set(sig, list);
+      }
+
+      const duplicateMediaGroups = Array.from(hashGroups.entries())
+        .filter(([_, items]) => items.length > 1)
+        .map(([signature, items]) => ({ signature, count: items.length, items }));
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          environment: environmentMode,
+          d1Available: true,
+          r2Available: Boolean(env.BUCKET),
+          duplicateCohorts,
+          albumsInventory,
+          deletedAlbumsInventory,
+          mediaHealth: {
+            totalR2Objects: r2ObjectMap.size,
+            totalMediaAssetRows: allAssets.length,
+            brokenReferences,
+            orphanedR2Objects,
+            duplicateMediaGroups,
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 0i-3. Non-Destructive Cohort Reconciliation & Merge (Merges profiles, memories, slots & R2 references from duplicate album into primary album)
+    if (path === '/api/admin/reconcile-cohort' && request.method === 'POST') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!env.DB) {
+        return new Response(JSON.stringify({ error: 'D1 database unavailable' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        primaryAlbumId?: string;
+        secondaryAlbumId?: string;
+        softDeleteSecondaryAfterMerge?: boolean;
+      };
+      const primaryId = String(body.primaryAlbumId || '').trim();
+      const secondaryId = String(body.secondaryAlbumId || '').trim();
+
+      if (!primaryId || !secondaryId || primaryId === secondaryId) {
+        return new Response(JSON.stringify({ error: 'Both primaryAlbumId and secondaryAlbumId are required.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const primaryRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(primaryId).first();
+      const secondaryRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(secondaryId).first();
+      if (!primaryRow || !secondaryRow) {
+        return new Response(JSON.stringify({ error: 'One or both albums were not found in D1.' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      let primaryData: any = {};
+      let secondaryData: any = {};
+      try { primaryData = JSON.parse(primaryRow.data_json || '{}'); } catch {}
+      try { secondaryData = JSON.parse(secondaryRow.data_json || '{}'); } catch {}
+
+      const pOwner = String(primaryRow.admin_user_id || primaryData.classRepEmail || '').toLowerCase();
+      const sOwner = String(secondaryRow.admin_user_id || secondaryData.classRepEmail || '').toLowerCase();
+      const actor = sessionUser.email.toLowerCase();
+      if (sessionUser.role !== 'master_host' && pOwner !== actor && sOwner !== actor) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // 1. Merge students non-destructively (matching by id or email or fullName)
+      const mergedStudents: any[] = Array.isArray(primaryData.students) ? [...primaryData.students] : [];
+      const secStudents: any[] = Array.isArray(secondaryData.students) ? secondaryData.students : [];
+      let addedStudentsCount = 0;
+
+      for (const st of secStudents) {
+        const stEmail = String(st.personalEmail || st.email || '').trim().toLowerCase();
+        const stName = String(st.fullName || '').trim().toLowerCase();
+        const existingIdx = mergedStudents.findIndex(
+          (p: any) =>
+            p.id === st.id ||
+            (stEmail && String(p.personalEmail || p.email || '').trim().toLowerCase() === stEmail) ||
+            (stName && String(p.fullName || '').trim().toLowerCase() === stName)
+        );
+        if (existingIdx >= 0) {
+          const cur = mergedStudents[existingIdx];
+          if (!cur.photoUrl && (st.photoUrl || st.image)) cur.photoUrl = st.photoUrl || st.image;
+          if (!cur.secondaryPhotoUrl && st.secondaryPhotoUrl) cur.secondaryPhotoUrl = st.secondaryPhotoUrl;
+          if (!cur.quote && st.quote) cur.quote = st.quote;
+          if (st.paymentStatus === 'paid') cur.paymentStatus = 'paid';
+          if (st.usedSlot) {
+            cur.usedSlot = true;
+            cur.slotConsumed = true;
+          }
+        } else {
+          mergedStudents.push({ ...st });
+          addedStudentsCount++;
+        }
+      }
+
+      // 2. Merge memories non-destructively (handles both nested MemoryEvent.images[] and flat memory items)
+      const mergedMemories: any[] = Array.isArray(primaryData.memories) ? [...primaryData.memories] : [];
+      const secMemories: any[] = Array.isArray(secondaryData.memories) ? secondaryData.memories : [];
+      let addedMemoriesCount = 0;
+      const seenMemoryKeys = new Set<string>();
+      for (const m of mergedMemories) {
+        const topKey = extractMediaKeyFromUrl(m.imageUrl || m.url) || String(m.imageUrl || m.url || '').trim();
+        if (topKey) seenMemoryKeys.add(topKey);
+        if (Array.isArray(m.images)) {
+          for (const img of m.images) {
+            const ik = extractMediaKeyFromUrl(img.url || img.imageUrl) || String(img.url || img.imageUrl || '').trim();
+            if (ik) seenMemoryKeys.add(ik);
+          }
+        }
+      }
+      for (const mem of secMemories) {
+        if (Array.isArray(mem.images)) {
+          const newImages = mem.images.filter((img: any) => {
+            const ik = extractMediaKeyFromUrl(img.url || img.imageUrl) || String(img.url || img.imageUrl || '').trim();
+            if (!ik || seenMemoryKeys.has(ik)) return false;
+            seenMemoryKeys.add(ik);
+            return true;
+          });
+          if (newImages.length > 0) {
+            const existingCatIdx = mergedMemories.findIndex(
+              (m: any) => Array.isArray(m.images) && String(m.title || '').toLowerCase() === String(mem.title || '').toLowerCase()
+            );
+            if (existingCatIdx >= 0) {
+              mergedMemories[existingCatIdx] = {
+                ...mergedMemories[existingCatIdx],
+                images: [...mergedMemories[existingCatIdx].images, ...newImages],
+              };
+            } else {
+              mergedMemories.push({ ...mem, images: newImages });
+            }
+            addedMemoriesCount += newImages.length;
+          }
+        } else {
+          const memKey = extractMediaKeyFromUrl(mem.imageUrl || mem.url) || String(mem.imageUrl || mem.url || '').trim();
+          const exists = mergedMemories.some((m: any) => m.id === mem.id) || (memKey && seenMemoryKeys.has(memKey));
+          if (!exists) {
+            if (memKey) seenMemoryKeys.add(memKey);
+            mergedMemories.push({ ...mem });
+            addedMemoriesCount++;
+          }
+        }
+      }
+
+      // 3. Merge awards & voices
+      const mergedAwards: any[] = Array.isArray(primaryData.awards) ? [...primaryData.awards] : [];
+      for (const aw of Array.isArray(secondaryData.awards) ? secondaryData.awards : []) {
+        if (!mergedAwards.some((a: any) => a.id === aw.id || a.title === aw.title)) mergedAwards.push({ ...aw });
+      }
+
+      // 4. Re-associate D1 profile_submissions, media_assets, slot_ledger, and transactions from secondaryId to primaryId
+      try {
+        await env.DB.prepare(`UPDATE profile_submissions SET album_id = ?, updated_at = datetime('now') WHERE album_id = ?`)
+          .bind(primaryId, secondaryId)
+          .run();
+      } catch {}
+      try {
+        await env.DB.prepare(`UPDATE media_assets SET set_id = ? WHERE set_id = ?`)
+          .bind(primaryId, secondaryId)
+          .run();
+      } catch {}
+      try {
+        await env.DB.prepare(`UPDATE slot_ledger SET album_id = ? WHERE album_id = ?`)
+          .bind(primaryId, secondaryId)
+          .run();
+      } catch {}
+      try {
+        await env.DB.prepare(`UPDATE transactions SET set_id = ? WHERE set_id = ?`)
+          .bind(primaryId, secondaryId)
+          .run();
+      } catch {}
+
+      // Keep secondary admin email as co-admin if different from primary owner so neither account loses access
+      const coAdmins = Array.isArray(primaryData.coAdmins) ? [...primaryData.coAdmins] : [];
+      if (sOwner && sOwner !== pOwner && !coAdmins.some((c: any) => String(c?.email || '').toLowerCase() === sOwner)) {
+        coAdmins.push({
+          email: sOwner,
+          name: secondaryData.classRepName || sOwner.split('@')[0],
+          role: 'co_admin',
+          addedAt: new Date().toISOString(),
+        });
+      }
+
+      primaryData.students = mergedStudents;
+      primaryData.memories = mergedMemories;
+      primaryData.awards = mergedAwards;
+      primaryData.coAdmins = coAdmins;
+      if (!primaryData.bannerImageUrl && secondaryData.bannerImageUrl) {
+        primaryData.bannerImageUrl = secondaryData.bannerImageUrl;
+      }
+      if (!primaryData.legacyGroupImageUrl && secondaryData.legacyGroupImageUrl) {
+        primaryData.legacyGroupImageUrl = secondaryData.legacyGroupImageUrl;
+      }
+      primaryData.version = (Number(primaryData.version) || 1) + 1;
+
+      const reconciledPrimary = await reconcileAlbumSlotsAndSubmissions(primaryRow, primaryData);
+
+      await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+        .bind(JSON.stringify(reconciledPrimary), primaryId)
+        .run();
+
+      if (body.softDeleteSecondaryAfterMerge) {
+        secondaryData.deletedAt = new Date().toISOString();
+        secondaryData.published = false;
+        secondaryData.lifecycleStatus = 'deleted';
+        secondaryData.reconciledIntoAlbumId = primaryId;
+        await env.DB.prepare(`UPDATE class_sets SET status = 'deleted', data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+          .bind(JSON.stringify(secondaryData), secondaryId)
+          .run();
+      } else {
+        secondaryData.reconciledIntoAlbumId = primaryId;
+        await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+          .bind(JSON.stringify(secondaryData), secondaryId)
+          .run();
+      }
+
+      await logAudit(
+        'cohort_albums_reconciled',
+        `Reconciled duplicate cohort album ${secondaryId} into primary album ${primaryId} (+${addedStudentsCount} students, +${addedMemoriesCount} memories) by ${sessionUser.email}`,
+        sessionUser.email
+      );
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          primaryAlbumId: primaryId,
+          secondaryAlbumId: secondaryId,
+          addedStudentsCount,
+          addedMemoriesCount,
+          album: reconciledPrimary,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 0i-4. Repair Broken R2 Media Links & Recover Orphaned R2 Photos for an Album
+    if (path === '/api/admin/repair-media' && request.method === 'POST') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!env.DB) {
+        return new Response(JSON.stringify({ error: 'D1 database unavailable' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as { albumId?: string };
+      const albumId = String(body.albumId || '').trim();
+      if (!albumId) {
+        return new Response(JSON.stringify({ error: 'albumId is required' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const row = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+      if (!row) {
+        return new Response(JSON.stringify({ error: 'Album not found' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      let parsed: any = {};
+      try { parsed = JSON.parse(row.data_json || '{}'); } catch {}
+
+      // Collect all sibling album IDs for the same cohort so R2 objects uploaded under a duplicate test album prefix are also found
+      const instId = String(row.institution_id || parsed.institutionId || '').trim();
+      const deptId = String(row.department_id || parsed.departmentId || '').trim();
+      const gradYear = Number(row.graduation_year || parsed.graduationYear) || 2026;
+      const canonicalDept = normalizeDepartmentCohortSlug(instId, deptId, parsed.departmentName);
+
+      const allSetsRes = await env.DB.prepare(`SELECT id, institution_id, department_id, graduation_year, status, data_json FROM class_sets`).all();
+      const siblingAlbumIds = new Set<string>([albumId]);
+      const otherActiveAlbumReferencedKeys = new Set<string>();
+      for (const sRow of allSetsRes?.results || []) {
+        let sp: any = {};
+        try { sp = JSON.parse(sRow.data_json || '{}'); } catch {}
+        const sid = String(sRow.id || '');
+        if (sid && sid !== albumId && sRow.status !== 'deleted' && !sp.deletedAt) {
+          for (const k of collectAlbumMediaKeys(sp)) {
+            otherActiveAlbumReferencedKeys.add(k);
+          }
+        }
+        const sInst = String(sRow.institution_id || sp.institutionId || '').trim();
+        const sDept = normalizeDepartmentCohortSlug(sInst, String(sRow.department_id || sp.departmentId || ''), sp.departmentName);
+        const sYear = Number(sRow.graduation_year || sp.graduationYear) || 0;
+        if (sInst && canonicalDept && sInst.toLowerCase() === instId.toLowerCase() && sDept === canonicalDept && sYear === gradYear) {
+          siblingAlbumIds.add(sid);
+        }
+      }
+
+      const r2Keys = new Set<string>();
+      if (env.BUCKET && typeof env.BUCKET.list === 'function') {
+        for (const sibId of siblingAlbumIds) {
+          try {
+            const listed = await env.BUCKET.list({ prefix: `albums/${sibId}/`, limit: 500 });
+            for (const obj of listed?.objects || []) {
+              if (obj?.key) r2Keys.add(String(obj.key));
+            }
+          } catch {}
+        }
+      }
+
+      const assetRes = await env.DB.prepare(`SELECT * FROM media_assets`).all();
+      for (const a of assetRes?.results || []) {
+        if (siblingAlbumIds.has(String(a.set_id)) && a.object_key) {
+          r2Keys.add(String(a.object_key));
+        }
+      }
+
+      let repairedLinksCount = 0;
+      let recoveredMemoriesCount = 0;
+
+      const referencedNow = collectAlbumMediaKeys(parsed);
+      const students: any[] = Array.isArray(parsed.students) ? [...parsed.students] : [];
+      const memories: any[] = Array.isArray(parsed.memories) ? [...parsed.memories] : [];
+
+      // Repair student photo URLs from profile_submissions or matching R2 filenames
+      const subsRes = await env.DB.prepare(`SELECT * FROM profile_submissions`).all();
+      const cohortSubs = (subsRes?.results || []).filter((s: any) => siblingAlbumIds.has(String(s.album_id)));
+
+      for (const st of students) {
+        const currentKey = extractMediaKeyFromUrl(st.photoUrl || st.image);
+        if (!currentKey || (r2Keys.size > 0 && !r2Keys.has(currentKey))) {
+          const matchingSub = cohortSubs.find(
+            (s: any) =>
+              s.id === st.id ||
+              (st.email && String(s.email || '').toLowerCase() === String(st.email).toLowerCase())
+          );
+          if (matchingSub?.photo_key) {
+            const subKey = extractMediaKeyFromUrl(matchingSub.photo_key);
+            if (subKey) {
+              st.photoUrl = `/media/${subKey}`;
+              referencedNow.add(subKey);
+              repairedLinksCount++;
+            }
+          } else if (currentKey) {
+            const fileName = currentKey.split('/').pop() || '';
+            const matchKey = Array.from(r2Keys).find((k) => fileName && k.endsWith(`/${fileName}`));
+            if (matchKey) {
+              st.photoUrl = `/media/${matchKey}`;
+              referencedNow.add(matchKey);
+              repairedLinksCount++;
+            }
+          }
+        }
+      }
+
+      // Recover any R2 objects under albums/<albumId>/memories/ (or unreferenced sibling keys) that are missing from memories[]
+      const recoveredImages: Array<{ id: string; url: string; caption: string; dateTime: string }> = [];
+      for (const key of r2Keys) {
+        if (referencedNow.has(key) || otherActiveAlbumReferencedKeys.has(key)) continue;
+        const parts = key.split('/');
+        const section = (parts[2] || '').toLowerCase();
+        if (
+          section.includes('memor') ||
+          section.includes('moment') ||
+          section.includes('highlight') ||
+          section.includes('candid') ||
+          section.includes('event') ||
+          section.includes('dinner') ||
+          section.includes('signout') ||
+          section.includes('fyb')
+        ) {
+          const isHighlight = section.includes('highlight');
+          const safeId = `img-rec-${key.replace(/[^a-zA-Z0-9_-]/g, '-').slice(-40)}`;
+          recoveredImages.push({
+            id: safeId,
+            url: `/media/${key}`,
+            caption: isHighlight ? 'Class Highlight' : 'Class Moment',
+            dateTime: new Date().toISOString().split('T')[0],
+          });
+          referencedNow.add(key);
+          recoveredMemoriesCount++;
+        }
+      }
+      if (recoveredImages.length > 0) {
+        const existingRecIdx = memories.findIndex(
+          (m: any) => Array.isArray(m.images) && (m.id === `mem-cat-recovered-${albumId}` || String(m.title || '').toLowerCase().includes('recovered'))
+        );
+        if (existingRecIdx >= 0) {
+          memories[existingRecIdx] = {
+            ...memories[existingRecIdx],
+            images: [...memories[existingRecIdx].images, ...recoveredImages],
+          };
+        } else {
+          memories.push({
+            id: `mem-cat-recovered-${albumId}`,
+            title: 'Recovered Class Moments',
+            dateStr: new Date().toISOString().split('T')[0],
+            caption: 'Recovered from Cloudflare R2 storage',
+            order: memories.length + 1,
+            images: recoveredImages,
+          });
+        }
+      }
+
+      parsed.students = students;
+      parsed.memories = memories;
+      parsed.version = (Number(parsed.version) || 1) + 1;
+      parsed = await reconcileAlbumSlotsAndSubmissions(row, parsed);
+
+      await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+        .bind(JSON.stringify(parsed), albumId)
+        .run();
+
+      await logAudit(
+        'album_media_repaired',
+        `Repaired ${repairedLinksCount} media link(s) and recovered ${recoveredMemoriesCount} R2 memory photo(s) for album ${albumId} by ${sessionUser.email}`,
+        sessionUser.email
+      );
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          albumId,
+          repairedLinksCount,
+          recoveredMemoriesCount,
+          album: parsed,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 0i-5. D1 Full JSON Backup Export + R2 Media Manifest (Host Control Center)
+    if (path === '/api/admin/backup-export' && request.method === 'GET') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser || sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!env.DB) {
+        return new Response(JSON.stringify({ error: 'D1 database not bound' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const tables = [
+        'class_sets',
+        'profile_submissions',
+        'media_assets',
+        'slot_ledger',
+        'transactions',
+        'programmes',
+        'cohort_allocations',
+        'platform_settings',
+        'audit_logs',
+        'users',
+        'institutions',
+        'testimonials',
+        'site_content',
+        'support_messages',
+        'disputes',
+        'registrations',
+        'slot_allocations',
+      ];
+      const snapshot: Record<string, any[]> = {};
+      for (const tbl of tables) {
+        try {
+          const res = await env.DB.prepare(`SELECT * FROM ${tbl}`).all();
+          snapshot[tbl] = res?.results || [];
+        } catch {
+          snapshot[tbl] = [];
+        }
+      }
+
+      const r2Manifest: Array<{ key: string; size: number; uploaded?: string; downloadUrl: string }> = [];
+      if (env.BUCKET && typeof env.BUCKET.list === 'function') {
+        try {
+          const listed = await env.BUCKET.list({ limit: 1000 });
+          for (const obj of listed?.objects || []) {
+            if (obj?.key) {
+              r2Manifest.push({
+                key: String(obj.key),
+                size: Number(obj.size) || 0,
+                uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : undefined,
+                downloadUrl: `/media/${obj.key}`,
+              });
+            }
+          }
+        } catch {}
+      }
+
+      await logAudit('database_backup_exported', `Full D1 + R2 manifest backup exported by ${sessionUser.email}`, sessionUser.email);
+
+      return new Response(
+        JSON.stringify(
+          {
+            schemaVersion: 2,
+            exportedAt: new Date().toISOString(),
+            exportedBy: sessionUser.email,
+            tables: snapshot,
+            r2Manifest,
+          },
+          null,
+          2
+        ),
+        {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Content-Disposition': `attachment; filename="kohot-d1-backup-${new Date().toISOString().split('T')[0]}.json"`,
+          },
+        }
+      );
+    }
+
+    // 0i-6. Non-Destructive D1 JSON Backup Restore Endpoint (Host Control Center)
+    if (path === '/api/admin/backup-restore' && request.method === 'POST') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser || sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!env.DB) {
+        return new Response(JSON.stringify({ error: 'D1 database not bound' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        tables?: Record<string, any[]>;
+        overwriteExisting?: boolean;
+      };
+      if (!body.tables || typeof body.tables !== 'object') {
+        return new Response(JSON.stringify({ error: 'Invalid backup payload: missing tables object' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const allowedTables = new Set([
+        'class_sets',
+        'profile_submissions',
+        'media_assets',
+        'slot_ledger',
+        'transactions',
+        'programmes',
+        'cohort_allocations',
+        'platform_settings',
+        'users',
+        'institutions',
+        'testimonials',
+        'site_content',
+      ]);
+      const insertVerb = body.overwriteExisting ? 'INSERT OR REPLACE' : 'INSERT OR IGNORE';
+      const restoredCounts: Record<string, number> = {};
+
+      for (const [tableName, rows] of Object.entries(body.tables)) {
+        if (!allowedTables.has(tableName) || !Array.isArray(rows) || rows.length === 0) continue;
+        let count = 0;
+        for (const row of rows) {
+          if (!row || typeof row !== 'object') continue;
+          const cols = Object.keys(row).filter((c) => /^[a-zA-Z0-9_]+$/.test(c));
+          if (cols.length === 0) continue;
+          const placeholders = cols.map(() => '?').join(', ');
+          const values = cols.map((c) => row[c]);
+          try {
+            await env.DB.prepare(`${insertVerb} INTO ${tableName} (${cols.join(', ')}) VALUES (${placeholders})`)
+              .bind(...values)
+              .run();
+            count++;
+          } catch {}
+        }
+        restoredCounts[tableName] = count;
+      }
+
+      await logAudit(
+        'database_backup_restored',
+        `D1 backup restored (overwrite=${Boolean(body.overwriteExisting)}) by ${sessionUser.email}: ${JSON.stringify(restoredCounts)}`,
+        sessionUser.email
+      );
+
+      return new Response(JSON.stringify({ success: true, restoredCounts }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -2731,7 +3905,7 @@ export default {
       }
     }
 
-    // 2. Auth Session Check (Reads from signed session cookie)
+    // 2. Auth Session Check (Reads from signed session cookie + verifies owned albums in D1)
     if (path === '/api/auth/me' && request.method === 'GET') {
       if (!sessionSecret) {
         return serverNotConfiguredResponse();
@@ -2743,12 +3917,62 @@ export default {
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
+
+      const ownedAlbumIds: string[] = Array.isArray(user.albums) ? [...user.albums] : user.assignedSetId ? [user.assignedSetId] : [];
+      const albumObjects: any[] = [];
+
+      if (env.DB && user.email && user.role !== 'master_host') {
+        try {
+          const emailLower = user.email.trim().toLowerCase();
+          const allSetsRes = await env.DB.prepare(`SELECT * FROM class_sets WHERE status != 'deleted' ORDER BY created_at DESC`).all();
+          const matchedRows: Array<{ row: any; parsed: any; score: number }> = [];
+
+          for (const sRow of allSetsRes?.results || []) {
+            let parsedSet: any = {};
+            try { parsedSet = JSON.parse(sRow.data_json || '{}'); } catch {}
+            if (parsedSet.deletedAt) continue;
+            const rowAdmin = String(sRow.admin_user_id || '').trim().toLowerCase();
+            const jsonEmail = String(parsedSet.classRepEmail || parsedSet.currentAdminEmail || '').trim().toLowerCase();
+            const inCoAdmins = Array.isArray(parsedSet.coAdmins) && parsedSet.coAdmins.some(
+              (c: any) => String(c?.email || '').trim().toLowerCase() === emailLower
+            );
+            if (rowAdmin === emailLower || jsonEmail === emailLower || inCoAdmins) {
+              const score =
+                (Array.isArray(parsedSet.students) ? parsedSet.students.length * 10 : 0) +
+                (Array.isArray(parsedSet.memories) ? parsedSet.memories.length * 5 : 0) +
+                (Number(parsedSet.totalSlotsCredited) || 0);
+              matchedRows.push({ row: sRow, parsed: parsedSet, score });
+            }
+          }
+
+          if (matchedRows.length > 0) {
+            matchedRows.sort((a, b) => b.score - a.score);
+            user.assignedSetId = String(matchedRows[0].row.id);
+            for (const m of matchedRows) {
+              const aid = String(m.row.id);
+              if (!ownedAlbumIds.includes(aid)) ownedAlbumIds.push(aid);
+              albumObjects.push({
+                ...m.parsed,
+                id: aid,
+                institutionId: m.row.institution_id || m.parsed.institutionId,
+                universityId: m.row.institution_id || m.parsed.universityId || m.parsed.institutionId,
+                departmentId: m.row.department_id || m.parsed.departmentId,
+                graduationYear: Number(m.row.graduation_year || m.parsed.graduationYear),
+                classRepEmail: emailLower,
+                inviteCode: String(m.row.invite_code || m.parsed.inviteCode || computeInviteCode(aid)),
+              });
+            }
+          }
+        } catch {}
+      }
+
       return new Response(
         JSON.stringify({
           authenticated: true,
           role: user.role,
           user,
-          albums: user.albums || (user.assignedSetId ? [user.assignedSetId] : []),
+          albums: ownedAlbumIds,
+          albumObjects: albumObjects.length > 0 ? albumObjects : undefined,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -3077,17 +4301,17 @@ export default {
       }
     }
 
-    // 4c. GET /media/{key} — Serve from R2 BUCKET with ETag, cache headers, 206 range requests, and deleted-asset protection
+    // 4c. GET /media/{key} — Serve from R2 BUCKET with ETag, cache headers, 206 range requests, and resilient fallback lookup
     if (path.startsWith('/media/') && request.method === 'GET') {
       if (!env.BUCKET) {
         return new Response('Media storage not configured', { status: 503 });
       }
-      const objectKey = decodeURIComponent(path.slice('/media/'.length));
-      if (!objectKey || objectKey.includes('..')) {
+      const rawKey = decodeURIComponent(path.slice('/media/'.length)).replace(/^\/+/, '').replace(/^media\/+/, '');
+      if (!rawKey || rawKey.includes('..')) {
         return new Response('Not found', { status: 404 });
       }
 
-      // Access control: check album & submission state
+      let objectKey = rawKey;
       let isPublishedPublicMedia = true;
       const keyParts = objectKey.split('/');
       const albumIdFromKey = keyParts[0] === 'albums' && keyParts.length >= 3 ? keyParts[1] : null;
@@ -3099,8 +4323,16 @@ export default {
           try { parsedAlbum = JSON.parse(albumRow.data_json || '{}'); } catch {}
           const rowStatus = String(albumRow.status || parsedAlbum.lifecycleStatus || 'draft');
           const isDeleted = rowStatus === 'deleted' || Boolean(parsedAlbum.deletedAt);
-          if (isDeleted) {
-            return new Response('Not found', { status: 404, headers: corsHeaders });
+
+          if (isDeleted && !parsedAlbum.reconciledIntoAlbumId) {
+            // Check if any other active album references this objectKey before blocking
+            const referencedByActive = await env.DB.prepare(
+              `SELECT id FROM class_sets WHERE status != 'deleted' AND data_json LIKE ? LIMIT 1`
+            ).bind(`%${objectKey}%`).first();
+            const sessionUser = await getSessionUser();
+            if (!referencedByActive && sessionUser?.role !== 'master_host') {
+              return new Response('Not found', { status: 404, headers: corsHeaders });
+            }
           }
 
           const isAlbumPublished =
@@ -3108,7 +4340,6 @@ export default {
             !parsedAlbum.unpublished &&
             !parsedAlbum.deletedAt;
 
-          // Check if this objectKey belongs to a profile_submission that is deleted/removed or still pending/draft
           const subRow = await env.DB.prepare(
             `SELECT status FROM profile_submissions WHERE album_id = ? AND (photo_key = ? OR payload_json LIKE ?)`
           )
@@ -3126,7 +4357,34 @@ export default {
         }
       }
 
-      const r2Obj = await env.BUCKET.get(objectKey);
+      let r2Obj = await env.BUCKET.get(objectKey);
+
+      // Resilient fallback: if exact objectKey was not found in R2, check media_assets or sibling album prefix by filename
+      if (!r2Obj) {
+        const fileName = keyParts[keyParts.length - 1] || '';
+        if (fileName && env.DB) {
+          try {
+            const assetMatch = await env.DB.prepare(
+              `SELECT object_key FROM media_assets WHERE object_key LIKE ? ORDER BY created_at DESC LIMIT 1`
+            ).bind(`%/${fileName}`).first();
+            if (assetMatch?.object_key && String(assetMatch.object_key) !== objectKey) {
+              objectKey = String(assetMatch.object_key);
+              r2Obj = await env.BUCKET.get(objectKey);
+            }
+          } catch {}
+        }
+        if (!r2Obj && fileName && typeof env.BUCKET.list === 'function') {
+          try {
+            const listed = await env.BUCKET.list({ prefix: 'albums/', limit: 500 });
+            const matchedObj = (listed?.objects || []).find((o: any) => String(o?.key || '').endsWith(`/${fileName}`));
+            if (matchedObj?.key) {
+              objectKey = String(matchedObj.key);
+              r2Obj = await env.BUCKET.get(objectKey);
+            }
+          } catch {}
+        }
+      }
+
       if (!r2Obj) {
         return new Response('Not found', { status: 404, headers: corsHeaders });
       }
@@ -4339,18 +5597,65 @@ ${message}
     // Public: only published albums & public fields
     // Admin: only the album(s) they own (admin_user_id === session user)
     // Host: all albums in D1
-    // Helper: Reconcile slot_ledger and profile_submissions with album's data_json so purchased slots automatically cover approved profiles
-    const reconcileAlbumSlotsAndSubmissions = async (row: any, parsed: any): Promise<any> => {
+    // Helper: Reconcile slot_ledger, profile_submissions, media_assets, and sibling cohort records with album's data_json
+    async function reconcileAlbumSlotsAndSubmissions(row: any, parsed: any): Promise<any> {
       if (!env.DB || !parsed || !parsed.id) return parsed;
       const albumId = String(parsed.id);
       let modified = false;
 
       try {
+        const instId = String(row?.institution_id || parsed.institutionId || parsed.universityId || '').trim();
+        const rawDeptId = String(row?.department_id || parsed.departmentId || '').trim();
+        const deptName = String(parsed.departmentName || '').trim();
+        const gradYear = Number(row?.graduation_year || parsed.graduationYear) || 2026;
+        const canonicalDept = normalizeDepartmentCohortSlug(instId, rawDeptId, deptName);
+
+        // Scope automatic read-time reconciliation strictly to this albumId plus any non-existent canonical/alias IDs
+        // (NEVER automatically pull records from another existing class_sets row — cross-album merging is strictly owner-triggered via /api/admin/reconcile-cohort)
+        const siblingAlbumIds = new Set<string>([albumId]);
+        if (instId && canonicalDept && gradYear) {
+          const otherExistingSetIds = new Set<string>();
+          try {
+            const sameYearSets = await env.DB.prepare(
+              `SELECT id FROM class_sets WHERE graduation_year = ?`
+            ).bind(gradYear).all();
+            for (const sRow of sameYearSets?.results || []) {
+              const sid = String(sRow.id || '');
+              if (sid && sid !== albumId) {
+                otherExistingSetIds.add(sid);
+              }
+            }
+          } catch {}
+
+          // Only include canonical/legacy slug aliases if no separate album row exists under that ID
+          if (otherExistingSetIds.size === 0) {
+            const canonicalId = getCanonicalAlbumId(instId, canonicalDept, gradYear, deptName);
+            if (!otherExistingSetIds.has(canonicalId)) siblingAlbumIds.add(canonicalId);
+            const legacyAliasId = `${instId.toLowerCase()}-${rawDeptId.replace(/^dept-/, '')}-${gradYear}`;
+            if (!otherExistingSetIds.has(legacyAliasId)) siblingAlbumIds.add(legacyAliasId);
+          }
+        }
+
+        const siblingIdList = Array.from(siblingAlbumIds);
+
         // 1. Load slot_ledger entries for this album
-        const ledgerRes = await env.DB.prepare(
-          `SELECT * FROM slot_ledger WHERE album_id = ? ORDER BY created_at ASC`
-        ).bind(albumId).all();
-        const ledgerRows = ledgerRes?.results || [];
+        const ledgerRows: any[] = [];
+        const seenLedgerKeys = new Set<string>();
+        for (const aid of siblingIdList) {
+          try {
+            const ledgerRes = await env.DB.prepare(
+              `SELECT * FROM slot_ledger WHERE album_id = ? ORDER BY created_at ASC`
+            ).bind(aid).all();
+            for (const lr of ledgerRes?.results || []) {
+              const dedupKey = String(lr.idempotency_key || lr.id);
+              if (!seenLedgerKeys.has(dedupKey)) {
+                seenLedgerKeys.add(dedupKey);
+                ledgerRows.push(lr);
+              }
+            }
+          } catch {}
+        }
+
         let totalCredited = ledgerRows.reduce((acc: number, r: any) => acc + (Number(r.delta) > 0 ? Number(r.delta) : 0), 0);
         let totalUsed = ledgerRows.reduce((acc: number, r: any) => acc + (Number(r.delta) < 0 ? Math.abs(Number(r.delta)) : 0), 0);
         let balance = totalCredited - totalUsed;
@@ -4362,20 +5667,34 @@ ${message}
         }
 
         // 2. Load profile_submissions for this album
-        const subsRes = await env.DB.prepare(
-          `SELECT * FROM profile_submissions WHERE album_id = ? AND status != 'removed' ORDER BY created_at ASC`
-        ).bind(albumId).all();
-        const subRows = subsRes?.results || [];
+        const subRows: any[] = [];
+        const seenSubIds = new Set<string>();
+        for (const aid of siblingIdList) {
+          try {
+            const subsRes = await env.DB.prepare(
+              `SELECT * FROM profile_submissions WHERE album_id = ? AND status != 'removed' ORDER BY created_at ASC`
+            ).bind(aid).all();
+            for (const sr of subsRes?.results || []) {
+              if (!seenSubIds.has(String(sr.id))) {
+                seenSubIds.add(String(sr.id));
+                subRows.push(sr);
+              }
+            }
+          } catch {}
+        }
 
         const students: any[] = Array.isArray(parsed.students) ? [...parsed.students] : [];
         const adminEmailLower = String(row?.admin_user_id || parsed.classRepEmail || '').trim().toLowerCase();
         const adminNameLower = String(parsed.classRepName || '').trim().toLowerCase();
 
-        // Merge any submissions in profile_submissions that are not in students[]
+        // Merge any submissions in profile_submissions that are not in students[] or heal missing photo URLs
         for (const sRow of subRows) {
           let sPayload: any = {};
           try { sPayload = JSON.parse(sRow.payload_json || '{}'); } catch {}
           const sEmail = String(sRow.email || sPayload.personalEmail || sPayload.email || '').trim().toLowerCase();
+          const sPhotoKey = extractMediaKeyFromUrl(sRow.photo_key || sPayload.photoUrl || sPayload.image);
+          const resolvedSubPhotoUrl = sPhotoKey ? `/media/${sPhotoKey}` : (sPayload.photoUrl || sPayload.image || '');
+
           const existingIdx = students.findIndex(
             (st: any) =>
               st.id === sRow.id ||
@@ -4387,6 +5706,14 @@ ${message}
 
           if (existingIdx >= 0) {
             const cur = students[existingIdx];
+            if (!cur.photoUrl && resolvedSubPhotoUrl) {
+              cur.photoUrl = resolvedSubPhotoUrl;
+              modified = true;
+            }
+            if (!cur.secondaryPhotoUrl && sPayload.secondaryPhotoUrl) {
+              cur.secondaryPhotoUrl = sPayload.secondaryPhotoUrl;
+              modified = true;
+            }
             if (isPaidSub && cur.paymentStatus !== 'paid') {
               cur.paymentStatus = 'paid';
               cur.paidReference = sRow.paid_reference || cur.paidReference;
@@ -4405,7 +5732,7 @@ ${message}
             students.push({
               ...sPayload,
               id: sRow.id,
-              photoUrl: sPayload.photoUrl || sPayload.image || '',
+              photoUrl: resolvedSubPhotoUrl,
               personalEmail: sEmail || sPayload.personalEmail,
               email: sEmail || sPayload.email,
               approved: isApprovedSub,
@@ -4415,6 +5742,74 @@ ${message}
               slotConsumed: usedSlotSub,
             });
             modified = true;
+          }
+        }
+
+        // 2b. Check media_assets for any uploaded Memories/Highlights for this album that were missing from parsed.memories
+        const memories: any[] = Array.isArray(parsed.memories) ? [...parsed.memories] : [];
+        const existingMemKeys = new Set<string>();
+        for (const m of memories) {
+          const mk = extractMediaKeyFromUrl(m.imageUrl || m.url);
+          if (mk) existingMemKeys.add(mk);
+          if (Array.isArray(m.images)) {
+            for (const img of m.images) {
+              const ik = extractMediaKeyFromUrl(img.url || img.imageUrl);
+              if (ik) existingMemKeys.add(ik);
+            }
+          }
+        }
+
+        const newlyRecoveredMemImages: Array<{ id: string; url: string; caption: string; dateTime: string }> = [];
+        for (const aid of siblingIdList) {
+          try {
+            const assetRes = await env.DB.prepare(
+              `SELECT * FROM media_assets WHERE set_id = ? ORDER BY created_at ASC`
+            ).bind(aid).all();
+            for (const aRow of assetRes?.results || []) {
+              const cat = String(aRow.category || aRow.section || '').toLowerCase();
+              const objKey = String(aRow.object_key || '');
+              if (
+                objKey &&
+                !existingMemKeys.has(objKey) &&
+                (cat.includes('memor') ||
+                  cat.includes('moment') ||
+                  cat.includes('highlight') ||
+                  cat.includes('event') ||
+                  cat.includes('dinner') ||
+                  cat.includes('signout') ||
+                  cat.includes('fyb'))
+              ) {
+                const isHighlight = cat.includes('highlight');
+                newlyRecoveredMemImages.push({
+                  id: `img-${aRow.id || Date.now()}`,
+                  url: `/media/${objKey}`,
+                  caption: isHighlight ? 'Class Highlight' : (aRow.file_name ? String(aRow.file_name).replace(/\.[^.]+$/, '') : 'Class Moment'),
+                  dateTime: String(aRow.created_at || new Date().toISOString()).split('T')[0],
+                });
+                existingMemKeys.add(objKey);
+                modified = true;
+              }
+            }
+          } catch {}
+        }
+        if (newlyRecoveredMemImages.length > 0) {
+          const recCatIdx = memories.findIndex(
+            (m: any) => Array.isArray(m.images) && (m.id === `mem-cat-recovered-${albumId}` || String(m.title || '').toLowerCase().includes('recovered'))
+          );
+          if (recCatIdx >= 0) {
+            memories[recCatIdx] = {
+              ...memories[recCatIdx],
+              images: [...memories[recCatIdx].images, ...newlyRecoveredMemImages],
+            };
+          } else {
+            memories.push({
+              id: `mem-cat-recovered-${albumId}`,
+              title: 'Class Moments & Highlights',
+              dateStr: newlyRecoveredMemImages[0].dateTime,
+              caption: 'Class memories',
+              order: memories.length + 1,
+              images: newlyRecoveredMemImages,
+            });
           }
         }
 
@@ -4491,6 +5886,7 @@ ${message}
         }
 
         parsed.students = students;
+        parsed.memories = memories;
         if (totalCredited > 0 || parsed.profileSlotBalance !== balance) {
           parsed.profileSlotBalance = Math.max(0, balance);
           parsed.totalSlotsCredited = totalCredited;
@@ -4625,7 +6021,7 @@ ${message}
       });
     }
 
-    // 12b. POST /api/albums — Free Google Sign-Up Album Creation (Creates Draft Album)
+    // 12b. POST /api/albums — Free Google Sign-Up Album Creation (Creates Draft Album with Permanent Canonical ID)
     if (path === '/api/albums' && request.method === 'POST') {
       const body = (await request.json().catch(() => ({}))) as any;
       const sessionUser = await getSessionUser();
@@ -4655,18 +6051,22 @@ ${message}
         });
       }
 
-      const institutionId = String(albumPayload.institutionId || albumPayload.universityId || body.institutionId || '').trim();
-      const departmentId = String(albumPayload.departmentId || body.departmentId || '').trim();
+      const institutionId = String(albumPayload.institutionId || albumPayload.universityId || body.institutionId || '').trim().toLowerCase();
+      const rawDepartmentId = String(albumPayload.departmentId || body.departmentId || '').trim();
+      const departmentName = String(albumPayload.departmentName || body.departmentName || '').trim();
       const graduationYear = Number(albumPayload.graduationYear || body.graduationYear || new Date().getFullYear());
 
-      if (!institutionId || !departmentId || !graduationYear) {
+      if (!institutionId || !rawDepartmentId || !graduationYear) {
         return new Response(JSON.stringify({ error: 'Institution, department, and graduation year are required.' }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
-      const newAlbumId = String(albumPayload.id || `set-${institutionId}-${departmentId}-${graduationYear}-${Date.now()}`);
+      const canonicalDepartmentId = normalizeDepartmentCohortSlug(institutionId, rawDepartmentId, departmentName);
+      const canonicalAlbumId = getCanonicalAlbumId(institutionId, canonicalDepartmentId, graduationYear, departmentName);
+      const departmentId = canonicalDepartmentId || rawDepartmentId;
+      const newAlbumId = canonicalAlbumId;
       const nowIso = new Date().toISOString();
       const classSetTitle = String(
         albumPayload.classSetName || albumPayload.CohortLabel || `Class of ${graduationYear}`
@@ -4680,15 +6080,31 @@ ${message}
           allRows = allSetsRes?.results || [];
         } catch {}
 
-        // Rule 1 & 5: One album per Google email at launch. If email already has an active album, return it so dashboard opens immediately.
-        const existingOwnedRow = allRows.find(
-          (r: any) =>
-            String(r.admin_user_id || '').toLowerCase() === verifiedEmail.toLowerCase() &&
-            r.status !== 'deleted'
-        );
-        if (existingOwnedRow) {
+        // Rule 1 & 5: If email already owns an active album, return the reconciled album so dashboard opens immediately
+        const existingOwnedRows = allRows.filter((r: any) => {
+          if (r.status === 'deleted') return false;
+          let p: any = {};
+          try { p = JSON.parse(r.data_json || '{}'); } catch {}
+          if (p.deletedAt) return false;
+          const rAdmin = String(r.admin_user_id || p.classRepEmail || '').toLowerCase();
+          return rAdmin === verifiedEmail.toLowerCase();
+        });
+
+        if (existingOwnedRows.length > 0) {
+          // Pick the richest owned row if multiple test rows exist
+          existingOwnedRows.sort((a: any, b: any) => {
+            let pa: any = {};
+            let pb: any = {};
+            try { pa = JSON.parse(a.data_json || '{}'); } catch {}
+            try { pb = JSON.parse(b.data_json || '{}'); } catch {}
+            const scoreA = (Array.isArray(pa.students) ? pa.students.length * 10 : 0) + (Array.isArray(pa.memories) ? pa.memories.length * 5 : 0);
+            const scoreB = (Array.isArray(pb.students) ? pb.students.length * 10 : 0) + (Array.isArray(pb.memories) ? pb.memories.length * 5 : 0);
+            return scoreB - scoreA;
+          });
+          const existingOwnedRow = existingOwnedRows[0];
           let existingAlbum: any = {};
           try { existingAlbum = JSON.parse(existingOwnedRow.data_json || '{}'); } catch {}
+          existingAlbum = await reconcileAlbumSlotsAndSubmissions(existingOwnedRow, existingAlbum);
           const role = verifiedEmail.toLowerCase() === hostEmail ? 'master_host' : 'class_rep';
           const sessionToken = await createSessionToken(
             {
@@ -4726,14 +6142,18 @@ ${message}
           );
         }
 
-        // Rule 6: Duplicate institution + department + year is blocked on the server with "Report a dispute" option
-        const duplicateRow = allRows.find(
-          (r: any) =>
-            String(r.institution_id).toLowerCase() === institutionId.toLowerCase() &&
-            String(r.department_id).toLowerCase() === departmentId.toLowerCase() &&
-            Number(r.graduation_year) === graduationYear &&
-            r.status !== 'deleted'
-        );
+        // Rule 6: Duplicate institution + canonical department + year is blocked on the server with "Report a dispute" option
+        const duplicateRow = allRows.find((r: any) => {
+          if (r.status === 'deleted') return false;
+          let rp: any = {};
+          try { rp = JSON.parse(r.data_json || '{}'); } catch {}
+          if (rp.deletedAt) return false;
+          const rInst = String(r.institution_id || rp.institutionId || '').toLowerCase();
+          const rDept = normalizeDepartmentCohortSlug(rInst, String(r.department_id || rp.departmentId || ''), rp.departmentName);
+          const rYear = Number(r.graduation_year || rp.graduationYear);
+          return rInst === institutionId.toLowerCase() && rDept === canonicalDepartmentId && rYear === graduationYear;
+        });
+
         if (duplicateRow) {
           return new Response(
             JSON.stringify({
@@ -4749,18 +6169,68 @@ ${message}
           );
         }
 
-        // Remove any soft-deleted row for the same (institution_id, department_id, graduation_year) so UNIQUE constraint doesn't block recreation
-        const deletedDuplicateRows = allRows.filter(
-          (r: any) =>
-            String(r.institution_id).toLowerCase() === institutionId.toLowerCase() &&
-            String(r.department_id).toLowerCase() === departmentId.toLowerCase() &&
-            Number(r.graduation_year) === graduationYear &&
-            r.status === 'deleted'
+        // If the same owner had a soft-deleted row for this exact cohort within 30 days, restore it instead of deleting its data!
+        const deletedSameCohortRows = allRows.filter((r: any) => {
+          let rp: any = {};
+          try { rp = JSON.parse(r.data_json || '{}'); } catch {}
+          const isDel = r.status === 'deleted' || Boolean(rp.deletedAt);
+          if (!isDel) return false;
+          const rInst = String(r.institution_id || rp.institutionId || '').toLowerCase();
+          const rDept = normalizeDepartmentCohortSlug(rInst, String(r.department_id || rp.departmentId || ''), rp.departmentName);
+          const rYear = Number(r.graduation_year || rp.graduationYear);
+          return rInst === institutionId.toLowerCase() && rDept === canonicalDepartmentId && rYear === graduationYear;
+        });
+
+        const ownedSoftDeleted = deletedSameCohortRows.find(
+          (r: any) => String(r.admin_user_id || '').toLowerCase() === verifiedEmail.toLowerCase()
         );
-        for (const delRow of deletedDuplicateRows) {
-          try {
-            await env.DB.prepare(`DELETE FROM class_sets WHERE id = ?`).bind(delRow.id).run();
-          } catch {}
+        if (ownedSoftDeleted) {
+          let restoredAlbum: any = {};
+          try { restoredAlbum = JSON.parse(ownedSoftDeleted.data_json || '{}'); } catch {}
+          delete restoredAlbum.deletedAt;
+          restoredAlbum.lifecycleStatus = 'draft';
+          restoredAlbum.published = false;
+          restoredAlbum.version = (Number(restoredAlbum.version) || 1) + 1;
+          restoredAlbum = await reconcileAlbumSlotsAndSubmissions(ownedSoftDeleted, restoredAlbum);
+          await env.DB.prepare(
+            `UPDATE class_sets SET status = 'draft', data_json = ?, updated_at = datetime('now') WHERE id = ?`
+          ).bind(JSON.stringify(restoredAlbum), ownedSoftDeleted.id).run();
+
+          const role = verifiedEmail.toLowerCase() === hostEmail ? 'master_host' : 'class_rep';
+          const sessionToken = await createSessionToken(
+            {
+              id: `usr-${verifiedEmail.toLowerCase()}`,
+              email: verifiedEmail.toLowerCase(),
+              fullName: restoredAlbum.classRepName || verifiedName || verifiedEmail.split('@')[0],
+              role,
+              assignedSetId: ownedSoftDeleted.id,
+              exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+            },
+            sessionSecret
+          );
+          return new Response(
+            JSON.stringify({
+              success: true,
+              restored: true,
+              album: restoredAlbum,
+              sessionToken,
+              user: {
+                id: `usr-${verifiedEmail.toLowerCase()}`,
+                email: verifiedEmail.toLowerCase(),
+                fullName: restoredAlbum.classRepName || verifiedName || verifiedEmail.split('@')[0],
+                role,
+                assignedSetId: ownedSoftDeleted.id,
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                ...corsHeaders,
+                'Content-Type': 'application/json',
+                'Set-Cookie': `kohot_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
+              },
+            }
+          );
         }
 
         // Check for an active Cohort Funding offer or legacy KoHot slot allocation matching (institution, department, graduationYear)
@@ -5069,7 +6539,7 @@ ${message}
       );
     }
 
-    // 12c. PUT /api/albums/:id — Save Album with Ownership & Optimistic Version Check
+    // 12c. PUT /api/albums/:id — Non-Destructive Save Album with Ownership & Data Integrity Guards
     const putAlbumMatch = path.match(/^\/api\/albums\/([^/]+)$/);
     if (putAlbumMatch && request.method === 'PUT') {
       const albumId = decodeURIComponent(putAlbumMatch[1]);
@@ -5102,6 +6572,20 @@ ${message}
       let existingData: any = {};
       try { existingData = JSON.parse(existingRow.data_json || '{}'); } catch {}
 
+      // Guard: Never allow an unhydrated client fallback placeholder to overwrite real D1 album data
+      if (incomingAlbum.isHydratingPlaceholder) {
+        const reconciled = await reconcileAlbumSlotsAndSubmissions(existingRow, existingData);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            version: Number(reconciled.version) || 1,
+            album: reconciled,
+            ignoredPlaceholderSave: true,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       const rowAdmin = String(existingRow.admin_user_id || '').trim().toLowerCase();
       const jsonEmail = String(existingData.classRepEmail || existingData.currentAdminEmail || '').trim().toLowerCase();
       const ownerEmail = rowAdmin || jsonEmail;
@@ -5110,8 +6594,8 @@ ${message}
         (c: any) => String(c?.email || '').trim().toLowerCase() === requesterEmail
       );
 
-      // Host rule: Host reads everything, edits no album content (except keepByHost retention flag or Crownfield demo sets)
-      if (sessionUser.role === 'master_host' && ownerEmail !== requesterEmail && !albumId.startsWith('crownfield-')) {
+      // Host rule: Host reads everything, edits no album content (except keepByHost retention flag, owner-controlled item management, or Crownfield demo sets)
+      if (sessionUser.role === 'master_host' && ownerEmail !== requesterEmail && !albumId.startsWith('crownfield-') && !body.hostControlCenterUpdate) {
         if (body.hostOnlyRetentionUpdate || incomingAlbum.keepByHost !== existingData.keepByHost) {
           existingData.keepByHost = Boolean(incomingAlbum.keepByHost);
           existingData.version = (Number(existingData.version) || 1) + 1;
@@ -5129,8 +6613,13 @@ ${message}
         });
       }
 
-      // Admin ownership rule: allow if ownerEmail matches, or jsonEmail matches, or co-admin, or crownfield demo for host
-      if (ownerEmail !== requesterEmail && jsonEmail !== requesterEmail && !isCoAdmin && !(sessionUser.role === 'master_host' && albumId.startsWith('crownfield-'))) {
+      // Admin ownership rule: allow if ownerEmail matches, or jsonEmail matches, or co-admin, or host control center update
+      if (
+        ownerEmail !== requesterEmail &&
+        jsonEmail !== requesterEmail &&
+        !isCoAdmin &&
+        !(sessionUser.role === 'master_host' && (albumId.startsWith('crownfield-') || body.hostControlCenterUpdate))
+      ) {
         return new Response(JSON.stringify({ error: 'Forbidden: You can only read and save the album you own.' }), {
           status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -5138,6 +6627,39 @@ ${message}
       }
 
       const currentVersion = Number(existingData.version) || 1;
+
+      // Non-destructive collection guards: never wipe non-empty students, memories, awards, or voices with an empty array unless explicitly requested
+      const existingStudents = Array.isArray(existingData.students) ? existingData.students : [];
+      const incomingStudents = Array.isArray(incomingAlbum.students) ? incomingAlbum.students : [];
+      let safeStudents = incomingStudents;
+      if (existingStudents.length > 0 && incomingStudents.length === 0 && !body.explicitClearStudents) {
+        safeStudents = existingStudents;
+      } else if (existingStudents.length > 0 && incomingStudents.length > 0) {
+        // Preserve any existing student photoUrl/secondaryPhotoUrl if incoming student accidentally lost it
+        safeStudents = incomingStudents.map((incSt: any) => {
+          const prevSt = existingStudents.find((e: any) => e.id === incSt.id);
+          if (!prevSt) return incSt;
+          return {
+            ...prevSt,
+            ...incSt,
+            photoUrl: incSt.photoUrl || incSt.image || prevSt.photoUrl || prevSt.image || '',
+            secondaryPhotoUrl: incSt.secondaryPhotoUrl ?? prevSt.secondaryPhotoUrl,
+          };
+        });
+      }
+
+      const existingMemories = Array.isArray(existingData.memories) ? existingData.memories : [];
+      const incomingMemories = Array.isArray(incomingAlbum.memories) ? incomingAlbum.memories : [];
+      let safeMemories = incomingMemories;
+      if (existingMemories.length > 0 && incomingMemories.length === 0 && !body.explicitClearMemories) {
+        safeMemories = existingMemories;
+      }
+
+      const existingAwards = Array.isArray(existingData.awards) ? existingData.awards : [];
+      const incomingAwards = Array.isArray(incomingAlbum.awards) ? incomingAlbum.awards : [];
+      const safeAwards = existingAwards.length > 0 && incomingAwards.length === 0 && !body.explicitClearAwards
+        ? existingAwards
+        : incomingAwards;
 
       // Protect KoHot sponsor credit and immutable sponsor fields (amountPaid, quantity, reference)
       if (Array.isArray(existingData.sponsors)) {
@@ -5168,13 +6690,11 @@ ${message}
             sponsorName: match.sponsorName || oldSp.sponsorName,
             DisplayLabel: match.DisplayLabel || oldSp.DisplayLabel,
             showSponsorNameOnAlbum: match.showSponsorNameOnAlbum ?? oldSp.showSponsorNameOnAlbum,
-            // Never change amount, quantity, or reference
             amountPaid: oldSp.amountPaid,
             quantity: oldSp.quantity,
             reference: oldSp.reference,
           };
         });
-        // Add any genuinely new sponsors
         for (const inc of incomingSponsors) {
           if (!mergedSponsors.some((m: any) => m.id === inc.id || m.reference === inc.reference)) {
             mergedSponsors.push(inc);
@@ -5202,6 +6722,9 @@ ${message}
         ...existingData,
         ...incomingAlbum,
         id: albumId,
+        students: safeStudents,
+        memories: safeMemories,
+        awards: safeAwards,
         published: isNowPublished,
         isPublished: isNowPublished,
         unpublished: isNowUnpublished,
@@ -5211,26 +6734,13 @@ ${message}
         lifecycleStatus: nextStatus,
         version: nextVersion,
       };
+      delete updatedAlbum.isHydratingPlaceholder;
 
       updatedAlbum = await reconcileAlbumSlotsAndSubmissions(existingRow, updatedAlbum);
 
-      // Delete any R2 media objects that were removed or replaced in this album update
-      try {
-        const oldKeys = collectAlbumMediaKeys(existingData);
-        const newKeys = collectAlbumMediaKeys(updatedAlbum);
-        for (const oldKey of oldKeys) {
-          if (!newKeys.has(oldKey)) {
-            const subStillUses = await env.DB.prepare(
-              `SELECT id FROM profile_submissions WHERE album_id = ? AND status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
-            )
-              .bind(albumId, oldKey, `%${oldKey}%`)
-              .first();
-            if (!subStillUses) {
-              await deleteR2ObjectAndRecord(oldKey);
-            }
-          }
-        }
-      } catch {}
+      // NOTE: R2 objects are NEVER automatically deleted on routine PUT /api/albums/:id saves.
+      // Exclusive R2 cleanup only happens on explicit item deletion (DELETE /api/albums/:id/profiles/:pid or /memories/:mid)
+      // or permanent album erasure (/delete-permanent or 30-day scheduled expiry).
 
       await ensureInviteCodeColumn();
       const updatedTitle = String(
