@@ -14,8 +14,7 @@ import {
   XCircle,
   Plus,
   Edit3,
-  ArrowUp,
-  ArrowDown,
+  GripVertical,
   AlertTriangle,
   Sparkles,
   Upload,
@@ -135,6 +134,12 @@ export const MasterTestimonialsSection: React.FC<MasterTestimonialsSectionProps>
   // Delete confirmation modal state
   const [deletingItem, setDeletingItem] = useState<TestimonialRecord | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Hold-and-drag reordering state
+  const [draggedTestimonialIndex, setDraggedTestimonialIndex] = useState<number | null>(null);
+  const [dragOverTestimonialIndex, setDragOverTestimonialIndex] = useState<number | null>(null);
+  const holdTimerRef = useRef<number | null>(null);
+  const activeDragIndexRef = useRef<number | null>(null);
 
   const sortTestimonials = (items: TestimonialRecord[]): TestimonialRecord[] => {
     return [...items].sort((a, b) => {
@@ -276,29 +281,51 @@ export const MasterTestimonialsSection: React.FC<MasterTestimonialsSectionProps>
     );
   };
 
-  const handleMoveOrder = async (index: number, direction: 'up' | 'down') => {
+  const handleReorderTestimonials = async (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
     const list = [...filteredTestimonials];
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= list.length) return;
+    if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length) return;
 
-    const currentItem = list[index];
-    const swapItem = list[targetIndex];
+    const reorderedFiltered = [...list];
+    const [moved] = reorderedFiltered.splice(fromIndex, 1);
+    reorderedFiltered.splice(toIndex, 0, moved);
 
-    const newOrderCurrent = targetIndex + 1;
-    const newOrderSwap = index + 1;
-
-    const updated = testimonials.map((t) => {
-      if (t.id === currentItem.id) return { ...t, displayOrder: newOrderCurrent };
-      if (t.id === swapItem.id) return { ...t, displayOrder: newOrderSwap };
-      return t;
+    const newOrderMap = new Map<string, number>();
+    reorderedFiltered.forEach((item, idx) => {
+      newOrderMap.set(item.id, idx + 1);
     });
 
+    const updated = testimonials.map((t) =>
+      newOrderMap.has(t.id) ? { ...t, displayOrder: newOrderMap.get(t.id)! } : t
+    );
+
     persistTestimonials(updated);
-    await Promise.all([
-      updateTestimonialInD1(currentItem.id, { displayOrder: newOrderCurrent }),
-      updateTestimonialInD1(swapItem.id, { displayOrder: newOrderSwap }),
-    ]);
+    await Promise.all(
+      reorderedFiltered.map((item, idx) =>
+        updateTestimonialInD1(item.id, { displayOrder: idx + 1 })
+      )
+    );
   };
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (holdTimerRef.current) {
+        window.clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      if (activeDragIndexRef.current !== null) {
+        activeDragIndexRef.current = null;
+        setDraggedTestimonialIndex(null);
+        setDragOverTestimonialIndex(null);
+      }
+    };
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    window.addEventListener('touchend', handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+      window.removeEventListener('touchend', handleGlobalMouseUp);
+    };
+  }, []);
 
   const applyAlbumAdminProfile = (setId: string) => {
     setSelectedAlbumId(setId);
@@ -583,24 +610,38 @@ export const MasterTestimonialsSection: React.FC<MasterTestimonialsSectionProps>
           />
         </div>
 
-        <div className="flex items-center gap-1.5 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
-          <Filter className="w-3.5 h-3.5 text-zinc-500 mr-1 shrink-0" />
-          {(['All', 'Approved', 'Pending', 'Rejected'] as const).map((status) => (
-            <button
-              key={status}
-              type="button"
-              onClick={() => setFilterStatus(status)}
-              className={`px-3.5 py-1.5 rounded-full font-mono-tech text-[11px] uppercase tracking-wider transition-all cursor-pointer shrink-0 ${
-                filterStatus === status
-                  ? 'bg-[#d4af37] text-slate-950 font-bold'
-                  : 'bg-[#101014] text-zinc-400 hover:text-white border border-white/10'
-              }`}
-            >
-              {status}
-            </button>
-          ))}
+        <div
+          role="tablist"
+          className="inline-flex items-center gap-1 p-1.5 rounded-full bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 shadow-xs w-full sm:w-auto overflow-x-auto no-scrollbar shrink-0"
+        >
+          {(['All', 'Approved', 'Pending', 'Rejected'] as const).map((status) => {
+            const isActive = filterStatus === status;
+            return (
+              <button
+                key={status}
+                role="tab"
+                aria-selected={isActive}
+                type="button"
+                onClick={() => setFilterStatus(status)}
+                className={`px-3.5 py-1.5 rounded-full font-mono-tech text-xs uppercase tracking-wider transition-all cursor-pointer shrink-0 ${
+                  isActive
+                    ? 'active-clip bg-[#d4af37] text-black font-bold shadow-xs'
+                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
+                }`}
+              >
+                {status}
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      {/* Subtle Hold & Drag Instruction Line (Matches Album Admin Dashboard) */}
+      {filteredTestimonials.length > 0 && (
+        <p className="px-1 font-mono-tech text-xs text-zinc-500">
+          Hold &amp; drag to reorder
+        </p>
+      )}
 
       {/* Testimonials Cards Grid matching Website Luxury Card Design */}
       {filteredTestimonials.length === 0 ? (
@@ -617,6 +658,8 @@ export const MasterTestimonialsSection: React.FC<MasterTestimonialsSectionProps>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
           {filteredTestimonials.map((t, index) => {
             const isVisible = t.isVisible !== false;
+            const isBeingDragged = draggedTestimonialIndex === index;
+            const isDragOver = dragOverTestimonialIndex === index && draggedTestimonialIndex !== index;
             const author = t.authorName || t.fullName || t.name || 'Class Album Admin';
             const role = t.role || t.authorRole || 'Class Album Admin';
             const department = t.departmentName || t.department || '';
@@ -634,8 +677,68 @@ export const MasterTestimonialsSection: React.FC<MasterTestimonialsSectionProps>
             return (
               <div
                 key={t.id}
-                className={`group relative rounded-2xl p-5 sm:p-6 bg-[#18181b] border transition-all duration-300 flex flex-col justify-between ${
-                  !isVisible
+                draggable
+                onDragStart={(e) => {
+                  activeDragIndexRef.current = index;
+                  setDraggedTestimonialIndex(index);
+                  setDragOverTestimonialIndex(index);
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragOverTestimonialIndex !== index) {
+                    setDragOverTestimonialIndex(index);
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const fromIdx = activeDragIndexRef.current ?? draggedTestimonialIndex;
+                  if (fromIdx !== null && fromIdx !== index) {
+                    handleReorderTestimonials(fromIdx, index);
+                  }
+                  activeDragIndexRef.current = null;
+                  setDraggedTestimonialIndex(null);
+                  setDragOverTestimonialIndex(null);
+                }}
+                onDragEnd={() => {
+                  activeDragIndexRef.current = null;
+                  setDraggedTestimonialIndex(null);
+                  setDragOverTestimonialIndex(null);
+                }}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  if ((e.target as HTMLElement).closest('button')) return;
+                  if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
+                  holdTimerRef.current = window.setTimeout(() => {
+                    activeDragIndexRef.current = index;
+                    setDraggedTestimonialIndex(index);
+                    setDragOverTestimonialIndex(index);
+                  }, 120);
+                }}
+                onMouseEnter={() => {
+                  const fromIdx = activeDragIndexRef.current;
+                  if (fromIdx !== null && fromIdx !== index) {
+                    activeDragIndexRef.current = index;
+                    setDraggedTestimonialIndex(index);
+                    setDragOverTestimonialIndex(index);
+                    handleReorderTestimonials(fromIdx, index);
+                  }
+                }}
+                onTouchStart={(e) => {
+                  if ((e.target as HTMLElement).closest('button')) return;
+                  if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
+                  holdTimerRef.current = window.setTimeout(() => {
+                    activeDragIndexRef.current = index;
+                    setDraggedTestimonialIndex(index);
+                    setDragOverTestimonialIndex(index);
+                  }, 150);
+                }}
+                className={`group relative rounded-2xl p-5 sm:p-6 bg-[#18181b] border transition-all duration-300 flex flex-col justify-between cursor-grab active:cursor-grabbing select-none ${
+                  isBeingDragged
+                    ? 'kohot-drag-active-card border-[#d4af37] ring-2 ring-[#d4af37]/60 scale-[1.01] shadow-2xl z-20'
+                    : isDragOver
+                    ? 'border-[#d4af37]/60'
+                    : !isVisible
                     ? 'border-white/[0.05] opacity-60'
                     : statusLabel === 'Pending'
                     ? 'border-amber-500/40 shadow-[0_12px_32px_-12px_rgba(245,158,11,0.18)]'
@@ -665,7 +768,8 @@ export const MasterTestimonialsSection: React.FC<MasterTestimonialsSectionProps>
                           <XCircle className="w-3 h-3" /> Rejected
                         </span>
                       )}
-                      <span className="font-mono-tech text-[10px] text-zinc-500">
+                      <span className="inline-flex items-center gap-1 font-mono-tech text-[10px] text-zinc-500">
+                        <GripVertical className="w-3.5 h-3.5 text-zinc-500" />
                         #{index + 1}
                       </span>
                     </div>
@@ -736,28 +840,6 @@ export const MasterTestimonialsSection: React.FC<MasterTestimonialsSectionProps>
                         )}
                         {isVisible ? 'Live on Site' : 'Hidden'}
                       </button>
-
-                      {/* Reorder Up/Down */}
-                      <div className="inline-flex items-center rounded-full border border-white/10 bg-[#101014] overflow-hidden">
-                        <button
-                          type="button"
-                          disabled={index === 0}
-                          onClick={() => handleMoveOrder(index, 'up')}
-                          className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                          title="Move earlier"
-                        >
-                          <ArrowUp className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={index === filteredTestimonials.length - 1}
-                          onClick={() => handleMoveOrder(index, 'down')}
-                          className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer border-l border-white/10"
-                          title="Move later"
-                        >
-                          <ArrowDown className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
                     </div>
 
                     <div className="flex items-center gap-1.5">

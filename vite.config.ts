@@ -125,6 +125,16 @@ function createDevStorage() {
           ? 'video/webm'
           : ext === 'mp4'
           ? 'video/mp4'
+          : ext === 'mp3'
+          ? 'audio/mpeg'
+          : ext === 'wav'
+          ? 'audio/wav'
+          : ext === 'ogg'
+          ? 'audio/ogg'
+          : ext === 'm4a'
+          ? 'audio/mp4'
+          : ext === 'aac'
+          ? 'audio/aac'
           : ext === 'png'
           ? 'image/png'
           : ext === 'webp'
@@ -137,6 +147,69 @@ function createDevStorage() {
         range: rangeResult,
         httpMetadata: { contentType },
         httpEtag: `"${stat.mtimeMs}-${stat.size}"`,
+      };
+    },
+
+    async head(key: string) {
+      const filePath = path.join(mediaDir, key);
+      if (!fs.existsSync(filePath)) return null;
+      const stat = fs.statSync(filePath);
+      const metaPath = path.join(mediaDir, `${key}.meta.json`);
+      let meta: any = null;
+      if (fs.existsSync(metaPath)) {
+        try {
+          meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+        } catch {}
+      }
+      return {
+        key,
+        size: stat.size,
+        uploaded: new Date(stat.mtimeMs),
+        httpMetadata: meta?.httpMetadata || {},
+        httpEtag: `"${stat.mtimeMs}-${stat.size}"`,
+      };
+    },
+
+    async list(options?: { prefix?: string; limit?: number; cursor?: string }) {
+      const objects: Array<{ key: string; size: number; uploaded: Date; httpMetadata?: any }> = [];
+      const walk = (dir: string, relPrefix = '') => {
+        if (!fs.existsSync(dir)) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const relKey = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(fullPath, relKey);
+          } else if (entry.isFile() && !entry.name.endsWith('.meta.json')) {
+            if (!options?.prefix || relKey.startsWith(options.prefix)) {
+              const stat = fs.statSync(fullPath);
+              let meta: any = null;
+              const metaPath = `${fullPath}.meta.json`;
+              if (fs.existsSync(metaPath)) {
+                try {
+                  meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+                } catch {}
+              }
+              objects.push({
+                key: relKey,
+                size: stat.size,
+                uploaded: new Date(stat.mtimeMs),
+                httpMetadata: meta?.httpMetadata || {},
+              });
+            }
+          }
+        }
+      };
+      walk(mediaDir);
+      objects.sort((a, b) => a.key.localeCompare(b.key));
+      const limit = options?.limit || 1000;
+      const startIdx = options?.cursor ? parseInt(options.cursor, 10) || 0 : 0;
+      const slice = objects.slice(startIdx, startIdx + limit);
+      const nextIdx = startIdx + limit;
+      const truncated = nextIdx < objects.length;
+      return {
+        objects: slice,
+        truncated,
+        cursor: truncated ? String(nextIdx) : undefined,
       };
     },
   };
@@ -173,7 +246,7 @@ function createDevStorage() {
       }
     }
     const defaults: Record<string, string> = {
-      student_fee_kobo: '50000',
+      student_fee_kobo: '100000',
       min_funded_to_publish: '10',
       profile_cap_default: '200',
       reinstate_days: '7',

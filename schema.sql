@@ -87,12 +87,20 @@ CREATE TABLE IF NOT EXISTS transactions (
   amount INTEGER NOT NULL, -- in NGN
   amount_kobo INTEGER NOT NULL, -- in kobo
   currency TEXT DEFAULT 'NGN',
-  status TEXT NOT NULL, -- 'Paid' | 'paid, duplicate class, needs refund' | 'paid, album not created'
+  status TEXT NOT NULL, -- 'Paid' | 'pending' | 'failed' | 'voided' | 'refunded' | 'paid, needs review'
+  environment TEXT DEFAULT 'legacy', -- 'live' | 'test' | 'legacy'
   payer_name TEXT,
   payer_email TEXT,
   programme_id TEXT,
   list_price_kobo INTEGER,
   discount_kobo INTEGER DEFAULT 0,
+  voided_at TEXT,
+  voided_by TEXT,
+  void_reason TEXT,
+  previous_status TEXT,
+  restored_at TEXT,
+  restored_by TEXT,
+  restore_reason TEXT,
   paystack_data_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -310,11 +318,16 @@ CREATE TABLE IF NOT EXISTS slot_ledger (
   sponsor_name TEXT,
   unit_value_kobo INTEGER,
   idempotency_key TEXT UNIQUE,
+  environment TEXT DEFAULT 'legacy', -- 'live' | 'test' | 'legacy' | 'system'
+  reference TEXT,
+  reversal_of_ledger_id TEXT,
+  note TEXT,
   created_by TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_slot_ledger_album ON slot_ledger(album_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_slot_ledger_reference ON slot_ledger(reference);
 
 -- 17. Slot Purchases
 CREATE TABLE IF NOT EXISTS slot_purchases (
@@ -324,7 +337,11 @@ CREATE TABLE IF NOT EXISTS slot_purchases (
   amount_kobo INTEGER NOT NULL,
   reference TEXT UNIQUE NOT NULL,
   sponsor_name TEXT,
-  status TEXT NOT NULL,
+  status TEXT NOT NULL, -- 'completed' | 'voided'
+  environment TEXT DEFAULT 'legacy', -- 'live' | 'test' | 'legacy'
+  voided_at TEXT,
+  voided_by TEXT,
+  void_reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

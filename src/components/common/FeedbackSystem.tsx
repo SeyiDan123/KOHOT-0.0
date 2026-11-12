@@ -299,7 +299,7 @@ export const FeedbackProvider: React.FC<FeedbackProviderProps> = ({ children }) 
                   warningModal.onCancel?.();
                   closeWarningModal();
                 }}
-                className="px-4 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-mono-tech text-xs tracking-wider uppercase transition-colors cursor-pointer"
+                className="px-4 py-2.5 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-800 border border-slate-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-200 dark:border-white/15 font-mono-tech text-xs font-semibold tracking-wider uppercase transition-colors cursor-pointer"
               >
                 {warningModal.cancelLabel || 'Cancel'}
               </button>

@@ -764,8 +764,47 @@ export default function App() {
     if ((updatedSet as any).isHydratingPlaceholder) {
       return;
     }
-    const exists = sets.some((s) => s.id === updatedSet.id);
-    const updated = exists ? sets.map((s) => (s.id === updatedSet.id ? updatedSet : s)) : [updatedSet, ...sets];
+    const existingTarget = sets.find((s) => s.id === updatedSet.id);
+    const exists = Boolean(existingTarget);
+
+    // Check if department association name or department socials were updated on this set
+    const prevAssoc = existingTarget?.departmentAssociationName || '';
+    const nextAssoc = updatedSet.departmentAssociationName || '';
+    const prevSocialsJson = JSON.stringify(existingTarget?.socials || {});
+    const nextSocialsJson = JSON.stringify(updatedSet.socials || {});
+    const shouldReplicateDeptSocials =
+      prevAssoc !== nextAssoc || prevSocialsJson !== nextSocialsJson;
+
+    const targetInstId = (updatedSet.institutionId || updatedSet.universityId || '').toLowerCase().trim();
+    const targetDeptId = (updatedSet.departmentId || '').toLowerCase().trim();
+    const targetDeptName = (updatedSet.departmentName || '').toLowerCase().trim();
+
+    const siblingSetsToPersist: ClassSet[] = [];
+
+    const baseList = exists ? sets.map((s) => (s.id === updatedSet.id ? updatedSet : s)) : [updatedSet, ...sets];
+    const updated = shouldReplicateDeptSocials
+      ? baseList.map((s) => {
+          if (s.id === updatedSet.id) return s;
+          const sInstId = (s.institutionId || s.universityId || '').toLowerCase().trim();
+          const sDeptId = (s.departmentId || '').toLowerCase().trim();
+          const sDeptName = (s.departmentName || '').toLowerCase().trim();
+          const sameInst = Boolean(targetInstId && sInstId === targetInstId);
+          const sameDept =
+            (targetDeptId && sDeptId === targetDeptId) ||
+            (targetDeptName && sDeptName === targetDeptName);
+          if (sameInst && sameDept) {
+            const replicated: ClassSet = {
+              ...s,
+              departmentAssociationName: updatedSet.departmentAssociationName,
+              socials: updatedSet.socials ? { ...updatedSet.socials } : undefined,
+            };
+            siblingSetsToPersist.push(replicated);
+            return replicated;
+          }
+          return s;
+        })
+      : baseList;
+
     setSets(updated);
 
     // Never store static Crownfield demo albums in D1
@@ -781,6 +820,22 @@ export default function App() {
           setSets((prev) =>
             prev.map((s) => (s.id === updatedSet.id ? { ...s, version: res.version } : s))
           );
+        }
+      });
+
+      // Also persist replicated department association name & socials to sibling albums in D1
+      siblingSetsToPersist.forEach((sib) => {
+        if (!isCrownfieldDemoAlbum(sib)) {
+          saveAlbumToD1(sib.id, sib, {
+            version: sib.version ?? 1,
+            hostControlCenterUpdate: isHostUser,
+          }).then((res) => {
+            if (res.success && res.version) {
+              setSets((prev) =>
+                prev.map((s) => (s.id === sib.id ? { ...s, version: res.version } : s))
+              );
+            }
+          });
         }
       });
     }
@@ -1518,6 +1573,7 @@ export default function App() {
                 })()}
                 <DepartmentAlbumView
                   currentSet={currentSet}
+                  contentOverride={contentOverride}
                   originView={albumOriginView}
                   inviteContext={inviteContext}
                   onBackToGrid={() => {

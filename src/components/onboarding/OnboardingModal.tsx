@@ -456,10 +456,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       if (signupRes.success && signupRes.signupToken && signupRes.email) {
         const normalizedEmail = signupRes.email.toLowerCase().trim();
 
-        // Check if this Google email already owns an album; if so, open its dashboard immediately
-        const existingAlbum = sets.find(
-          (s) => s.classRepEmail && s.classRepEmail.toLowerCase().trim() === normalizedEmail
-        );
+        // Check if this Google email already owns an active or <30d soft-deleted album; if so, open its dashboard immediately
+        const RECOVERY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+        const existingAlbum = sets.find((s) => {
+          if (!s.classRepEmail || s.classRepEmail.toLowerCase().trim() !== normalizedEmail) return false;
+          if (!s.deletedAt) return true;
+          const deletedMs = new Date(s.deletedAt).getTime();
+          return Number.isFinite(deletedMs) && Date.now() - deletedMs < RECOVERY_WINDOW_MS;
+        });
         if (existingAlbum || normalizedEmail === 'seyidan03@gmail.com') {
           const loginRes = await authenticateWithOAuthPayload({
             provider: oauthResult.provider,
@@ -1718,12 +1722,16 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         <GoogleAccountChooserModal
           isOpen={isGoogleChooserOpen}
           onClose={() => setIsGoogleChooserOpen(false)}
+          appName={brandName}
+          logoUrl={logoUrl}
           onSelectAccount={(acc) => {
             setIsGoogleChooserOpen(false);
             processOnboardingOAuth({
               provider: 'google',
               email: acc.email,
               name: acc.name,
+              idToken: acc.idToken || acc.credential,
+              accessToken: acc.accessToken,
             });
           }}
         />

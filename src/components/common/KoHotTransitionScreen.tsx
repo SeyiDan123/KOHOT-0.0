@@ -97,13 +97,16 @@ export const KoHotTransitionScreen: React.FC<KoHotTransitionScreenProps> = ({
             KOHOT
           </h1>
 
-          {/* The text under KoHot - Constant White / Calm Grey */}
-          <div className="space-y-1 pt-1">
-            <h2 className="font-syne font-bold text-base sm:text-lg !text-white tracking-tight leading-snug max-w-sm mx-auto" style={{ color: '#ffffff' }}>
+          {/* The text under KOHOT - University Name above, Department Name below matching Legacy Wall */}
+          <div className="space-y-1.5 pt-1">
+            <p className="font-syne font-semibold text-xs sm:text-sm !text-zinc-300 tracking-wider uppercase" style={{ color: '#d4d4d8' }}>
+              {institutionLabel}
+            </p>
+            <h2 className="font-syne font-bold text-base sm:text-xl !text-white tracking-tight leading-snug uppercase max-w-sm mx-auto" style={{ color: '#ffffff' }}>
               {normalizedDepartment}
             </h2>
-            <p className="font-syne font-medium text-xs sm:text-sm !text-zinc-300 tracking-wide" style={{ color: '#d4d4d8' }}>
-              {institutionLabel}
+            <p className="font-mono-tech text-[11px] sm:text-xs uppercase tracking-[0.22em] !text-[#d4af37] pt-1 font-semibold" style={{ color: '#d4af37' }}>
+              Class Albums &amp; Memories
             </p>
           </div>
         </div>

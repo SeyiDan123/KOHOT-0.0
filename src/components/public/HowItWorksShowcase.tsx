@@ -22,10 +22,18 @@ import {
   Quote
 } from 'lucide-react';
 import { ScrollReveal } from '../common/ScrollReveal';
+import { WebsiteContentOverride } from '../../types';
+
+const DEFAULT_CORRIDOR_PLAQUE_IMAGES = [
+  'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1200&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=1200&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1523240795612-9a054b0db644?q=80&w=1200&auto=format&fit=crop',
+];
 
 interface HowItWorksShowcaseProps {
   onOpenOnboarding: () => void;
   onExploreDemos: () => void;
+  contentOverride?: WebsiteContentOverride;
 }
 
 interface StepItem {
@@ -41,10 +49,35 @@ interface StepItem {
 export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
   onOpenOnboarding,
   onExploreDemos,
+  contentOverride,
 }) => {
   const [activeStep, setActiveStep] = useState<number>(0);
+  const [isStepsPaused, setIsStepsPaused] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const trackRef = useRef<HTMLDivElement>(null);
+
+  // 3-Image Swipe Transition Window state for Physical Installation in Department Corridor
+  const [plaqueSlideIdx, setPlaqueSlideIdx] = useState<number>(0);
+  const [isPlaquePaused, setIsPlaquePaused] = useState<boolean>(false);
+  const plaqueTouchStartXRef = useRef<number | null>(null);
+
+  const corridorPlaqueImages = [0, 1, 2].map((i) => {
+    const custom = contentOverride?.corridorPlaqueImages?.[i]?.trim();
+    return custom || DEFAULT_CORRIDOR_PLAQUE_IMAGES[i];
+  });
+
+  useEffect(() => {
+    if (isPlaquePaused) return;
+    const timer = window.setInterval(() => {
+      setPlaqueSlideIdx((prev) => (prev + 1) % 3);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [isPlaquePaused]);
+
+  // Animated Auto-Swiping Carousel state for The Complete Album Experience (9 cards)
+  const [activeSpecIdx, setActiveSpecIdx] = useState<number>(0);
+  const [isSpecsPaused, setIsSpecsPaused] = useState<boolean>(false);
+  const specsTrackRef = useRef<HTMLDivElement>(null);
 
   const steps: StepItem[] = [
     {
@@ -106,7 +139,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
       stepNum: '07',
       tagline: 'COME BACK EVERY YEAR',
       title: 'Come Back Every Year',
-      description: 'Each year, KoHot sends a gentle reminder to return to your album, remember the moments and reconnect with your classmates.',
+      description: 'Each year, KOHOT sends a gentle reminder to return to your album, remember the moments and reconnect with your classmates.',
       type: 'phone',
       category: 'Remembrance',
     },
@@ -136,9 +169,10 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
   }, [steps.length]);
 
   const scrollToIndex = (idx: number) => {
-    setActiveStep(idx);
-    if (trackRef.current && trackRef.current.children && trackRef.current.children[idx]) {
-      const card = trackRef.current.children[idx] as HTMLElement;
+    const bounded = (idx + steps.length) % steps.length;
+    setActiveStep(bounded);
+    if (trackRef.current && trackRef.current.children && trackRef.current.children[bounded]) {
+      const card = trackRef.current.children[bounded] as HTMLElement;
       if (card) {
         trackRef.current.scrollTo({
           left: card.offsetLeft - trackRef.current.offsetLeft,
@@ -148,15 +182,14 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
     }
   };
 
-  const handleNext = () => {
-    const next = (activeStep + 1) % steps.length;
-    scrollToIndex(next);
-  };
-
-  const handlePrev = () => {
-    const prev = (activeStep - 1 + steps.length) % steps.length;
-    scrollToIndex(prev);
-  };
+  // Auto-swipe How It Works 7-card carousel
+  useEffect(() => {
+    if (isStepsPaused) return;
+    const timer = window.setInterval(() => {
+      scrollToIndex(activeStep + 1);
+    }, 4600);
+    return () => window.clearInterval(timer);
+  }, [activeStep, isStepsPaused]);
 
   const handleShareInvite = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -186,35 +219,20 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
             </ScrollReveal>
 
             <ScrollReveal delayMs={480} durationMs={1350}>
-              {/* Rich medium slate subheading in light mode, calm white in dark mode */}
               <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 font-normal">
-                Bring everyone together, gather the memories, and let KoHot preserve the rest.
+                Bring everyone together, gather the memories, and let KOHOT preserve the rest.
               </p>
             </ScrollReveal>
           </div>
-
-          {/* Nav Controls */}
-          <div className="flex items-center gap-3 self-start md:self-end">
-            <button
-              onClick={handlePrev}
-              className="w-11 h-11 rounded-full bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 text-slate-900 dark:text-white flex items-center justify-center transition-all cursor-pointer shadow-sm hover:shadow active:scale-95"
-              aria-label="Previous step"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <button
-              onClick={handleNext}
-              className="w-11 h-11 rounded-full bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 text-slate-900 dark:text-white flex items-center justify-center transition-all cursor-pointer shadow-sm hover:shadow active:scale-95"
-              aria-label="Next step"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
         </div>
 
-        {/* 7-Card Horizontal Swipeable Carousel Track */}
+        {/* 7-Card Horizontal Swipeable Carousel Track (Auto-swiping, no upper arrows) */}
         <div
           ref={trackRef}
+          onMouseEnter={() => setIsStepsPaused(true)}
+          onMouseLeave={() => setIsStepsPaused(false)}
+          onTouchStart={() => setIsStepsPaused(true)}
+          onTouchEnd={() => setIsStepsPaused(false)}
           className="flex gap-6 overflow-x-auto snap-x snap-mandatory pb-6 pt-2 scrollbar-none no-scrollbar -mx-6 px-6 sm:-mx-10 sm:px-10"
           style={{ scrollBehavior: 'smooth' }}
         >
@@ -471,8 +489,25 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
           ))}
         </div>
 
+        {/* Swiping Transition Dots for the 7 Steps */}
+        <div className="flex items-center justify-center gap-2 mt-6">
+          {steps.map((s, idx) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => scrollToIndex(idx)}
+              className={`h-1.5 transition-all duration-300 rounded-full cursor-pointer ${
+                activeStep === idx
+                  ? 'w-8 bg-[#d4af37]'
+                  : 'w-2 bg-zinc-300 dark:bg-zinc-700 hover:bg-zinc-400 dark:hover:bg-zinc-500'
+              }`}
+              aria-label={`Go to step ${idx + 1}`}
+            />
+          ))}
+        </div>
+
         {/* Single clear primary action at the end of the 7 steps */}
-        <div className="mt-12 text-center">
+        <div className="mt-10 text-center">
           <button
             onClick={onOpenOnboarding}
             className="inline-flex items-center gap-2.5 px-8 py-4 rounded-full bg-[#d4af37] hover:bg-[#e6c158] text-slate-950 font-syne font-bold text-sm uppercase tracking-wider transition-all cursor-pointer shadow-xl shadow-black/20 active:scale-95"
@@ -499,7 +534,6 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
             </ScrollReveal>
 
             <ScrollReveal delayMs={480} durationMs={1350}>
-              {/* Calm white in dark mode, slate grey in light mode */}
               <p className="font-body text-base text-slate-600 dark:text-zinc-200 font-medium max-w-3xl leading-relaxed">
                 A graduating class is not an isolated event, but one chapter in a department’s continuing story.
               </p>
@@ -509,38 +543,102 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
             </ScrollReveal>
           </div>
 
-          {/* Department Architecture Diagram Card - Pure Clean White with Subtle Slate Borders in light, dark/mid grey #18181b in dark */}
+          {/* Department Architecture Diagram Card */}
           <ScrollReveal delayMs={450} durationMs={950}>
             <div className="bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 rounded-[36px] p-6 sm:p-10 lg:p-12 shadow-sm hover:shadow-md relative overflow-hidden text-slate-900 dark:text-white max-w-5xl mx-auto">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
               
-              {/* Plaque Graphic (Physical Anchor on Campus Wall) */}
+              {/* 3-Swipe-Image Transition Window (Physical Installation in Department Corridor — Replaceable in Website Media) */}
               <div className="lg:col-span-5 flex flex-col items-center text-center">
-                <div className="w-full max-w-xs rounded-2xl bg-zinc-950 border-2 border-[#d4af37]/60 p-6 shadow-2xl relative group">
+                <div
+                  id="corridor-plaque-3-swipe-window"
+                  className="w-full max-w-xs aspect-[4/5] rounded-3xl bg-zinc-950 border-2 border-[#d4af37]/60 shadow-2xl relative overflow-hidden select-none group cursor-grab active:cursor-grabbing"
+                  onMouseEnter={() => setIsPlaquePaused(true)}
+                  onMouseLeave={() => setIsPlaquePaused(false)}
+                  onTouchStart={(e) => {
+                    setIsPlaquePaused(true);
+                    plaqueTouchStartXRef.current = e.touches[0]?.clientX ?? null;
+                  }}
+                  onTouchEnd={(e) => {
+                    if (plaqueTouchStartXRef.current !== null && e.changedTouches[0]) {
+                      const dx = e.changedTouches[0].clientX - plaqueTouchStartXRef.current;
+                      if (Math.abs(dx) > 36) {
+                        setPlaqueSlideIdx((prev) =>
+                          dx < 0 ? (prev + 1) % 3 : (prev - 1 + 3) % 3
+                        );
+                      }
+                    }
+                    plaqueTouchStartXRef.current = null;
+                    setIsPlaquePaused(false);
+                  }}
+                  onMouseDown={(e) => {
+                    plaqueTouchStartXRef.current = e.clientX;
+                  }}
+                  onMouseUp={(e) => {
+                    if (plaqueTouchStartXRef.current !== null) {
+                      const dx = e.clientX - plaqueTouchStartXRef.current;
+                      if (Math.abs(dx) > 36) {
+                        setPlaqueSlideIdx((prev) =>
+                          dx < 0 ? (prev + 1) % 3 : (prev - 1 + 3) % 3
+                        );
+                      }
+                    }
+                    plaqueTouchStartXRef.current = null;
+                  }}
+                >
                   {/* Acrylic Corner Standoffs */}
-                  <div className="absolute top-3 left-3 w-3 h-3 rounded-full bg-[#d4af37] border border-white/40 shadow" />
-                  <div className="absolute top-3 right-3 w-3 h-3 rounded-full bg-[#d4af37] border border-white/40 shadow" />
-                  <div className="absolute bottom-3 left-3 w-3 h-3 rounded-full bg-[#d4af37] border border-white/40 shadow" />
-                  <div className="absolute bottom-3 right-3 w-3 h-3 rounded-full bg-[#d4af37] border border-white/40 shadow" />
+                  <div className="absolute top-3 left-3 z-20 w-2.5 h-2.5 rounded-full bg-[#d4af37] border border-white/40 shadow" />
+                  <div className="absolute top-3 right-3 z-20 w-2.5 h-2.5 rounded-full bg-[#d4af37] border border-white/40 shadow" />
+                  <div className="absolute bottom-3 left-3 z-20 w-2.5 h-2.5 rounded-full bg-[#d4af37] border border-white/40 shadow" />
+                  <div className="absolute bottom-3 right-3 z-20 w-2.5 h-2.5 rounded-full bg-[#d4af37] border border-white/40 shadow" />
 
-                  {/* University & Department Header */}
-                  <div className="space-y-1 mt-2">
-                    <span className="font-mono-tech text-[9px] uppercase tracking-[0.2em] text-[#d4af37] block font-semibold">
-                      DEPARTMENT OF COMPUTER SCIENCE
-                    </span>
-                    <h5 className="font-syne font-bold text-base text-white uppercase">
-                      University of Lagos
-                    </h5>
+                  {/* 3-Image Horizontal Sliding Track */}
+                  <div
+                    className="w-full h-full flex transition-transform duration-700 cubic-bezier(0.22, 1, 0.36, 1)"
+                    style={{
+                      transform: `translate3d(-${plaqueSlideIdx * 100}%, 0, 0)`,
+                    }}
+                  >
+                    {corridorPlaqueImages.map((imgUrl, idx) => (
+                      <div key={idx} className="w-full h-full shrink-0 relative overflow-hidden">
+                        <img
+                          src={imgUrl}
+                          alt={`Physical Installation in Department Corridor ${idx + 1}`}
+                          loading="eager"
+                          referrerPolicy="no-referrer"
+                          draggable={false}
+                          className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-1000"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/30 pointer-events-none" />
+                        <div className="absolute bottom-8 inset-x-4 text-center pointer-events-none">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/65 backdrop-blur-md border border-[#d4af37]/40 font-mono-tech text-[9px] uppercase tracking-widest text-[#d4af37] font-semibold">
+                            <QrCode className="w-3 h-3 text-[#d4af37]" />
+                            <span>Slide 0{idx + 1} • Corridor Legacy Plaque</span>
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
-                  {/* QR Code Gateway */}
-                  <div className="my-5 p-3 rounded-xl bg-white text-black inline-flex items-center justify-center shadow-lg">
-                    <QrCode className="w-16 h-16 text-black" strokeWidth={2.2} />
+                  {/* Swiping Transition Dots inside Window */}
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5">
+                    {[0, 1, 2].map((dotIdx) => (
+                      <button
+                        key={dotIdx}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPlaqueSlideIdx(dotIdx);
+                        }}
+                        className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
+                          plaqueSlideIdx === dotIdx
+                            ? 'w-7 bg-[#d4af37]'
+                            : 'w-2 bg-white/55 hover:bg-white/80'
+                        }`}
+                        aria-label={`View corridor installation image ${dotIdx + 1}`}
+                      />
+                    ))}
                   </div>
-
-                  <p className="font-mono-tech text-[10px] text-zinc-400 uppercase tracking-widest">
-                    Scan or Tap to Open Living Class Albums
-                  </p>
                 </div>
 
                 <span className="font-mono-tech text-xs text-slate-500 dark:text-zinc-400 mt-4 font-medium">
@@ -606,235 +704,129 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
           </ScrollReveal>
 
           {/* =====================================================================
-              PART 3: THE ALBUM EXPERIENCE & ARCHITECTURE (PRODUCT SPECIFICATION)
-              Curated overview of platform systems, physical plaques & features
+              PART 3: THE COMPLETE ALBUM EXPERIENCE (REFINED & ANIMATED AUTO-SWIPE SHOWCASE)
               ===================================================================== */}
-          <div id="album-experience-specs" className="mt-20 max-w-5xl mx-auto space-y-8">
-            <ScrollReveal delayMs={100} durationMs={800}>
-              <div className="text-left space-y-3 mb-10">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] text-[11px] font-mono-tech font-bold uppercase tracking-wider">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>The Complete Album Experience</span>
-                </div>
-                <h3 className="font-syne font-bold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight">
-                  Everything Crafted for Your Graduating Class
-                </h3>
-                <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-300 max-w-3xl leading-relaxed">
-                  A seamless blend of physical campus permanence, dedicated administrative control, and rich interactive storytelling designed to celebrate your cohort forever.
-                </p>
-              </div>
-            </ScrollReveal>
+          {(() => {
+            const experienceSpecs = [
+              {
+                num: '01',
+                title: 'Dedicated Admin Dashboard',
+                tag: 'Curation & Management',
+                description:
+                  'Intuitive curation suite for class reps to review graduate submissions, moderate photo stories, trigger WhatsApp invitations, and configure anniversary dispatch queues.',
+                icon: LayoutDashboard,
+                iconBg: 'bg-amber-500/10 border-amber-500/20 text-[#d4af37]',
+                tagColor: 'text-[#d4af37]',
+              },
+              {
+                num: '02',
+                title: 'Dedicated Legacy Wall',
+                tag: 'Department Timeline',
+                description:
+                  'A central generational portal dedicated exclusively to your department, displaying historical sets chronologically without mixing cohorts across institutions.',
+                icon: Layers,
+                iconBg: 'bg-blue-500/10 border-blue-500/20 text-blue-500 dark:text-blue-400',
+                tagColor: 'text-blue-600 dark:text-blue-400',
+              },
+              {
+                num: '03',
+                title: '1 Album Per Set',
+                tag: 'Cohort Exclusivity',
+                description:
+                  'One immutable digital album dedicated exclusively to each graduating cohort, keeping memories, graduates, and honors unmixed and permanently preserved.',
+                icon: BookOpen,
+                iconBg: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+                tagColor: 'text-emerald-600 dark:text-emerald-400',
+              },
+              {
+                num: '04',
+                title: 'Department Legacy Plaque',
+                tag: 'Physical Campus Anchor',
+                description:
+                  'A physical architectural acrylic plaque permanently installed in the department corridor, with a scannable QR gateway linking directly to your department archive.',
+                icon: QrCode,
+                iconBg: 'bg-amber-500/10 border-amber-500/20 text-[#d4af37]',
+                tagColor: 'text-[#d4af37]',
+              },
+              {
+                num: '05',
+                title: 'High-Fidelity Profiles',
+                tag: 'Graduate Directory',
+                description:
+                  'Square portrait framing preserving edge balance, nicknames, memorable quotes, verified email links, and diverse social handles (X/Twitter, LinkedIn, Instagram).',
+                icon: Users,
+                iconBg: 'bg-purple-500/10 border-purple-500/20 text-purple-600 dark:text-purple-400',
+                tagColor: 'text-purple-600 dark:text-purple-400',
+              },
+              {
+                num: '06',
+                title: 'Moments & Video Streams',
+                tag: 'Media Archives',
+                description:
+                  'Photo memories organized by event milestones (matriculation, dinners, project defense) paired with streaming video streams of class documentaries.',
+                icon: Video,
+                iconBg: 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400',
+                tagColor: 'text-rose-600 dark:text-rose-400',
+              },
+              {
+                num: '07',
+                title: 'Awards & Peer Honors',
+                tag: 'Accolades & Honors',
+                description:
+                  'Peer-voted superlatives and academic honors recognizing exceptional talent, student leadership, and unforgettable class personalities.',
+                icon: Award,
+                iconBg: 'bg-[#d4af37]/15 border-[#d4af37]/30 text-[#d4af37]',
+                tagColor: 'text-[#d4af37]',
+              },
+              {
+                num: '08',
+                title: 'Personal Stories & Reflections',
+                tag: 'Parting Words & Legacy',
+                description:
+                  'Heartfelt parting words, campus reflections, and featured messages from the class president, executives, and graduating classmates.',
+                icon: Quote,
+                iconBg: 'bg-cyan-500/10 border-cyan-500/20 text-cyan-600 dark:text-cyan-400',
+                tagColor: 'text-cyan-600 dark:text-cyan-400',
+              },
+              {
+                num: '09',
+                title: 'Our Story & Department Narrative',
+                tag: 'Chronicle & Legacy',
+                description:
+                  'An authentic narrative chronicling the department’s origins, curriculum journeys, landmark milestones, and the collective spirit of the graduating class.',
+                icon: BookOpen,
+                iconBg: 'bg-indigo-500/10 border-indigo-500/20 text-indigo-600 dark:text-indigo-400',
+                tagColor: 'text-indigo-600 dark:text-indigo-400',
+              },
+            ];
 
-            {/* Product Specifications Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {/* Feature 1: Admin Dashboard */}
-              <ScrollReveal delayMs={150} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    01
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[#d4af37] flex items-center justify-center">
-                      <LayoutDashboard className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Dedicated Admin Dashboard
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      Intuitive curation suite for class reps to review graduate submissions, moderate photo stories, trigger WhatsApp invitations, and configure anniversary dispatch queues.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase tracking-wider font-semibold">
-                    Curation &amp; Management
-                  </span>
-                </div>
-              </ScrollReveal>
+            const scrollToSpec = (idx: number) => {
+              const bounded = (idx + experienceSpecs.length) % experienceSpecs.length;
+              setActiveSpecIdx(bounded);
+              const track = specsTrackRef.current;
+              if (track && track.children && track.children[bounded]) {
+                const card = track.children[bounded] as HTMLElement;
+                if (card) {
+                  track.scrollTo({
+                    left: card.offsetLeft - track.offsetLeft,
+                    behavior: 'smooth',
+                  });
+                }
+              }
+            };
 
-              {/* Feature 2: Dedicated Legacy Wall */}
-              <ScrollReveal delayMs={200} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    02
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-blue-500 dark:text-blue-400 flex items-center justify-center">
-                      <Layers className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Dedicated Legacy Wall
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      A central generational portal dedicated exclusively to your department, displaying historical sets chronologically without mixing cohorts across institutions.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-blue-600 dark:text-blue-400 uppercase tracking-wider font-semibold">
-                    Department Timeline
-                  </span>
-                </div>
-              </ScrollReveal>
-
-              {/* Feature 3: 1 Album Per Set */}
-              <ScrollReveal delayMs={240} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    03
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                      <BookOpen className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      1 Album Per Set
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      One immutable digital album dedicated exclusively to each graduating cohort, keeping memories, graduates, and honors unmixed and permanently preserved.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-emerald-600 dark:text-emerald-400 uppercase tracking-wider font-semibold">
-                    Cohort Exclusivity
-                  </span>
-                </div>
-              </ScrollReveal>
-
-              {/* Feature 4: Department Legacy Plaque */}
-              <ScrollReveal delayMs={280} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    04
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[#d4af37] flex items-center justify-center">
-                      <QrCode className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Department Legacy Plaque
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      A physical architectural acrylic plaque permanently installed in the department corridor, with a scannable QR gateway linking directly to your department archive.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase tracking-wider font-semibold">
-                    Physical Campus Anchor
-                  </span>
-                </div>
-              </ScrollReveal>
-
-              {/* Feature 5: Profiles */}
-              <ScrollReveal delayMs={300} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    05
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center">
-                      <Users className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      High-Fidelity Profiles
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      Square portrait framing preserving edge balance, nicknames, memorable quotes, verified email links, and diverse social handles (X/Twitter, LinkedIn, Instagram).
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-purple-600 dark:text-purple-400 uppercase tracking-wider font-semibold">
-                    Graduate Directory
-                  </span>
-                </div>
-              </ScrollReveal>
-
-              {/* Feature 6: Moments & Video Stream */}
-              <ScrollReveal delayMs={350} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    06
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center">
-                      <Video className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Moments &amp; Video Streams
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      Photo memories organized by event milestones (matriculation, dinners, project defense) paired with streaming video streams of class documentaries.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-rose-600 dark:text-rose-400 uppercase tracking-wider font-semibold">
-                    Media Archives
-                  </span>
-                </div>
-              </ScrollReveal>
-
-              {/* Feature 7: Honors & Awards */}
-              <ScrollReveal delayMs={400} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    07
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] flex items-center justify-center">
-                      <Award className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Awards &amp; Peer Honors
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      Peer-voted superlatives and academic honors recognizing exceptional talent, student leadership, and unforgettable class personalities.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase tracking-wider font-semibold">
-                    Accolades &amp; Honors
-                  </span>
-                </div>
-              </ScrollReveal>
-
-              {/* Feature 8: Personal Stories & Executive Reflections */}
-              <ScrollReveal delayMs={450} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    08
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
-                      <Quote className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Personal Stories &amp; Reflections
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      Heartfelt parting words, campus reflections, and featured messages from the class president, executives, and graduating classmates.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-cyan-600 dark:text-cyan-400 uppercase tracking-wider font-semibold">
-                    Parting Words &amp; Legacy
-                  </span>
-                </div>
-              </ScrollReveal>
-
-              {/* Feature 9: Our Story */}
-              <ScrollReveal delayMs={500} durationMs={700}>
-                <div className="h-full p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border border-slate-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4 md:col-span-2 lg:col-span-2 relative">
-                  <div className="absolute top-6 right-6 font-mono-tech text-xs font-bold text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 rounded-full border border-slate-200 dark:border-zinc-700">
-                    09
-                  </div>
-                  <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-                      <BookOpen className="w-6 h-6" />
-                    </div>
-                    <h4 className="font-syne font-bold text-base text-slate-900 dark:text-white">
-                      Our Story &amp; Department Narrative
-                    </h4>
-                    <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      An authentic narrative chronicling the department’s origins, curriculum journeys, landmark milestones, and the collective spirit of the graduating class across their entire academic voyage.
-                    </p>
-                  </div>
-                  <span className="font-mono-tech text-[10px] text-indigo-600 dark:text-indigo-400 uppercase tracking-wider font-semibold">
-                    Chronicle &amp; Legacy
-                  </span>
-                </div>
-              </ScrollReveal>
-            </div>
-          </div>
+            return (
+              <CompleteAlbumExperienceCarousel
+                specs={experienceSpecs}
+                activeSpecIdx={activeSpecIdx}
+                setActiveSpecIdx={setActiveSpecIdx}
+                isSpecsPaused={isSpecsPaused}
+                setIsSpecsPaused={setIsSpecsPaused}
+                specsTrackRef={specsTrackRef}
+                scrollToSpec={scrollToSpec}
+              />
+            );
+          })()}
 
           {/* =====================================================================
               PART 4: REASSURING PRIVACY & PRESERVATION (LEFT-ALIGNED CLEAN CARD)
@@ -848,7 +840,7 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
                 Not public. Not forgotten. Preserved within your department’s story.
               </h4>
               <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 max-w-3xl leading-relaxed text-left">
-                A Class Album is not an unsearchable lost page and not a public social media feed. It is safely preserved as part of your department’s KoHot Legacy, reached through your department’s physical Legacy Plaque, and shared by the members of your graduating class.
+                A Class Album is not an unsearchable lost page and not a public social media feed. It is safely preserved as part of your department’s KOHOT Legacy, reached through your department’s physical Legacy Plaque, and shared by the members of your graduating class.
               </p>
             </div>
           </ScrollReveal>
@@ -857,5 +849,167 @@ export const HowItWorksShowcase: React.FC<HowItWorksShowcaseProps> = ({
 
       </div>
     </section>
+  );
+};
+
+interface ExperienceSpecItem {
+  num: string;
+  title: string;
+  tag: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string }>;
+  iconBg: string;
+  tagColor: string;
+}
+
+const CompleteAlbumExperienceCarousel: React.FC<{
+  specs: ExperienceSpecItem[];
+  activeSpecIdx: number;
+  setActiveSpecIdx: React.Dispatch<React.SetStateAction<number>>;
+  isSpecsPaused: boolean;
+  setIsSpecsPaused: React.Dispatch<React.SetStateAction<boolean>>;
+  specsTrackRef: React.RefObject<HTMLDivElement | null>;
+  scrollToSpec: (idx: number) => void;
+}> = ({
+  specs,
+  activeSpecIdx,
+  setActiveSpecIdx,
+  isSpecsPaused,
+  setIsSpecsPaused,
+  specsTrackRef,
+  scrollToSpec,
+}) => {
+  useEffect(() => {
+    const track = specsTrackRef.current;
+    if (!track) return;
+    const handleScroll = () => {
+      const firstCard = track.firstElementChild as HTMLElement | null;
+      if (!firstCard) return;
+      const cardWidth = (firstCard.offsetWidth || 320) + 20;
+      const newIdx = Math.min(
+        specs.length - 1,
+        Math.max(0, Math.round(track.scrollLeft / cardWidth))
+      );
+      if (!isNaN(newIdx)) {
+        setActiveSpecIdx(newIdx);
+      }
+    };
+    track.addEventListener('scroll', handleScroll, { passive: true });
+    return () => track.removeEventListener('scroll', handleScroll);
+  }, [specs.length, setActiveSpecIdx, specsTrackRef]);
+
+  useEffect(() => {
+    if (isSpecsPaused) return;
+    const timer = window.setInterval(() => {
+      scrollToSpec(activeSpecIdx + 1);
+    }, 3800);
+    return () => window.clearInterval(timer);
+  }, [activeSpecIdx, isSpecsPaused]);
+
+  return (
+    <div id="album-experience-specs" className="mt-20 max-w-5xl mx-auto space-y-8">
+      <ScrollReveal delayMs={100} durationMs={800}>
+        <div className="text-left space-y-3 mb-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#d4af37]/15 border border-[#d4af37]/30 text-[#d4af37] text-[11px] font-mono-tech font-bold uppercase tracking-wider">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>The Complete Album Experience</span>
+          </div>
+          <h3 className="font-syne font-bold text-3xl sm:text-4xl lg:text-5xl text-slate-900 dark:text-white tracking-tight">
+            Everything Crafted for Your Graduating Class
+          </h3>
+          <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-300 max-w-3xl leading-relaxed">
+            A seamless blend of physical campus permanence, dedicated administrative control, and rich interactive storytelling designed to celebrate your cohort forever.
+          </p>
+        </div>
+      </ScrollReveal>
+
+      {/* Animated Auto-Swiping Horizontal Showcase Track */}
+      <div
+        ref={specsTrackRef}
+        onMouseEnter={() => setIsSpecsPaused(true)}
+        onMouseLeave={() => setIsSpecsPaused(false)}
+        onTouchStart={() => setIsSpecsPaused(true)}
+        onTouchEnd={() => setIsSpecsPaused(false)}
+        className="flex gap-5 overflow-x-auto snap-x snap-mandatory pb-4 pt-2 scrollbar-none no-scrollbar -mx-6 px-6 sm:mx-0 sm:px-0"
+        style={{ scrollBehavior: 'smooth' }}
+      >
+        {specs.map((item, idx) => {
+          const IconComp = item.icon;
+          const isCurrent = idx === activeSpecIdx;
+          return (
+            <div
+              key={item.num}
+              onClick={() => scrollToSpec(idx)}
+              className={`w-[82vw] sm:w-[330px] md:w-[345px] shrink-0 snap-start p-6 sm:p-7 rounded-3xl bg-white dark:bg-[#18181b] border transition-all duration-500 flex flex-col justify-between space-y-5 relative cursor-pointer group ${
+                isCurrent
+                  ? 'border-[#d4af37]/60 shadow-xl -translate-y-1'
+                  : 'border-slate-200 dark:border-zinc-800 shadow-sm hover:border-[#d4af37]/40 hover:shadow-md'
+              }`}
+            >
+              {/* Subtle top animated shimmer line on active card */}
+              <div
+                className={`absolute top-0 inset-x-8 h-0.5 rounded-full transition-opacity duration-500 bg-gradient-to-r from-transparent via-[#d4af37] to-transparent ${
+                  isCurrent ? 'opacity-100' : 'opacity-0 group-hover:opacity-60'
+                }`}
+              />
+
+              <div className="flex items-center justify-between">
+                <div
+                  className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition-transform duration-500 group-hover:scale-110 ${
+                    isCurrent ? 'scale-105' : ''
+                  } ${item.iconBg}`}
+                >
+                  <IconComp className="w-6 h-6" />
+                </div>
+                <span
+                  className={`font-mono-tech text-xs font-bold px-2.5 py-1 rounded-full border transition-colors ${
+                    isCurrent
+                      ? 'bg-[#d4af37]/15 text-[#d4af37] border-[#d4af37]/40'
+                      : 'text-slate-400 dark:text-zinc-500 bg-slate-100 dark:bg-zinc-800/80 border-slate-200 dark:border-zinc-700'
+                  }`}
+                >
+                  {item.num}
+                </span>
+              </div>
+
+              <div className="space-y-2.5">
+                <h4 className="font-syne font-bold text-lg text-slate-900 dark:text-white group-hover:text-[#d4af37] transition-colors">
+                  {item.title}
+                </h4>
+                <p className="font-body text-xs sm:text-sm text-slate-600 dark:text-zinc-300 leading-relaxed">
+                  {item.description}
+                </p>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 dark:border-zinc-800/80 flex items-center justify-between">
+                <span className={`font-mono-tech text-[10px] uppercase tracking-wider font-semibold ${item.tagColor}`}>
+                  {item.tag}
+                </span>
+                <span className="font-mono-tech text-[10px] text-slate-400 dark:text-zinc-500">
+                  {item.num} / 09
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Swiping Transition Dots */}
+      <div className="flex items-center justify-center gap-2 pt-1">
+        {specs.map((item, idx) => (
+          <button
+            key={item.num}
+            type="button"
+            onClick={() => scrollToSpec(idx)}
+            className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
+              activeSpecIdx === idx
+                ? 'w-8 bg-[#d4af37]'
+                : 'w-2 bg-zinc-300 dark:bg-zinc-700 hover:bg-zinc-400 dark:hover:bg-zinc-500'
+            }`}
+            aria-label={`View album feature ${idx + 1}`}
+          />
+        ))}
+      </div>
+    </div>
   );
 };

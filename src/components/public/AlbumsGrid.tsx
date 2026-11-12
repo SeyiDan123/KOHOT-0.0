@@ -29,7 +29,10 @@ import {
   Layers,
   Filter,
   Sun,
-  Moon
+  Moon,
+  Instagram,
+  Youtube,
+  Linkedin
 } from 'lucide-react';
 import { getTheme, applyTheme } from '../../utils/theme';
 import { updateManifestTag } from '../../utils/metaTags';
@@ -535,7 +538,7 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
             <span className={`font-syne font-extrabold text-lg sm:text-xl tracking-tight uppercase transition-colors ${
               isLightMode ? 'text-slate-900 group-hover:text-[#d4af37]' : 'text-white group-hover:text-[#d4af37]'
             }`}>
-              KoHot
+              KOHOT
             </span>
           </button>
 
@@ -640,6 +643,9 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                     ? currentDepartment.name.toUpperCase()
                     : `DEPARTMENT OF ${currentDepartment.name.toUpperCase()}`}
               </h1>
+              <p className="font-mono-tech text-xs sm:text-sm uppercase tracking-[0.22em] text-[#d4af37] font-semibold text-center pt-0.5">
+                Class Albums &amp; Memories
+              </p>
               {isExploreOtherDepartmentsEnabled && (
                 <div className="pt-2 flex justify-center">
                   <button
@@ -908,9 +914,12 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
                                   </span>
                                 </div>
 
-                                {/* Album Nickname on Cards: Gold */}
+                                {/* Album Nickname on Cards: Gold (Clean without '- Class of 202...') */}
                                 <h3 className="font-syne text-lg sm:text-xl font-bold text-[#d4af37] group-hover/card:text-[#e6c158] transition-colors line-clamp-1">
-                                  {set.classSetName}
+                                  {(set.classSetName || `Class of ${set.graduationYear}`)
+                                    .replace(/\s*[-–—•]\s*class\s+of\s+\d{2,4}\b/gi, '')
+                                    .replace(/\bclass\s+of\s+\d{2,4}\s*[-–—•]\s*/gi, '')
+                                    .trim()}
                                 </h3>
 
                                 {(() => {
@@ -996,45 +1005,142 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
         </section>
       </main>
 
-      {/* Footer Area with KoHot Logo & Sign In - Permanently Black as requested */}
+      {/* Footer Area with KOHOT Brand, Motto, Host-only Socials & Sign In - Permanently Black */}
       <footer className="mt-auto py-10 border-t border-zinc-800 bg-black text-xs font-mono-tech text-zinc-400 relative z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-8 space-y-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-6 pb-6 border-b border-zinc-800">
-            {/* KoHot Logo: Non-clickable static badge for Album Admin & Host */}
-            {isAlbumAdmin ? (
-              <div
-                id="legacy-wall-footer-kohot-badge"
-                className="flex items-center gap-2 text-white select-none"
-              >
-                <div className="w-5 h-5 rounded-md bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center">
-                  <div className="w-2 h-2 bg-[#d4af37] rotate-45" />
+            <div className="flex flex-col items-center sm:items-start gap-2">
+              {isAlbumAdmin ? (
+                <div
+                  id="legacy-wall-footer-kohot-badge"
+                  className="flex flex-col items-center sm:items-start gap-1 text-white select-none"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-md bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center">
+                      <div className="w-2 h-2 bg-[#d4af37] rotate-45" />
+                    </div>
+                    <span className="font-syne font-extrabold text-sm tracking-wider uppercase text-white">
+                      KOHOT
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono-tech text-zinc-400 tracking-wide">
+                    Preserve the memories.
+                  </span>
                 </div>
-                <span className="font-syne font-bold text-xs tracking-wider uppercase text-white">
-                  KoHot
-                </span>
-              </div>
-            ) : (
-              <button
-                id="legacy-wall-footer-kohot-btn"
-                type="button"
-                onClick={() => {
-                  if (onBackToLanding) {
-                    onBackToLanding();
-                  } else {
-                    window.location.hash = '#home';
-                  }
-                }}
-                className="flex items-center gap-2 text-white hover:text-[#d4af37] transition-colors cursor-pointer group"
-                title="Visit KoHot Main Website"
-              >
-                <div className="w-5 h-5 rounded-md bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center group-hover:border-[#d4af37] transition-colors">
-                  <div className="w-2 h-2 bg-[#d4af37] rotate-45" />
+              ) : (
+                <div className="flex flex-col items-center sm:items-start gap-1">
+                  <button
+                    id="legacy-wall-footer-kohot-btn"
+                    type="button"
+                    onClick={() => {
+                      if (onBackToLanding) {
+                        onBackToLanding();
+                      } else {
+                        window.location.hash = '#home';
+                      }
+                    }}
+                    className="flex items-center gap-2 text-white hover:text-[#d4af37] transition-colors cursor-pointer group"
+                    title="Visit KOHOT Main Website"
+                  >
+                    <div className="w-5 h-5 rounded-md bg-[#d4af37]/20 border border-[#d4af37]/40 flex items-center justify-center group-hover:border-[#d4af37] transition-colors">
+                      <div className="w-2 h-2 bg-[#d4af37] rotate-45" />
+                    </div>
+                    <span className="font-syne font-extrabold text-sm tracking-wider uppercase text-white group-hover:text-[#d4af37] transition-colors">
+                      KOHOT
+                    </span>
+                  </button>
+                  <span className="text-[11px] font-mono-tech text-zinc-400 tracking-wide">
+                    Preserve the memories.
+                  </span>
                 </div>
-                <span className="font-syne font-bold text-xs tracking-wider uppercase text-white group-hover:text-[#d4af37] transition-colors">
-                  KoHot
-                </span>
-              </button>
-            )}
+              )}
+
+              {/* Host-Configured KOHOT Social Links (Shown only if Host uploaded at least one link) */}
+              {(() => {
+                const ks = contentOverride?.kohotSocials;
+                const hasKohotSocials = Boolean(
+                  ks &&
+                    ((ks.instagram && ks.instagram.trim()) ||
+                      (ks.twitter && ks.twitter.trim()) ||
+                      (ks.youtube && ks.youtube.trim()) ||
+                      (ks.linkedin && ks.linkedin.trim()) ||
+                      (ks.website && ks.website.trim()))
+                );
+                if (!hasKohotSocials || !ks) return null;
+                return (
+                  <div
+                    id="legacy-wall-footer-kohot-socials"
+                    className="flex items-center gap-2 pt-1"
+                  >
+                    {ks.instagram && ks.instagram.trim() && (
+                      <a
+                        href={
+                          ks.instagram.startsWith('http')
+                            ? ks.instagram
+                            : `https://instagram.com/${ks.instagram.replace('@', '')}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center text-white transition-all hover:scale-105"
+                        title="KOHOT Instagram"
+                      >
+                        <Instagram className="w-3.5 h-3.5 text-pink-400" />
+                      </a>
+                    )}
+                    {ks.twitter && ks.twitter.trim() && (
+                      <a
+                        href={
+                          ks.twitter.startsWith('http')
+                            ? ks.twitter
+                            : `https://x.com/${ks.twitter.replace('@', '')}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center text-white transition-all hover:scale-105"
+                        title="KOHOT X (Twitter)"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" className="w-3 h-3 fill-current text-white">
+                          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                        </svg>
+                      </a>
+                    )}
+                    {ks.youtube && ks.youtube.trim() && (
+                      <a
+                        href={ks.youtube}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center text-white transition-all hover:scale-105"
+                        title="KOHOT YouTube"
+                      >
+                        <Youtube className="w-3.5 h-3.5 text-red-500" />
+                      </a>
+                    )}
+                    {ks.linkedin && ks.linkedin.trim() && (
+                      <a
+                        href={ks.linkedin}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center text-white transition-all hover:scale-105"
+                        title="KOHOT LinkedIn"
+                      >
+                        <Linkedin className="w-3.5 h-3.5 text-sky-400" />
+                      </a>
+                    )}
+                    {ks.website && ks.website.trim() && (
+                      <a
+                        href={ks.website.startsWith('http') ? ks.website : `https://${ks.website}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center text-white transition-all hover:scale-105"
+                        title="KOHOT Website"
+                      >
+                        <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
 
             {isExploreOtherDepartmentsEnabled && (
               <button
@@ -1084,7 +1190,7 @@ export const AlbumsGrid: React.FC<AlbumsGridProps> = ({
             </div>
 
             <div className="text-[11px] text-zinc-500 text-center sm:text-right">
-              © {new Date().getFullYear()} KoHot. All rights reserved.
+              © {new Date().getFullYear()} KOHOT. All rights reserved.
             </div>
           </div>
         </div>

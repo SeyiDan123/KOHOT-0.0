@@ -353,7 +353,17 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
   const [editAnnouncementActive, setEditAnnouncementActive] = useState(contentOverride.announcementActive);
   const [editMaxCap, setEditMaxCap] = useState(contentOverride.globalMaxImageCap);
   const [editSupportEmail, setEditSupportEmail] = useState(contentOverride.supportEmail);
-  const [editCompressionResolution, setEditCompressionResolution] = useState(contentOverride.defaultCompressionResolution || 720);
+  const [editCompressionResolution, setEditCompressionResolution] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem('kohot_compression_resolution_px'));
+      if (saved === 1280 || saved === 1440 || saved === 1920) return saved;
+    } catch {
+      // ignore
+    }
+    const candidate = Number(contentOverride.defaultCompressionResolution);
+    if (candidate === 1280 || candidate === 1440 || candidate === 1920) return candidate;
+    return 1440;
+  });
   const [editCompressionQuality, setEditCompressionQuality] = useState(contentOverride.compressionQualityPercentage || 85);
   const [editMaxImagesPerAlbum, setEditMaxImagesPerAlbum] = useState(contentOverride.maxImagesPerAlbum || 400);
   const [editAlbumBgMusicUrl, setEditAlbumBgMusicUrl] = useState(contentOverride.albumBackgroundMusicUrl || '');
@@ -419,6 +429,17 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
     contentOverride.legacyBannerImages && contentOverride.legacyBannerImages.length === 4
       ? contentOverride.legacyBannerImages
       : DEFAULT_LEGACY_BANNER_IMAGES
+  );
+
+  const DEFAULT_CORRIDOR_PLAQUE_IMAGES = [
+    'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1200&auto=format&fit=crop',
+    'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=1200&auto=format&fit=crop',
+    'https://images.unsplash.com/photo-1523240795612-9a054b0db644?q=80&w=1200&auto=format&fit=crop',
+  ];
+  const [editCorridorPlaqueImages, setEditCorridorPlaqueImages] = useState<string[]>(
+    contentOverride.corridorPlaqueImages && contentOverride.corridorPlaqueImages.length === 3
+      ? contentOverride.corridorPlaqueImages
+      : DEFAULT_CORRIDOR_PLAQUE_IMAGES
   );
 
   const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() => getTheme());
@@ -526,19 +547,50 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
           ? contentOverride.legacyBannerImages
           : DEFAULT_LEGACY_BANNER_IMAGES
       );
+      setEditCorridorPlaqueImages(
+        contentOverride.corridorPlaqueImages && contentOverride.corridorPlaqueImages.length === 3
+          ? contentOverride.corridorPlaqueImages
+          : DEFAULT_CORRIDOR_PLAQUE_IMAGES
+      );
     }
   }, [contentOverride]);
 
   const handleAudioBgUpload = (file: File) => {
     if (!file) return;
-    if (!file.type.startsWith('audio/') && !file.name.match(/\.(mp3|wav|m4a|aac|ogg)$/i)) {
-      console.warn('Invalid audio file format. Only mp3, wav, m4a, aac, or ogg are allowed.');
+    if (!file.type.startsWith('audio/') && !file.name.match(/\.(mp3|wav|m4a|aac|ogg|webm)$/i)) {
+      showError('Invalid Audio Format', 'Only MP3, WAV, M4A, AAC, OGG, or WebM audio files are allowed.');
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      showError('Audio File Too Large', 'Ambient soundtrack must be 15 MB or smaller.');
       return;
     }
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const dataUrl = e.target?.result as string;
-      setEditAlbumBgMusicUrl(dataUrl);
+      if (!dataUrl) return;
+      setIsUploadingHeroMedia(true);
+      try {
+        const uploaded = await uploadMediaToR2(dataUrl, {
+          setId: 'site-audio',
+          category: 'ambient-audio',
+          fileName: file.name,
+        });
+        const finalUrl = uploaded.success && uploaded.url ? uploaded.url : dataUrl;
+        setEditAlbumBgMusicUrl(finalUrl);
+        onUpdateContentOverride({
+          ...contentOverride,
+          albumBackgroundMusicUrl: finalUrl,
+        });
+        showSuccess(
+          'Ambient Soundtrack Updated',
+          uploaded.success && uploaded.url
+            ? `Uploaded to R2 (${uploaded.url}) and activated across all Class Albums.`
+            : 'Ambient soundtrack activated across all Class Albums.'
+        );
+      } finally {
+        setIsUploadingHeroMedia(false);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -987,6 +1039,7 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
       brandName: editBrandName.trim() || 'KOHOT',
       websiteLogoUrl: editWebsiteLogoUrl.trim() || undefined,
       legacyBannerImages: editLegacyBannerImages,
+      corridorPlaqueImages: editCorridorPlaqueImages,
     });
     setEditorSavedMsg(true);
     setTimeout(() => setEditorSavedMsg(false), 3000);
@@ -2267,51 +2320,60 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
               </div>
 
               {/* Sub-tab Switch: Website Media vs Album Media vs Website Statistics & Growth */}
-              <div className="inline-flex items-center gap-1.5 p-1 rounded-xl bg-black/50 border border-white/10 max-w-full overflow-x-auto no-scrollbar shrink-0">
+              <div
+                role="tablist"
+                className="inline-flex items-center gap-1 p-1.5 rounded-full bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 shadow-xs max-w-full overflow-x-auto no-scrollbar shrink-0"
+              >
                 <button
+                  role="tab"
+                  aria-selected={mediaSubTab === 'website'}
                   type="button"
                   onClick={(e) => {
                     setMediaSubTab('website');
                     e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                     mediaSubTab === 'website'
-                      ? 'bg-white text-black font-bold shadow'
-                      : 'text-zinc-400 hover:text-white'
+                      ? 'active-clip bg-[#d4af37] text-black font-bold shadow-xs'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
                   }`}
                 >
-                  <Film className="w-3.5 h-3.5 text-blue-400" />
+                  <Film className={`w-3.5 h-3.5 ${mediaSubTab === 'website' ? 'text-black' : 'text-blue-400'}`} />
                   <span>Website Media</span>
                 </button>
                 <button
+                  role="tab"
+                  aria-selected={mediaSubTab === 'albums'}
                   type="button"
                   onClick={(e) => {
                     setMediaSubTab('albums');
                     e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                     mediaSubTab === 'albums'
-                      ? 'bg-white text-black font-bold shadow'
-                      : 'text-zinc-400 hover:text-white'
+                      ? 'active-clip bg-[#d4af37] text-black font-bold shadow-xs'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
                   }`}
                 >
-                  <ImageIcon className="w-3.5 h-3.5 text-[#d4af37]" />
+                  <ImageIcon className={`w-3.5 h-3.5 ${mediaSubTab === 'albums' ? 'text-black' : 'text-[#d4af37]'}`} />
                   <span>Album Media ({liveSets.length})</span>
                 </button>
                 <button
                   id="subclip-website-stats-btn"
+                  role="tab"
+                  aria-selected={mediaSubTab === 'stats'}
                   type="button"
                   onClick={(e) => {
                     setMediaSubTab('stats');
                     e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                     mediaSubTab === 'stats'
-                      ? 'bg-white text-black font-bold shadow'
-                      : 'text-zinc-400 hover:text-white'
+                      ? 'active-clip bg-[#d4af37] text-black font-bold shadow-xs'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
                   }`}
                 >
-                  <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+                  <BarChart3 className={`w-3.5 h-3.5 ${mediaSubTab === 'stats' ? 'text-black' : 'text-emerald-400'}`} />
                   <span>Website Stats</span>
                 </button>
               </div>
@@ -2337,11 +2399,27 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                 onUpdateCompressionResolution={setEditCompressionResolution}
                 compressionQuality={editCompressionQuality}
                 onUpdateCompressionQuality={setEditCompressionQuality}
+                albumBgMusicUrl={editAlbumBgMusicUrl}
+                onUpdateAlbumBgMusicUrl={(nextUrl) => {
+                  setEditAlbumBgMusicUrl(nextUrl);
+                  onUpdateContentOverride({
+                    ...contentOverride,
+                    albumBackgroundMusicUrl: nextUrl.trim(),
+                  });
+                }}
+                onUploadAlbumBgMusicFile={handleAudioBgUpload}
+                platformTitle={editPlatformTitle}
+                onUpdatePlatformTitle={setEditPlatformTitle}
+                supportEmail={editSupportEmail}
+                onUpdateSupportEmail={setEditSupportEmail}
                 onSavePipeline={() => {
                   onUpdateContentOverride({
                     ...contentOverride,
                     defaultCompressionResolution: Number(editCompressionResolution),
                     compressionQualityPercentage: Number(editCompressionQuality),
+                    albumBackgroundMusicUrl: editAlbumBgMusicUrl.trim(),
+                    platformTitle: editPlatformTitle.trim(),
+                    supportEmail: editSupportEmail.trim(),
                   });
                   setEditorSavedMsg(true);
                   setTimeout(() => setEditorSavedMsg(false), 3000);
@@ -3067,6 +3145,120 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                     />
                   </div>
                 </div>
+
+                {/* 3-Swipe-Image Transition Window for "ONE DEPARTMENT. MANY GENERATIONS." */}
+                <div className="p-4 sm:p-5 rounded-xl bg-black/50 border border-white/10 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <span className="font-mono-tech text-[10px] text-[#d4af37] uppercase font-bold tracking-wider block">
+                        ONE DEPARTMENT. MANY GENERATIONS — 3 Swipe Image Transition Window
+                      </span>
+                      <p className="text-zinc-400 text-xs font-body mt-0.5">
+                        Replace the 3 auto-swiping images displayed in the &ldquo;Physical Installation in Department Corridor&rdquo; preview window on the website.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditCorridorPlaqueImages(DEFAULT_CORRIDOR_PLAQUE_IMAGES)}
+                      className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-[11px] self-start sm:self-auto cursor-pointer transition-colors"
+                    >
+                      Reset 3 Corridor Images
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    {[0, 1, 2].map((slotIdx) => {
+                      const currentImgUrl =
+                        editCorridorPlaqueImages[slotIdx] || DEFAULT_CORRIDOR_PLAQUE_IMAGES[slotIdx];
+                      return (
+                        <div
+                          key={slotIdx}
+                          className="p-3.5 rounded-xl bg-black/60 border border-white/10 space-y-3 flex flex-col justify-between"
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono-tech text-[10px] uppercase font-bold text-[#d4af37]">
+                                Corridor Slide #{slotIdx + 1}
+                              </span>
+                              <span className="text-[10px] font-mono-tech text-zinc-500">
+                                Slide {slotIdx + 1}/3
+                              </span>
+                            </div>
+
+                            <div className="w-full aspect-[16/10] rounded-lg overflow-hidden bg-black/80 border border-white/10 relative">
+                              {currentImgUrl ? (
+                                <img
+                                  src={currentImgUrl}
+                                  alt={`Corridor Slide ${slotIdx + 1}`}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-zinc-600">
+                                  <ImageIcon className="w-6 h-6" />
+                                </div>
+                              )}
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-mono-tech uppercase text-zinc-400 mb-1">
+                                Image URL
+                              </label>
+                              <input
+                                type="url"
+                                value={editCorridorPlaqueImages[slotIdx] || ''}
+                                onChange={(e) => {
+                                  const nextImgs = [...editCorridorPlaqueImages];
+                                  nextImgs[slotIdx] = e.target.value;
+                                  setEditCorridorPlaqueImages(nextImgs);
+                                }}
+                                placeholder="https://images.unsplash.com/..."
+                                className="w-full px-3 py-1.5 rounded-lg bg-black/50 border border-white/10 text-white font-mono-tech text-[11px] focus:outline-none focus:border-[#d4af37]"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="pt-2 border-t border-white/5 flex items-center justify-between">
+                            <label className="px-2.5 py-1 rounded-lg bg-[#d4af37]/20 hover:bg-[#d4af37]/30 text-[#d4af37] border border-[#d4af37]/30 font-mono-tech text-[10px] flex items-center gap-1.5 cursor-pointer transition-colors">
+                              <Upload className="w-3 h-3" />
+                              <span>Upload Image</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = async (ev) => {
+                                      const dataUrl = ev.target?.result as string;
+                                      if (!dataUrl) return;
+                                      const uploaded = await uploadMediaToR2(dataUrl, {
+                                        setId: 'site-hero',
+                                        category: `corridor-plaque-${slotIdx + 1}`,
+                                        fileName: file.name,
+                                      });
+                                      if (!uploaded.success || !uploaded.url) {
+                                        showError(
+                                          'Corridor Image Upload Failed',
+                                          uploaded.error || 'Could not upload corridor image to R2.'
+                                        );
+                                        return;
+                                      }
+                                      const nextImgs = [...editCorridorPlaqueImages];
+                                      nextImgs[slotIdx] = uploaded.url;
+                                      setEditCorridorPlaqueImages(nextImgs);
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
               {/* =========================================================================
@@ -3272,117 +3464,6 @@ export const Layer0MasterHostDashboard: React.FC<Layer0MasterHostDashboardProps>
                       </div>
                     );
                   })}
-                </div>
-              </div>
-
-              {/* =========================================================================
-                  AREA 6: AMBIENT AUDIO & PLATFORM GLOBAL SETTINGS
-                  ========================================================================= */}
-              <div className="p-6 rounded-2xl bg-[#08090e] border border-white/10 space-y-4 shadow-xl">
-                <div className="flex items-center gap-2 pb-2 border-b border-white/10">
-                  <Music className="w-5 h-5 text-[#d4af37]" />
-                  <h3 className="font-syne font-bold text-sm text-white">
-                    06. Ambient Soundtrack &amp; Platform Defaults
-                  </h3>
-                </div>
-
-                {/* Audio Track */}
-                <div className="p-4 rounded-xl bg-black/60 border border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4">
-                  {editAlbumBgMusicUrl ? (
-                    <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#d4af37]/20 border border-[#d4af37]/30 flex items-center justify-center shrink-0">
-                          <Volume2 className="w-5 h-5 text-[#d4af37]" />
-                        </div>
-                        <div>
-                          <p className="font-syne font-semibold text-white text-xs truncate">
-                            Active Background Track
-                          </p>
-                          <p className="text-[10px] font-mono-tech text-emerald-400">
-                            Loaded &amp; Ready for Playback
-                          </p>
-                        </div>
-                      </div>
-
-                      <audio
-                        src={editAlbumBgMusicUrl}
-                        controls
-                        className="h-9 w-full sm:w-72 accent-[#d4af37]"
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-3 text-zinc-500 font-mono-tech text-xs">
-                      <Music className="w-5 h-5" />
-                      <span>No background music active. Class Albums will play silently.</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-200 text-black font-tech text-xs uppercase font-bold flex items-center gap-1.5 cursor-pointer">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Upload Track</span>
-                    <input
-                      type="file"
-                      accept="audio/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleAudioBgUpload(file);
-                      }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setEditAlbumBgMusicUrl('https://assets.mixkit.co/music/preview/mixkit-serene-view-443.mp3')}
-                    className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-mono-tech text-xs"
-                  >
-                    Load Sample Serene Piano
-                  </button>
-                  {editAlbumBgMusicUrl && (
-                    <button
-                      type="button"
-                      onClick={() => setEditAlbumBgMusicUrl('')}
-                      className="text-rose-400 hover:text-rose-300 text-xs font-mono-tech ml-auto"
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-
-                {/* Platform Support & Brand */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-white/5">
-                  <div>
-                    <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
-                      Brand Title
-                    </label>
-                    <input
-                      type="text"
-                      value={editPlatformTitle}
-                      onChange={(e) => setEditPlatformTitle(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-xl bg-black/60 border border-white/10 text-white font-mono-tech text-xs focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
-                      Support Email
-                    </label>
-                    <input
-                      type="email"
-                      value={editSupportEmail}
-                      onChange={(e) => setEditSupportEmail(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-xl bg-black/60 border border-white/10 text-white font-mono-tech text-xs focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
-                      Archival Cloud Guarantee
-                    </label>
-                    <div className="w-full px-3.5 py-2 rounded-xl bg-black/60 border border-white/10 text-white font-mono-tech text-xs flex items-center justify-between">
-                      <span>Perpetual Storage</span>
-                      <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Verified</span>
-                    </div>
-                  </div>
                 </div>
               </div>
 

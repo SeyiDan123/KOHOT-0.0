@@ -108,7 +108,7 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
         const fetchRes = await fetch(croppedDataUrl);
         const blob = await fetchRes.blob();
         const file = new File([blob], 'student-secondary-portrait.webp', { type: 'image/webp' });
-        const result = await compressImageToWebP(file, 800, 0.88);
+        const result = await compressImageToWebP(file, undefined, 0.88);
         let tokenToUse = inviteToken;
         if (!tokenToUse) {
           tokenToUse = await fetchInviteUploadTokenFromServer(currentSet.id);
@@ -140,7 +140,7 @@ export const FrictionlessSubmitModal: React.FC<FrictionlessSubmitModalProps> = (
       const blob = await fetchRes.blob();
       const file = new File([blob], 'student-portrait.webp', { type: 'image/webp' });
 
-      const result = await compressImageToWebP(file, 800, 0.88);
+      const result = await compressImageToWebP(file, undefined, 0.88);
       setCompressionInfo(result);
 
       let tokenToUse = inviteToken;

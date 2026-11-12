@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { UserPlus, ArrowRight, X, Shield, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Mail, X, Loader2, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 import { HOST_EMAIL } from '../../utils/apiClient';
+import { triggerGoogleOAuthPopup } from '../../utils/firebaseAuth';
 
 export interface SocialAccountItem {
   name: string;
@@ -15,11 +16,20 @@ export interface SocialAccountItem {
 interface GoogleAccountChooserModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelectAccount: (account: { email: string; name: string }) => void;
+  onSelectAccount: (account: {
+    email: string;
+    name: string;
+    credential?: string;
+    idToken?: string;
+    accessToken?: string;
+  }) => void;
   appName?: string;
+  logoUrl?: string;
   excludeHostEmail?: boolean;
   title?: string;
 }
+
+const DEVICE_ACCOUNTS_STORAGE_KEY = 'kohot_device_google_accounts_v2';
 
 // Google Official 4-Color Icon
 export const GoogleIcon: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
@@ -43,267 +53,274 @@ export const GoogleIcon: React.FC<{ className?: string }> = ({ className = 'w-5 
   </svg>
 );
 
+function loadRememberedDeviceAccounts(): SocialAccountItem[] {
+  try {
+    const raw = localStorage.getItem(DEVICE_ACCOUNTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((a) => a && typeof a.email === 'string' && a.email.includes('@'));
+  } catch {
+    return [];
+  }
+}
+
+function saveRememberedDeviceAccount(account: { email: string; name: string }) {
+  try {
+    const cleanEmail = account.email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) return;
+    const existing = loadRememberedDeviceAccounts().filter(
+      (a) => a.email.toLowerCase() !== cleanEmail
+    );
+    const next: SocialAccountItem[] = [
+      {
+        name: account.name.trim() || cleanEmail.split('@')[0],
+        email: cleanEmail,
+        avatarBg: 'bg-[#2563EB]',
+        initial: (account.name.trim() || cleanEmail).charAt(0).toUpperCase(),
+      },
+      ...existing,
+    ].slice(0, 3);
+    localStorage.setItem(DEVICE_ACCOUNTS_STORAGE_KEY, JSON.stringify(next));
+  } catch {}
+}
+
 export const GoogleAccountChooserModal: React.FC<GoogleAccountChooserModalProps> = ({
   isOpen,
   onClose,
   onSelectAccount,
   appName = 'KoHot',
+  logoUrl,
   excludeHostEmail = false,
-  title = 'Choose an account'
+  title = 'Continue with Email',
 }) => {
   useStaticBackdropScrollLock(isOpen);
 
-  const [showAddCustom, setShowAddCustom] = useState(false);
   const [customEmail, setCustomEmail] = useState('');
   const [customName, setCustomName] = useState('');
   const [customError, setCustomError] = useState<string | null>(null);
+  const [isLaunchingPopup, setIsLaunchingPopup] = useState(false);
+  const [rememberedAccounts, setRememberedAccounts] = useState<SocialAccountItem[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      const saved = loadRememberedDeviceAccounts();
+      const filtered = excludeHostEmail
+        ? saved.filter((acc) => acc.email.toLowerCase() !== HOST_EMAIL.toLowerCase())
+        : saved;
+      setRememberedAccounts(filtered);
+      setCustomError(null);
+    }
+  }, [isOpen, excludeHostEmail]);
 
   if (!isOpen) return null;
 
-  // Authentic Google Account list matching Screenshot_20261024-213724_dfbb1fab.png
-  const allAccounts: SocialAccountItem[] = [
-    {
-      name: 'Adeleye Seyi',
-      email: HOST_EMAIL,
-      avatarBg: 'bg-[#EA580C]',
-      initial: 'A',
-      badge: 'Host',
-      isHost: true,
-    },
-    {
-      name: 'Chiemeka Anthony Eze',
-      email: 'chiemeka.eze.2026@crownfield.edu.ng',
-      avatarBg: 'bg-[#d4af37] text-black',
-      initial: 'C',
-      badge: 'Album Admin',
-    },
-    {
-      name: '9ja puffs',
-      email: '9japuffs@gmail.com',
-      avatarBg: 'bg-[#2563EB]',
-      initial: '9',
-    },
-    {
-      name: 'Adeleye Oluwaseyi',
-      email: 'dancreations03@gmail.com',
-      avatarBg: 'bg-[#059669]',
-      initial: 'A',
-    },
-    {
-      name: 'Ekpe Victor Ejiga',
-      email: 'ekpevictor0814@gmail.com',
-      avatarBg: 'bg-[#0891B2]',
-      initial: 'E',
-    },
-    {
-      name: 'LUMNI',
-      email: 'lumni026@gmail.com',
-      avatarBg: 'bg-[#18181B] text-[10px] font-bold border border-white/20',
-      initial: 'L',
-    },
-    {
-      name: 'Grace Adeleye',
-      email: 'graceadeleye2002@gmail.com',
-      avatarBg: 'bg-[#78350F]',
-      initial: 'G',
-    },
-    {
-      name: 'KOHOT',
-      email: 'kohot2026@gmail.com',
-      avatarBg: 'bg-zinc-800 border border-amber-400/40 text-[10px] font-bold',
-      initial: 'KH',
-    },
-  ];
+  const handleChooseAccount = (account: {
+    email: string;
+    name: string;
+    credential?: string;
+    idToken?: string;
+    accessToken?: string;
+  }) => {
+    saveRememberedDeviceAccount({ email: account.email, name: account.name });
+    onSelectAccount(account);
+    onClose();
+  };
 
-  // Filter out host email if requested (e.g., during Create Class Album registration)
-  const displayAccounts = excludeHostEmail
-    ? allAccounts.filter((acc) => acc.email.toLowerCase() !== HOST_EMAIL.toLowerCase())
-    : allAccounts;
+  const handleLaunchDeviceGooglePopup = async () => {
+    setCustomError(null);
+    setIsLaunchingPopup(true);
+    try {
+      const popupRes = await triggerGoogleOAuthPopup();
+      if (popupRes && (popupRes.email || popupRes.idToken || popupRes.accessToken)) {
+        handleChooseAccount({
+          email: (popupRes.email || '').trim().toLowerCase(),
+          name: popupRes.name || 'Album Admin',
+          credential: popupRes.idToken || popupRes.accessToken,
+          idToken: popupRes.idToken,
+          accessToken: popupRes.accessToken,
+        });
+        return;
+      }
+    } catch {
+      // Fallback to direct email input below
+    } finally {
+      setIsLaunchingPopup(false);
+    }
+  };
 
   const handleCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanEmail = customEmail.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      setCustomError('Please enter a valid Google email address.');
+      setCustomError('Please enter a valid email address.');
       return;
     }
-    const cleanName = customName.trim() || cleanEmail.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-    onSelectAccount({ email: cleanEmail, name: cleanName });
-    onClose();
+    if (excludeHostEmail && cleanEmail === HOST_EMAIL.toLowerCase()) {
+      setCustomError('Please use a graduating Class Representative email address.');
+      return;
+    }
+    const cleanName =
+      customName.trim() ||
+      cleanEmail
+        .split('@')[0]
+        .replace(/[._-]/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+    handleChooseAccount({ email: cleanEmail, name: cleanName });
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-md p-0 sm:p-4 animate-fadeIn"
+      className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-md p-0 sm:p-4 animate-fadeIn"
       onClick={onClose}
     >
       <div
-        className="relative w-full sm:max-w-md bg-[#242426] border border-white/10 sm:rounded-3xl rounded-t-3xl shadow-2xl text-white overflow-hidden max-h-[92vh] flex flex-col animate-slideUp"
+        className="relative w-full sm:max-w-md bg-white dark:bg-[#242426] border border-slate-200 dark:border-white/10 sm:rounded-3xl rounded-t-3xl shadow-2xl text-slate-900 dark:text-white overflow-hidden max-h-[92vh] flex flex-col animate-slideUp"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Mobile drag handle */}
-        <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mt-3 mb-1 sm:hidden shrink-0" />
+        <div className="w-10 h-1 bg-slate-300 dark:bg-white/20 rounded-full mx-auto mt-3 mb-1 sm:hidden shrink-0" />
 
         {/* Top Close Button */}
         <button
           type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-zinc-300 hover:text-white flex items-center justify-center transition-all cursor-pointer z-10"
+          className="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-600 hover:text-slate-900 dark:text-zinc-300 dark:hover:text-white flex items-center justify-center transition-all cursor-pointer z-10"
           aria-label="Close"
         >
           <X className="w-4 h-4" />
         </button>
 
-        {/* Header - Brand Emblem and Title */}
-        <div className="pt-6 pb-3 px-6 text-center shrink-0">
-          <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-[#323236] border border-white/15 flex items-center justify-center shadow-md relative">
-            <div className="absolute inset-0 bg-gradient-to-tr from-amber-500/20 to-emerald-500/20 rounded-2xl blur-xs" />
-            <span className="relative font-syne font-black text-xl tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-white via-zinc-200 to-amber-300">
-              KH
-            </span>
+        {/* Header */}
+        <div className="pt-6 pb-4 px-6 text-center shrink-0 border-b border-slate-100 dark:border-white/5">
+          <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-slate-50 dark:bg-[#1a1b20] border border-slate-200 dark:border-white/15 flex flex-col items-center justify-center gap-1.5 shadow-sm relative">
+            {logoUrl ? (
+              <img
+                src={logoUrl}
+                alt={appName}
+                className="w-9 h-9 object-contain"
+              />
+            ) : (
+              <>
+                <div className="w-5 h-5 bg-[#d4af37] rotate-45 transform" />
+                <span className="kohot-keep-color font-syne font-black text-[9px] tracking-[0.18em] uppercase leading-none mt-0.5 text-slate-900 dark:text-white">
+                  KOHOT
+                </span>
+              </>
+            )}
           </div>
 
-          <h3 className="font-syne font-bold text-xl sm:text-2xl text-white tracking-tight">
+          <h3 className="kohot-keep-color font-syne font-bold text-xl sm:text-2xl text-slate-900 dark:text-white tracking-tight">
             {title}
           </h3>
-          <p className="font-body text-xs text-zinc-400 mt-1">
-            to continue to <span className="font-semibold text-zinc-200">{appName}</span>
+          <p className="kohot-keep-color font-body text-xs text-slate-600 dark:text-zinc-300 mt-1">
+            Enter your email address to continue to{' '}
+            <span className="kohot-keep-color font-semibold text-slate-900 dark:text-white">
+              {appName}
+            </span>
           </p>
         </div>
 
-        {/* Accounts List (Scrollable) */}
-        <div className="flex-1 overflow-y-auto px-4 py-2 divide-y divide-white/5 no-scrollbar">
-          {!showAddCustom ? (
-            <>
-              {displayAccounts.map((account) => (
-                <button
-                  key={account.email}
-                  type="button"
-                  onClick={() => {
-                    onSelectAccount({ email: account.email, name: account.name });
-                    onClose();
-                  }}
-                  className="w-full py-3 px-3.5 flex items-center justify-between text-left hover:bg-white/[0.06] rounded-2xl transition-all cursor-pointer group active:scale-[0.99]"
-                >
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <div
-                      className={`w-10 h-10 rounded-full ${account.avatarBg || 'bg-zinc-700'} text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-inner`}
-                    >
-                      {account.initial || account.name.charAt(0)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-syne font-semibold text-sm text-white group-hover:text-amber-200 flex items-center gap-2 truncate">
-                        <span>{account.name}</span>
-                        {account.badge && (
-                          <span className="text-[10px] font-mono-tech uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded-full font-bold">
-                            {account.badge}
-                          </span>
-                        )}
-                      </div>
-                      <div className="font-mono-tech text-xs text-zinc-400 truncate mt-0.5">
-                        {account.email}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-
-              {/* Add Another Account Option */}
-              <button
-                type="button"
-                onClick={() => setShowAddCustom(true)}
-                className="w-full py-3.5 px-3.5 flex items-center gap-3.5 text-left hover:bg-white/[0.06] rounded-2xl transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-full bg-white/10 text-zinc-300 group-hover:text-white group-hover:bg-white/15 flex items-center justify-center shrink-0 transition-colors">
-                  <UserPlus className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="font-syne font-semibold text-sm text-zinc-200 group-hover:text-white transition-colors">
-                    Add another account
-                  </span>
-                  <p className="font-mono-tech text-[11px] text-zinc-500">
-                    Sign in with any custom Google account
-                  </p>
-                </div>
-              </button>
-            </>
-          ) : (
-            /* Custom Account Entry Form */
-            <form onSubmit={handleCustomSubmit} className="p-2 space-y-4 animate-fadeIn">
-              <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                <span className="font-syne font-bold text-xs text-zinc-300">
-                  Enter Google Account
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddCustom(false);
-                    setCustomError(null);
-                  }}
-                  className="text-xs text-zinc-400 hover:text-white cursor-pointer"
-                >
-                  Back to list
-                </button>
+        {/* Direct Email Capture Form */}
+        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 no-scrollbar">
+          <form onSubmit={handleCustomSubmit} className="space-y-4">
+            {customError && (
+              <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-200 text-xs font-mono-tech">
+                {customError}
               </div>
+            )}
 
-              {customError && (
-                <div className="p-2.5 rounded-xl bg-red-950/60 border border-red-800 text-red-200 text-xs font-mono-tech">
-                  {customError}
-                </div>
-              )}
-
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-mono-tech text-zinc-400 block">
-                  Google Email Address
-                </label>
+            <div className="space-y-1.5">
+              <label className="kohot-keep-color text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 block">
+                Email Address *
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="email"
                   required
-                  placeholder="your.name@gmail.com"
+                  placeholder="your.email@gmail.com"
                   value={customEmail}
                   onChange={(e) => setCustomEmail(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/20 text-white font-mono-tech text-xs focus:outline-none focus:border-amber-400"
+                  className="w-full pl-10 pr-3.5 py-3 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-300 dark:border-white/20 text-slate-900 dark:text-white font-mono-tech text-xs sm:text-sm focus:outline-none focus:border-[#d4af37]"
                   autoFocus
                 />
               </div>
+            </div>
 
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-mono-tech text-zinc-400 block">
-                  Full Name (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Oluwaseyi Adeleke"
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/20 text-white font-body text-xs focus:outline-none focus:border-amber-400"
-                />
-              </div>
+            <div className="space-y-1.5">
+              <label className="kohot-keep-color text-[11px] font-mono-tech uppercase tracking-wider text-slate-700 dark:text-zinc-300 block">
+                Full Name (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Oluwaseyi Adeleke"
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                className="w-full px-3.5 py-3 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-300 dark:border-white/20 text-slate-900 dark:text-white font-body text-xs sm:text-sm focus:outline-none focus:border-[#d4af37]"
+              />
+            </div>
 
-              <div className="pt-2 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddCustom(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-white/10 text-white text-xs font-syne font-semibold hover:bg-white/15 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-[#d4af37] text-black text-xs font-syne font-bold hover:brightness-110 shadow-md cursor-pointer"
-                >
-                  Continue
-                </button>
+            <button
+              type="submit"
+              className="w-full py-3.5 rounded-xl bg-[#d4af37] hover:bg-[#e3be42] text-black text-xs sm:text-sm font-syne font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <span>Continue</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </form>
+
+          {/* Optional Device Google Popup */}
+          <div className="pt-2 border-t border-slate-200 dark:border-white/10 space-y-2.5">
+            <button
+              type="button"
+              onClick={handleLaunchDeviceGooglePopup}
+              disabled={isLaunchingPopup}
+              className="w-full py-2.5 px-3.5 flex items-center justify-center gap-2.5 text-center bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] border border-slate-200 dark:border-white/10 rounded-xl transition-all cursor-pointer"
+            >
+              {isLaunchingPopup ? (
+                <Loader2 className="w-4 h-4 animate-spin text-[#d4af37]" />
+              ) : (
+                <GoogleIcon className="w-4 h-4" />
+              )}
+              <span className="kohot-keep-color font-syne font-semibold text-xs text-slate-800 dark:text-zinc-200">
+                Verify via Google Popup
+              </span>
+            </button>
+
+            {rememberedAccounts.length > 0 && (
+              <div className="pt-2 space-y-1.5">
+                <div className="text-[10px] font-mono-tech uppercase tracking-wider text-slate-400 dark:text-zinc-500 px-1">
+                  Recently used on this device
+                </div>
+                {rememberedAccounts.map((account) => (
+                  <button
+                    key={account.email}
+                    type="button"
+                    onClick={() =>
+                      handleChooseAccount({ email: account.email, name: account.name })
+                    }
+                    className="w-full py-2 px-3 flex items-center justify-between text-left hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-xl transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#d4af37] shrink-0" />
+                      <div className="min-w-0">
+                        <div className="font-mono-tech text-xs text-slate-700 dark:text-zinc-300 truncate">
+                          {account.email}
+                        </div>
+                      </div>
+                    </div>
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-800 dark:group-hover:text-white shrink-0" />
+                  </button>
+                ))}
               </div>
-            </form>
-          )}
+            )}
+          </div>
         </div>
 
-        {/* Google Privacy Policy / Permissions Disclosure Footer */}
-        <div className="p-4 sm:p-5 text-[11px] font-body text-zinc-400 leading-relaxed border-t border-white/10 bg-[#1d1d1f] shrink-0">
-          To continue, Google will share your name, email address, and profile picture with {appName}. Before using {appName}, review its{' '}
-          <span className="text-zinc-300 underline cursor-pointer">privacy policy</span> and{' '}
-          <span className="text-zinc-300 underline cursor-pointer">terms of service</span>.
+        {/* Footer */}
+        <div className="p-4 text-[11px] font-body text-slate-600 dark:text-zinc-400 leading-relaxed border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#1d1d1f] shrink-0 text-center">
+          Passwordless verification • Your email is used to manage and recover your class album.
         </div>
       </div>
     </div>

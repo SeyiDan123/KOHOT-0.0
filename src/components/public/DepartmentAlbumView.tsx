@@ -54,7 +54,9 @@ import {
   AlertTriangle,
   Pin,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { StudentDetailModal } from './StudentDetailModal';
 import { FrictionlessSubmitModal } from './FrictionlessSubmitModal';
@@ -117,6 +119,18 @@ const useCountUp = (target: number, durationMs = 4000) => {
   }, [target, durationMs]);
 
   return count;
+};
+
+export const formatCleanClassSetName = (rawName?: string, fallback?: string): string => {
+  const base = (rawName || fallback || '')
+    .replace(/[\s—–-]*class\s+of\s+\d{4}/gi, '')
+    .trim();
+  if (!base) return fallback || '';
+  const words = base.split(/\s+/).filter(Boolean);
+  if (words.length === 1 && !/^the$/i.test(words[0])) {
+    return `THE ${words[0].toUpperCase()}`;
+  }
+  return base.toUpperCase();
 };
 
 interface DepartmentAlbumViewProps {
@@ -310,6 +324,73 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     }
   }, [currentSet?.id]);
 
+  // Ambient Soundtrack Playback across all opened Class Albums
+  const ambientMusicUrl = (contentOverride?.albumBackgroundMusicUrl || '').trim();
+  const ambientAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isAmbientMuted, setIsAmbientMuted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kohot_album_audio_muted') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    const audioEl = ambientAudioRef.current;
+    if (!audioEl || !ambientMusicUrl) return;
+    audioEl.volume = 0.28;
+    audioEl.muted = isAmbientMuted;
+
+    const attemptPlay = () => {
+      if (!audioEl.paused) return;
+      audioEl.play().catch(() => {
+        // Browser autoplay policy: start on first interaction if blocked
+      });
+    };
+
+    if (!isAmbientMuted) {
+      attemptPlay();
+    } else {
+      audioEl.pause();
+    }
+
+    const handleFirstInteraction = () => {
+      if (!isAmbientMuted && audioEl.paused) {
+        audioEl.play().catch(() => {});
+      }
+      window.removeEventListener('click', handleFirstInteraction);
+      window.removeEventListener('touchstart', handleFirstInteraction);
+    };
+
+    window.addEventListener('click', handleFirstInteraction, { once: true });
+    window.addEventListener('touchstart', handleFirstInteraction, { once: true });
+
+    return () => {
+      window.removeEventListener('click', handleFirstInteraction);
+      window.removeEventListener('touchstart', handleFirstInteraction);
+    };
+  }, [ambientMusicUrl, isAmbientMuted, currentSet?.id]);
+
+  const toggleAmbientAudio = () => {
+    setIsAmbientMuted((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('kohot_album_audio_muted', next ? 'true' : 'false');
+      } catch {}
+      const audioEl = ambientAudioRef.current;
+      if (audioEl) {
+        audioEl.muted = next;
+        if (next) {
+          audioEl.pause();
+        } else {
+          audioEl.volume = 0.28;
+          audioEl.play().catch(() => {});
+        }
+      }
+      return next;
+    });
+  };
+
   // Context-Aware Light / Dark Mode State with localStorage Persistence (Default: Light Mode)
   const [isLightMode, setIsLightMode] = useState<boolean>(() => getTheme() === 'light');
 
@@ -389,13 +470,49 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
   });
   const hasMomentDraggedRef = useRef(false);
 
-  // Preference of light or dark view of the moments full view card on the album
-  const [momentCardMode, setMomentCardMode] = useState<'light' | 'dark'>(isLightMode ? 'light' : 'dark');
+  // Preference of light or dark view strictly inside the moments fullscreen image viewer
+  const [momentCardMode, setMomentCardMode] = useState<'light' | 'dark'>('dark');
+  const [momentSwipeOffsetPx, setMomentSwipeOffsetPx] = useState<number>(0);
+  const [momentSwipeTransition, setMomentSwipeTransition] = useState<boolean>(false);
+  const momentSwipeTimerRef = useRef<number | null>(null);
+  const momentSingleTapTimerRef = useRef<number | null>(null);
+  const activeMomentImgRef = useRef<HTMLImageElement | null>(null);
+  const [loadedMomentUrls, setLoadedMomentUrls] = useState<Record<string, boolean>>({});
 
-  // Keep card mode in sync with theme switches
+  // Eagerly preload all moment images into browser cache so swiping has zero blank delay or loading dot
   useEffect(() => {
-    setMomentCardMode(isLightMode ? 'light' : 'dark');
-  }, [isLightMode]);
+    const urls = new Set<string>();
+    (currentSet.memories || []).forEach((ev) => {
+      (ev.images || []).forEach((img) => {
+        if (img.url) urls.add(img.url);
+      });
+    });
+    lightboxMomentsList.forEach((item) => {
+      if (item.url) urls.add(item.url);
+    });
+    urls.forEach((url) => {
+      const preloader = new Image();
+      preloader.decoding = 'sync';
+      preloader.onload = () => {
+        setLoadedMomentUrls((prev) => (prev[url] ? prev : { ...prev, [url]: true }));
+      };
+      preloader.src = url;
+      if (preloader.complete && preloader.naturalWidth > 0) {
+        setLoadedMomentUrls((prev) => (prev[url] ? prev : { ...prev, [url]: true }));
+      }
+    });
+  }, [currentSet.memories, lightboxMomentsList]);
+
+  useEffect(() => {
+    return () => {
+      if (momentSwipeTimerRef.current) {
+        window.clearTimeout(momentSwipeTimerRef.current);
+      }
+      if (momentSingleTapTimerRef.current) {
+        window.clearTimeout(momentSingleTapTimerRef.current);
+      }
+    };
+  }, []);
 
   // Lock static background and body scroll when any modal or lightbox is open
   useStaticBackdropScrollLock(
@@ -407,18 +524,56 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
     isSubmitModalOpen
   );
 
-  const handleLightboxNext = () => {
-    if (lightboxMomentIndex === null || lightboxMomentsList.length === 0) return;
+  const clampMomentPan = (x: number, y: number, scale: number): { x: number; y: number } => {
+    if (scale <= 1.02) return { x: 0, y: 0 };
+    const imgEl = activeMomentImgRef.current;
+    const baseW = imgEl?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth * 0.88 : 800);
+    const baseH = imgEl?.clientHeight || (typeof window !== 'undefined' ? window.innerHeight * 0.78 : 600);
+    const maxPanX = Math.max(0, (baseW * (scale - 1)) / 2);
+    const maxPanY = Math.max(0, (baseH * (scale - 1)) / 2);
+    return {
+      x: Math.min(Math.max(x, -maxPanX), maxPanX),
+      y: Math.min(Math.max(y, -maxPanY), maxPanY),
+    };
+  };
+
+  const animateMomentGallerySlide = (direction: 'next' | 'prev') => {
+    if (lightboxMomentIndex === null || lightboxMomentsList.length <= 1) return;
+    if (momentSwipeTimerRef.current) {
+      window.clearTimeout(momentSwipeTimerRef.current);
+      momentSwipeTimerRef.current = null;
+    }
+    if (momentSingleTapTimerRef.current) {
+      window.clearTimeout(momentSingleTapTimerRef.current);
+      momentSingleTapTimerRef.current = null;
+    }
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
+    const gapPx = 6;
+    const targetOffset = direction === 'next' ? -(viewportWidth + gapPx) : viewportWidth + gapPx;
     setMomentZoomScale(1);
     setMomentPanPos({ x: 0, y: 0 });
-    setLightboxMomentIndex((lightboxMomentIndex + 1) % lightboxMomentsList.length);
+    setMomentSwipeTransition(true);
+    setMomentSwipeOffsetPx(targetOffset);
+
+    momentSwipeTimerRef.current = window.setTimeout(() => {
+      setMomentSwipeTransition(false);
+      setMomentSwipeOffsetPx(0);
+      setLightboxMomentIndex((prev) => {
+        if (prev === null || lightboxMomentsList.length === 0) return prev;
+        return direction === 'next'
+          ? (prev + 1) % lightboxMomentsList.length
+          : (prev - 1 + lightboxMomentsList.length) % lightboxMomentsList.length;
+      });
+      momentSwipeTimerRef.current = null;
+    }, 320);
+  };
+
+  const handleLightboxNext = () => {
+    animateMomentGallerySlide('next');
   };
 
   const handleLightboxPrev = () => {
-    if (lightboxMomentIndex === null || lightboxMomentsList.length === 0) return;
-    setMomentZoomScale(1);
-    setMomentPanPos({ x: 0, y: 0 });
-    setLightboxMomentIndex((lightboxMomentIndex - 1 + lightboxMomentsList.length) % lightboxMomentsList.length);
+    animateMomentGallerySlide('prev');
   };
 
   useEffect(() => {
@@ -865,8 +1020,38 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             )}
           </div>
 
-          {/* Right: Light Mode Toggle, Save & Share Buttons */}
+          {/* Right: Ambient Audio Toggle, Light Mode Toggle, Save & Share Buttons */}
           <div className="flex items-center gap-2 shrink-0">
+            {ambientMusicUrl && (
+              <>
+                <audio
+                  ref={ambientAudioRef}
+                  src={ambientMusicUrl}
+                  loop
+                  preload="auto"
+                  className="hidden"
+                />
+                <button
+                  id="album-ambient-audio-toggle-btn"
+                  type="button"
+                  onClick={toggleAmbientAudio}
+                  className={`px-3 py-1.5 sm:py-2 rounded-full border transition-all flex items-center gap-1.5 cursor-pointer shadow-md hover:scale-105 active:scale-95 shrink-0 ${
+                    isLightMode
+                      ? 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900 font-tech text-xs tracking-wider uppercase font-semibold'
+                      : 'bg-white/[0.08] hover:bg-white/[0.15] border-white/20 text-white font-tech text-xs tracking-wider uppercase font-semibold'
+                  }`}
+                  title={isAmbientMuted ? 'Unmute Album Ambient Soundtrack' : 'Mute Album Ambient Soundtrack'}
+                  aria-label={isAmbientMuted ? 'Unmute Album Ambient Soundtrack' : 'Mute Album Ambient Soundtrack'}
+                >
+                  {isAmbientMuted ? (
+                    <VolumeX className={`w-3.5 h-3.5 ${isLightMode ? 'text-zinc-500' : 'text-zinc-400'}`} />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-[#d4af37]" />
+                  )}
+                  <span className="hidden md:inline">{isAmbientMuted ? 'Sound Off' : 'Sound On'}</span>
+                </button>
+              </>
+            )}
             {/* Context-Aware Light/Dark Mode Switcher beside Save icon */}
             <button
               id="album-theme-toggle-btn"
@@ -1015,28 +1200,30 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 </div>
               </div>
 
-              {/* University Name Above, Department Name Below (University less prominent) */}
-              <div className="text-center space-y-0.5 pt-1">
-                <p className="font-syne font-semibold text-xs sm:text-sm text-zinc-300 tracking-wider uppercase">
-                  {currentSet.institutionName}
+              {/* University Name Above, Department Name Below (Arranged identically to Legacy Wall) */}
+              <div className="text-center space-y-1.5 pt-1">
+                <p className="font-syne font-semibold text-xs sm:text-sm text-zinc-400 tracking-wider uppercase text-center">
+                  {currentSet.institutionName.toUpperCase()}
                 </p>
-                <p className="font-syne font-bold text-base sm:text-lg md:text-xl text-white tracking-wide">
-                  {currentSet.departmentName.toUpperCase().startsWith('DEPARTMENT')
-                    ? currentSet.departmentName
-                    : `Department of ${currentSet.departmentName}`}
+                <p className="text-xl sm:text-2xl md:text-3xl font-syne font-bold text-white tracking-tight leading-snug uppercase text-center">
+                  {currentSet.departmentName.toUpperCase().startsWith('DEPARTMENT OF')
+                    ? currentSet.departmentName.toUpperCase()
+                    : currentSet.departmentName.toUpperCase().startsWith('DEPARTMENT')
+                      ? currentSet.departmentName.toUpperCase()
+                      : `DEPARTMENT OF ${currentSet.departmentName.toUpperCase()}`}
                 </p>
-                <p className="font-mono-tech text-[11px] text-[#d4af37] font-semibold mt-0.5">
+                <p className="font-mono-tech text-xs sm:text-sm uppercase tracking-[0.22em] text-[#d4af37] font-extrabold mt-0.5">
                   Class of {currentSet.graduationYear}
                 </p>
               </div>
             </div>
 
-            {/* Headline Display Font: Class Title / Set Name - Centralized */}
+            {/* Headline Display Font: Clean Class Title / Set Name without '- Class of 202...' */}
             <h1 
               id="department-headline-title"
               className="font-syne font-bold text-3xl sm:text-5xl md:text-6xl text-white tracking-tight leading-[1.08] max-w-3xl text-center mx-auto animate-slow-reveal animation-delay-200 mt-2"
             >
-              {currentSet.classSetName || `${currentSet.departmentName} ’${String(currentSet.graduationYear).slice(-2)}`}
+              {formatCleanClassSetName(currentSet.classSetName, `${currentSet.departmentName} ’${String(currentSet.graduationYear).slice(-2)}`)}
             </h1>
 
             {/* Class Slogan / Motto Under Class Name */}
@@ -1825,119 +2012,56 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           Featuring album admin name, class portrait, department & set details, and social links
           ========================================================================= */}
       {(() => {
-        const isCrownfieldDemo = currentSet.id.startsWith('crownfield-law-');
-        const rawSocials = currentSet.socials || {};
-        const yt = (rawSocials.youtube || (isCrownfieldDemo ? 'https://youtube.com/@crownfieldlaw' : '')).trim();
-        const ig = (rawSocials.instagram || (isCrownfieldDemo ? `@crownfield_law_${currentSet.graduationYear}` : '')).trim();
-        const tw = (rawSocials.twitter || (isCrownfieldDemo ? '@crownfield_law' : '')).trim();
-        const li = (rawSocials.linkedin || (isCrownfieldDemo ? 'https://linkedin.com/company/crownfield-law-alumni' : '')).trim();
-        const web = (rawSocials.website || (isCrownfieldDemo ? 'https://law.crownfield.edu.ng' : '')).trim();
-
-        const ytHref = yt
-          ? yt.startsWith('http')
-            ? yt
-            : yt.startsWith('youtube.com') || yt.startsWith('youtu.be')
-            ? `https://${yt}`
-            : `https://youtube.com/@${yt.replace(/^@/, '')}`
-          : '';
-        const igHref = ig
-          ? ig.startsWith('http')
-            ? ig
-            : ig.startsWith('instagram.com')
-            ? `https://${ig}`
-            : `https://instagram.com/${ig.replace(/^@/, '')}`
-          : '';
-        const twHref = tw
-          ? tw.startsWith('http')
-            ? tw
-            : tw.startsWith('x.com') || tw.startsWith('twitter.com')
-            ? `https://${tw}`
-            : `https://x.com/${tw.replace(/^@/, '')}`
-          : '';
-        const liHref = li
-          ? li.startsWith('http')
-            ? li
-            : li.startsWith('linkedin.com')
-            ? `https://${li}`
-            : `https://linkedin.com/company/${li.replace(/^@/, '')}`
-          : '';
-        const webHref = web
-          ? web.startsWith('http')
-            ? web
-            : `https://${web}`
-          : '';
-
-        const hasAnySocial = Boolean(ytHref || igHref || twHref || liHref || webHref);
-        const renderDepartmentSocialLinks = (containerId: string) => {
-          if (!hasAnySocial) return null;
-          return (
-            <div id={containerId} className="flex items-center justify-center gap-2.5 text-zinc-300">
-              <span className="font-mono-tech text-[10px] sm:text-[11px] tracking-wider text-zinc-300 font-medium">
-                Follow us on:
-              </span>
-              {ytHref && (
-                <a
-                  href={ytHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-red-500/20 border border-white/15 hover:border-red-500/40 flex items-center justify-center text-zinc-200 hover:text-red-400 transition-all"
-                  title="Department YouTube Channel"
-                  aria-label="Department YouTube Channel"
-                >
-                  <Youtube className="w-3.5 h-3.5" />
-                </a>
-              )}
-              {igHref && (
-                <a
-                  href={igHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-pink-500/20 border border-white/15 hover:border-pink-500/40 flex items-center justify-center text-zinc-200 hover:text-pink-400 transition-all"
-                  title="Department Instagram"
-                  aria-label="Department Instagram"
-                >
-                  <Instagram className="w-3.5 h-3.5" />
-                </a>
-              )}
-              {twHref && (
-                <a
-                  href={twHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 hover:border-white/30 flex items-center justify-center text-zinc-200 hover:text-white transition-all"
-                  title="Department X (Twitter)"
-                  aria-label="Department X (Twitter)"
-                >
-                  <Twitter className="w-3.5 h-3.5" />
-                </a>
-              )}
-              {liHref && (
-                <a
-                  href={liHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-blue-500/20 border border-white/15 hover:border-blue-500/40 flex items-center justify-center text-zinc-200 hover:text-blue-400 transition-all"
-                  title="Department LinkedIn"
-                  aria-label="Department LinkedIn"
-                >
-                  <Linkedin className="w-3.5 h-3.5" />
-                </a>
-              )}
-              {webHref && (
-                <a
-                  href={webHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-emerald-500/20 border border-white/15 hover:border-emerald-500/40 flex items-center justify-center text-zinc-200 hover:text-emerald-400 transition-all"
-                  title="Official Department Website"
-                  aria-label="Official Department Website"
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                </a>
-              )}
-            </div>
-          );
+        const normalizeSocialHref = (raw: string | undefined, kind: 'youtube' | 'instagram' | 'twitter' | 'linkedin' | 'website'): string => {
+          const val = (raw || '').trim();
+          if (!val) return '';
+          if (val.startsWith('http://') || val.startsWith('https://')) return val;
+          if (kind === 'youtube') {
+            return val.startsWith('youtube.com') || val.startsWith('youtu.be')
+              ? `https://${val}`
+              : `https://youtube.com/@${val.replace(/^@/, '')}`;
+          }
+          if (kind === 'instagram') {
+            return val.startsWith('instagram.com')
+              ? `https://${val}`
+              : `https://instagram.com/${val.replace(/^@/, '')}`;
+          }
+          if (kind === 'twitter') {
+            return val.startsWith('x.com') || val.startsWith('twitter.com')
+              ? `https://${val}`
+              : `https://x.com/${val.replace(/^@/, '')}`;
+          }
+          if (kind === 'linkedin') {
+            return val.startsWith('linkedin.com')
+              ? `https://${val}`
+              : `https://linkedin.com/company/${val.replace(/^@/, '')}`;
+          }
+          return `https://${val}`;
         };
+
+        // 1. Department Association Socials (Edited by Album Admin via Album Edit button; never shows unconfigured defaults)
+        const rawDeptSocials = currentSet.socials || {};
+        const deptYtHref = normalizeSocialHref(rawDeptSocials.youtube, 'youtube');
+        const deptIgHref = normalizeSocialHref(rawDeptSocials.instagram, 'instagram');
+        const deptTwHref = normalizeSocialHref(rawDeptSocials.twitter, 'twitter');
+        const deptLiHref = normalizeSocialHref(rawDeptSocials.linkedin, 'linkedin');
+        const deptWebHref = normalizeSocialHref(rawDeptSocials.website, 'website');
+        const hasAnyDeptSocial = Boolean(deptYtHref || deptIgHref || deptTwHref || deptLiHref || deptWebHref);
+        const assocName = (currentSet.departmentAssociationName || '').trim();
+
+        // 2. KOHOT Platform Footer Socials (Edited ONLY by Host in Album Media section of Host Dashboard)
+        const rawKohotSocials = contentOverride?.kohotSocials || {};
+        const kohotYtHref = normalizeSocialHref(rawKohotSocials.youtube, 'youtube');
+        const kohotIgHref = normalizeSocialHref(rawKohotSocials.instagram, 'instagram');
+        const kohotTwHref = normalizeSocialHref(rawKohotSocials.twitter, 'twitter');
+        const kohotLiHref = normalizeSocialHref(rawKohotSocials.linkedin, 'linkedin');
+        const kohotWebHref = normalizeSocialHref(rawKohotSocials.website, 'website');
+        const hasAnyKohotSocial = Boolean(kohotYtHref || kohotIgHref || kohotTwHref || kohotLiHref || kohotWebHref);
+
+        const cleanDisplayClassName = formatCleanClassSetName(
+          currentSet.classSetName,
+          `${currentSet.departmentName} ’${String(currentSet.graduationYear).slice(-2)}`
+        );
 
         return (
           <>
@@ -1959,7 +2083,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                 <div className="absolute inset-0 bg-black/40 pointer-events-none" />
               </div>
 
-              {/* Content Overlay with Reduced Font Sizes & Department Social Links */}
+              {/* Content Overlay with Department Association Social Links directly under Album Admin */}
               <div className="relative z-10 w-full max-w-4xl mx-auto px-6 text-center py-12 space-y-3">
                 <p className="font-mono-tech text-[10px] sm:text-xs uppercase tracking-[0.22em] text-white/80 font-semibold animate-fadeIn">
                   {currentSet.institutionName} • {currentSet.departmentName} • Class of {currentSet.graduationYear}
@@ -1974,7 +2098,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
 
                 <div className="space-y-2 pt-1">
                   <p className="font-syne font-bold text-xs sm:text-sm text-[#d4af37] tracking-wide">
-                    {currentSet.classSetName}
+                    {cleanDisplayClassName}
                   </p>
 
                   {currentSet.classSlogan && (
@@ -1989,30 +2113,161 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
                     <span className="font-bold">{currentSet.classRepName || 'Class Album Committee Lead'}</span>
                   </div>
 
-                  {/* Department Social Icons right where department & set details appear */}
-                  {hasAnySocial && (
+                  {/* Department Association Social Icons (Only shown when Album Admin has uploaded at least one social link) */}
+                  {hasAnyDeptSocial && (
                     <div className="pt-2">
-                      {renderDepartmentSocialLinks('album-legacy-banner-social-icons')}
+                      <div id="album-legacy-banner-social-icons" className="flex items-center justify-center gap-2.5 text-zinc-300">
+                        <span className="font-mono-tech text-[10px] sm:text-[11px] tracking-wider text-zinc-300 font-medium">
+                          Follow {assocName || 'us'} on:
+                        </span>
+                        {deptYtHref && (
+                          <a
+                            href={deptYtHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-7 h-7 rounded-full bg-white/10 hover:bg-red-500/20 border border-white/15 hover:border-red-500/40 flex items-center justify-center text-zinc-200 hover:text-red-400 transition-all"
+                            title={`${assocName || 'Department'} YouTube Channel`}
+                            aria-label={`${assocName || 'Department'} YouTube Channel`}
+                          >
+                            <Youtube className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        {deptIgHref && (
+                          <a
+                            href={deptIgHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-7 h-7 rounded-full bg-white/10 hover:bg-pink-500/20 border border-white/15 hover:border-pink-500/40 flex items-center justify-center text-zinc-200 hover:text-pink-400 transition-all"
+                            title={`${assocName || 'Department'} Instagram`}
+                            aria-label={`${assocName || 'Department'} Instagram`}
+                          >
+                            <Instagram className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        {deptTwHref && (
+                          <a
+                            href={deptTwHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 hover:border-white/30 flex items-center justify-center text-zinc-200 hover:text-white transition-all"
+                            title={`${assocName || 'Department'} X (Twitter)`}
+                            aria-label={`${assocName || 'Department'} X (Twitter)`}
+                          >
+                            <Twitter className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        {deptLiHref && (
+                          <a
+                            href={deptLiHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-7 h-7 rounded-full bg-white/10 hover:bg-blue-500/20 border border-white/15 hover:border-blue-500/40 flex items-center justify-center text-zinc-200 hover:text-blue-400 transition-all"
+                            title={`${assocName || 'Department'} LinkedIn`}
+                            aria-label={`${assocName || 'Department'} LinkedIn`}
+                          >
+                            <Linkedin className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        {deptWebHref && (
+                          <a
+                            href={deptWebHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-7 h-7 rounded-full bg-white/10 hover:bg-emerald-500/20 border border-white/15 hover:border-emerald-500/40 flex items-center justify-center text-zinc-200 hover:text-emerald-400 transition-all"
+                            title={`${assocName || 'Department'} Official Website`}
+                            aria-label={`${assocName || 'Department'} Official Website`}
+                          >
+                            <Globe className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
             </section>
 
-            {/* Minimalist footer with reduced font sizes */}
+            {/* Minimalist KOHOT Footer — Standardized across Album, Legacy Wall & Website */}
             <footer
               id="album-minimalist-footer"
-              className="relative z-10 w-full bg-[#060709] border-t border-white/[0.08] py-6 px-6 text-center text-zinc-400"
+              className="relative z-10 w-full bg-[#060709] border-t border-white/[0.08] py-7 px-6 text-center text-zinc-400"
             >
-              <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-                <span className="font-mono-tech text-[10px] sm:text-[11px] tracking-widest text-zinc-300 lowercase">
-                  kohot.app
-                </span>
-
-                {renderDepartmentSocialLinks('album-footer-social-icons')}
+              <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex flex-col items-center sm:items-start gap-1">
+                  <span className="font-syne font-extrabold text-sm sm:text-base tracking-widest text-white uppercase">
+                    KOHOT
+                  </span>
+                  <span className="font-body text-[11px] text-zinc-400">
+                    Preserve the memories.
+                  </span>
+                  {hasAnyKohotSocial && (
+                    <div id="album-footer-social-icons" className="flex items-center justify-center sm:justify-start gap-2 pt-1.5 text-zinc-300">
+                      {kohotYtHref && (
+                        <a
+                          href={kohotYtHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-7 h-7 rounded-full bg-white/10 hover:bg-red-500/20 border border-white/15 hover:border-red-500/40 flex items-center justify-center text-zinc-200 hover:text-red-400 transition-all"
+                          title="KOHOT YouTube"
+                          aria-label="KOHOT YouTube"
+                        >
+                          <Youtube className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                      {kohotIgHref && (
+                        <a
+                          href={kohotIgHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-7 h-7 rounded-full bg-white/10 hover:bg-pink-500/20 border border-white/15 hover:border-pink-500/40 flex items-center justify-center text-zinc-200 hover:text-pink-400 transition-all"
+                          title="KOHOT Instagram"
+                          aria-label="KOHOT Instagram"
+                        >
+                          <Instagram className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                      {kohotTwHref && (
+                        <a
+                          href={kohotTwHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 hover:border-white/30 flex items-center justify-center text-zinc-200 hover:text-white transition-all"
+                          title="KOHOT X (Twitter)"
+                          aria-label="KOHOT X (Twitter)"
+                        >
+                          <Twitter className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                      {kohotLiHref && (
+                        <a
+                          href={kohotLiHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-7 h-7 rounded-full bg-white/10 hover:bg-blue-500/20 border border-white/15 hover:border-blue-500/40 flex items-center justify-center text-zinc-200 hover:text-blue-400 transition-all"
+                          title="KOHOT LinkedIn"
+                          aria-label="KOHOT LinkedIn"
+                        >
+                          <Linkedin className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                      {kohotWebHref && (
+                        <a
+                          href={kohotWebHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-7 h-7 rounded-full bg-white/10 hover:bg-emerald-500/20 border border-white/15 hover:border-emerald-500/40 flex items-center justify-center text-zinc-200 hover:text-emerald-400 transition-all"
+                          title="KOHOT Website"
+                          aria-label="KOHOT Website"
+                        >
+                          <Globe className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex flex-wrap items-center justify-center gap-3 font-mono-tech text-[10px] text-zinc-400">
-                  <span>{currentSet.departmentName} • {currentSet.classSetName}</span>
+                  <span>{currentSet.departmentName} • {cleanDisplayClassName}</span>
                   <span>•</span>
                   <button
                     type="button"
@@ -2230,13 +2485,56 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
         departmentName={currentSet.departmentName}
       />
 
-      {/* Moments Fullscreen View - Covers the entire screen, with dark grey background outside the image, zoomable, no dark view text */}
+      {/* Moments Fullscreen View - Single tap on image toggles dark/light mode; double tap on image ONLY toggles zoom; clamped pan; slim 6px gap; no border line */}
       {lightboxMomentIndex !== null && lightboxMomentsList[lightboxMomentIndex] && (() => {
+        const totalCount = lightboxMomentsList.length;
         const currentMoment = lightboxMomentsList[lightboxMomentIndex];
+        const prevIndex = (lightboxMomentIndex - 1 + totalCount) % totalCount;
+        const nextIndex = (lightboxMomentIndex + 1) % totalCount;
+        const prevMoment = lightboxMomentsList[prevIndex];
+        const nextMoment = lightboxMomentsList[nextIndex];
+        const gapPx = 6;
+
+        const handleActiveImageClick = (e: React.MouseEvent<HTMLImageElement>) => {
+          e.stopPropagation();
+          if (hasMomentDraggedRef.current || Math.abs(momentSwipeOffsetPx) > 2) {
+            hasMomentDraggedRef.current = false;
+            return;
+          }
+          const now = Date.now();
+          if (now - momentLastTapRef.current < 280) {
+            // Double tap on image: cancel single-tap theme toggle and ONLY toggle zoom
+            if (momentSingleTapTimerRef.current) {
+              window.clearTimeout(momentSingleTapTimerRef.current);
+              momentSingleTapTimerRef.current = null;
+            }
+            momentLastTapRef.current = 0;
+            setMomentZoomScale((prev) => {
+              const next = prev > 1.2 ? 1 : 2;
+              setMomentPanPos({ x: 0, y: 0 });
+              return next;
+            });
+          } else {
+            // Single tap on image: wait 260ms to confirm it's not a double tap, then toggle light/dark mode
+            momentLastTapRef.current = now;
+            if (momentSingleTapTimerRef.current) {
+              window.clearTimeout(momentSingleTapTimerRef.current);
+            }
+            momentSingleTapTimerRef.current = window.setTimeout(() => {
+              setMomentCardMode((prev) => (prev === 'light' ? 'dark' : 'light'));
+              momentSingleTapTimerRef.current = null;
+            }, 260);
+          }
+        };
 
         const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+          if (momentSwipeTimerRef.current) return;
           if (e.touches.length === 2) {
             e.stopPropagation();
+            if (momentSingleTapTimerRef.current) {
+              window.clearTimeout(momentSingleTapTimerRef.current);
+              momentSingleTapTimerRef.current = null;
+            }
             const dist = Math.hypot(
               e.touches[0].clientX - e.touches[1].clientX,
               e.touches[0].clientY - e.touches[1].clientY
@@ -2246,29 +2544,21 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           } else if (e.touches.length === 1) {
             isDraggingMomentRef.current = true;
             hasMomentDraggedRef.current = false;
+            setMomentSwipeTransition(false);
             dragMomentStartRef.current = {
               clientX: e.touches[0].clientX,
               clientY: e.touches[0].clientY,
-              startX: momentPanPos.x,
+              startX: momentZoomScale > 1.05 ? momentPanPos.x : momentSwipeOffsetPx,
               startY: momentPanPos.y,
             };
-            const now = Date.now();
-            if (now - momentLastTapRef.current < 300) {
-              setMomentZoomScale((prev) => {
-                const next = prev > 1.2 ? 1 : 2;
-                if (next === 1) setMomentPanPos({ x: 0, y: 0 });
-                return next;
-              });
-              momentLastTapRef.current = 0;
-            } else {
-              momentLastTapRef.current = now;
-            }
           }
         };
 
         const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+          if (momentSwipeTimerRef.current) return;
           if (e.touches.length === 2 && momentTouchDistRef.current !== null) {
             e.stopPropagation();
+            hasMomentDraggedRef.current = true;
             const dist = Math.hypot(
               e.touches[0].clientX - e.touches[1].clientX,
               e.touches[0].clientY - e.touches[1].clientY
@@ -2276,9 +2566,7 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             const ratio = dist / momentTouchDistRef.current;
             const nextScale = Math.min(Math.max(momentLastScaleRef.current * ratio, 1), 3.5);
             setMomentZoomScale(nextScale);
-            if (nextScale <= 1.05) {
-              setMomentPanPos({ x: 0, y: 0 });
-            }
+            setMomentPanPos((prev) => clampMomentPan(prev.x, prev.y, nextScale));
           } else if (e.touches.length === 1 && isDraggingMomentRef.current) {
             const dx = e.touches[0].clientX - dragMomentStartRef.current.clientX;
             const dy = e.touches[0].clientY - dragMomentStartRef.current.clientY;
@@ -2287,13 +2575,17 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               if (Math.hypot(dx, dy) > 5) {
                 hasMomentDraggedRef.current = true;
               }
-              setMomentPanPos({
-                x: dragMomentStartRef.current.startX + dx,
-                y: dragMomentStartRef.current.startY + dy,
-              });
-            } else if (lightboxMomentsList.length > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
+              setMomentPanPos(
+                clampMomentPan(
+                  dragMomentStartRef.current.startX + dx,
+                  dragMomentStartRef.current.startY + dy,
+                  momentZoomScale
+                )
+              );
+            } else if (totalCount > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 4) {
               hasMomentDraggedRef.current = true;
-              setMomentPanPos({ x: dx * 0.35, y: 0 });
+              setMomentSwipeTransition(false);
+              setMomentSwipeOffsetPx(dx);
             }
           }
         };
@@ -2302,14 +2594,17 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           if (isDraggingMomentRef.current && momentZoomScale <= 1.05 && e.changedTouches.length === 1) {
             const dx = e.changedTouches[0].clientX - dragMomentStartRef.current.clientX;
             const dy = e.changedTouches[0].clientY - dragMomentStartRef.current.clientY;
-            setMomentPanPos({ x: 0, y: 0 });
-            if (lightboxMomentsList.length > 1 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+            const threshold = Math.min(72, (typeof window !== 'undefined' ? window.innerWidth : 360) * 0.14);
+            if (totalCount > 1 && Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy)) {
               hasMomentDraggedRef.current = true;
               if (dx < 0) {
-                handleLightboxNext();
+                animateMomentGallerySlide('next');
               } else {
-                handleLightboxPrev();
+                animateMomentGallerySlide('prev');
               }
+            } else if (momentSwipeOffsetPx !== 0) {
+              setMomentSwipeTransition(true);
+              setMomentSwipeOffsetPx(0);
             }
           }
           isDraggingMomentRef.current = false;
@@ -2319,38 +2614,44 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             if (momentZoomScale < 1.05) {
               setMomentZoomScale(1);
               setMomentPanPos({ x: 0, y: 0 });
+            } else {
+              setMomentPanPos((prev) => clampMomentPan(prev.x, prev.y, momentZoomScale));
             }
           }
         };
 
         const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-          e.preventDefault();
+          if (momentSwipeTimerRef.current) return;
           isDraggingMomentRef.current = true;
           hasMomentDraggedRef.current = false;
+          setMomentSwipeTransition(false);
           dragMomentStartRef.current = {
             clientX: e.clientX,
             clientY: e.clientY,
-            startX: momentPanPos.x,
+            startX: momentZoomScale > 1.05 ? momentPanPos.x : momentSwipeOffsetPx,
             startY: momentPanPos.y,
           };
         };
 
         const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-          if (!isDraggingMomentRef.current) return;
-          e.preventDefault();
+          if (!isDraggingMomentRef.current || momentSwipeTimerRef.current) return;
           const dx = e.clientX - dragMomentStartRef.current.clientX;
           const dy = e.clientY - dragMomentStartRef.current.clientY;
           if (momentZoomScale > 1.05) {
             if (Math.hypot(dx, dy) > 5) {
               hasMomentDraggedRef.current = true;
             }
-            setMomentPanPos({
-              x: dragMomentStartRef.current.startX + dx,
-              y: dragMomentStartRef.current.startY + dy,
-            });
-          } else if (lightboxMomentsList.length > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
+            setMomentPanPos(
+              clampMomentPan(
+                dragMomentStartRef.current.startX + dx,
+                dragMomentStartRef.current.startY + dy,
+                momentZoomScale
+              )
+            );
+          } else if (totalCount > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 4) {
             hasMomentDraggedRef.current = true;
-            setMomentPanPos({ x: dx * 0.35, y: 0 });
+            setMomentSwipeTransition(false);
+            setMomentSwipeOffsetPx(dx);
           }
         };
 
@@ -2358,14 +2659,17 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
           if (isDraggingMomentRef.current && momentZoomScale <= 1.05) {
             const dx = e.clientX - dragMomentStartRef.current.clientX;
             const dy = e.clientY - dragMomentStartRef.current.clientY;
-            setMomentPanPos({ x: 0, y: 0 });
-            if (lightboxMomentsList.length > 1 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+            const threshold = Math.min(72, (typeof window !== 'undefined' ? window.innerWidth : 360) * 0.14);
+            if (totalCount > 1 && Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy)) {
               hasMomentDraggedRef.current = true;
               if (dx < 0) {
-                handleLightboxNext();
+                animateMomentGallerySlide('next');
               } else {
-                handleLightboxPrev();
+                animateMomentGallerySlide('prev');
               }
+            } else if (momentSwipeOffsetPx !== 0) {
+              setMomentSwipeTransition(true);
+              setMomentSwipeOffsetPx(0);
             }
           }
           isDraggingMomentRef.current = false;
@@ -2377,66 +2681,79 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
             const delta = -e.deltaY * 0.01;
             setMomentZoomScale((prev) => {
               const next = Math.min(Math.max(prev + delta, 1), 3.5);
-              if (next <= 1.05) setMomentPanPos({ x: 0, y: 0 });
+              if (next <= 1.05) {
+                setMomentPanPos({ x: 0, y: 0 });
+              } else {
+                setMomentPanPos((pos) => clampMomentPan(pos.x, pos.y, next));
+              }
               return next;
             });
           }
         };
 
         const lightboxElement = (
-          <div 
+          <div
             id="moments-fullscreen-lightbox"
-            className={`fixed inset-0 z-[9999] w-screen h-screen select-none overflow-hidden transition-colors duration-200 cursor-pointer ${
+            className={`fixed inset-0 z-[9999] w-screen h-screen select-none overflow-hidden transition-colors duration-300 ${
               momentCardMode === 'light'
                 ? 'bg-white text-zinc-950'
                 : 'bg-[#000000] text-white'
             }`}
-            onClick={() => {
-              if (hasMomentDraggedRef.current) {
-                hasMomentDraggedRef.current = false;
-                return;
-              }
-              // Clicking toggles between light card and pure black (not grey)
-              setMomentCardMode((prev) => (prev === 'light' ? 'dark' : 'light'));
-            }}
           >
-            {/* Top Bar Overlay - Absolute at top so photo occupies true vertical & horizontal center */}
-            <div className={`absolute top-0 inset-x-0 px-4 sm:px-8 py-3 sm:py-4 flex items-center justify-between gap-4 z-50 pointer-events-auto ${
-              momentCardMode === 'light'
-                ? 'bg-gradient-to-b from-white/95 via-white/60 to-transparent'
-                : 'bg-gradient-to-b from-black/85 via-black/45 to-transparent'
-            }`}>
-              {/* Category Title & Date at Top Left - Perfectly aligned horizontally with cancel button */}
+            {/* Top Bar Overlay */}
+            <div
+              className={`absolute top-0 inset-x-0 px-4 sm:px-8 py-3 sm:py-4 flex items-center justify-between gap-4 z-50 pointer-events-auto ${
+                momentCardMode === 'light'
+                  ? 'bg-gradient-to-b from-white/95 via-white/60 to-transparent'
+                  : 'bg-gradient-to-b from-black/85 via-black/45 to-transparent'
+              }`}
+            >
               <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                <span className={`px-3.5 py-1.5 rounded-full text-xs font-syne font-bold uppercase tracking-wider border backdrop-blur-md shadow-xs truncate max-w-[180px] sm:max-w-md ${
-                  momentCardMode === 'light'
-                    ? 'bg-black/5 text-black border-black/15'
-                    : 'bg-white/10 text-white border-white/20'
-                }`}>
+                <span
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-syne font-bold uppercase tracking-wider border backdrop-blur-md shadow-xs truncate max-w-[180px] sm:max-w-md ${
+                    momentCardMode === 'light'
+                      ? 'bg-black/5 text-black border-black/15'
+                      : 'bg-white/10 text-white border-white/20'
+                  }`}
+                >
                   {currentMoment.categoryTitle || currentMoment.title}
                 </span>
                 {currentMoment.dateStr && (
-                  <span className={`font-mono-tech text-xs shrink-0 flex items-center gap-1.5 ${
-                    momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
-                  }`}>
+                  <span
+                    className={`font-mono-tech text-xs shrink-0 flex items-center gap-1.5 ${
+                      momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
+                    }`}
+                  >
                     <span className="opacity-40">•</span>
                     <span>{currentMoment.dateStr}</span>
                   </span>
                 )}
-                <span className={`font-mono-tech text-xs shrink-0 ${
-                  momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
-                }`}>
-                  ({((currentMoment.imageIndexInCategory ?? 0) + 1)} / {(currentMoment.totalImagesInCategory ?? lightboxMomentsList.length)})
+                <span
+                  className={`font-mono-tech text-xs shrink-0 ${
+                    momentCardMode === 'light' ? 'text-zinc-600' : 'text-zinc-400'
+                  }`}
+                >
+                  ({(currentMoment.imageIndexInCategory ?? 0) + 1} /{' '}
+                  {currentMoment.totalImagesInCategory ?? lightboxMomentsList.length})
                 </span>
               </div>
 
-              {/* Close / Cancel Button on Top Right - Exactly aligned on same horizontal line */}
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   id="close-lightbox-btn"
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (momentSwipeTimerRef.current) {
+                      window.clearTimeout(momentSwipeTimerRef.current);
+                      momentSwipeTimerRef.current = null;
+                    }
+                    if (momentSingleTapTimerRef.current) {
+                      window.clearTimeout(momentSingleTapTimerRef.current);
+                      momentSingleTapTimerRef.current = null;
+                    }
+                    setMomentSwipeTransition(false);
+                    setMomentSwipeOffsetPx(0);
                     setLightboxMomentIndex(null);
                     setMomentZoomScale(1);
                     setMomentPanPos({ x: 0, y: 0 });
@@ -2454,9 +2771,9 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               </div>
             </div>
 
-            {/* Centralized Horizontally Swipable Photo Display Area - Perfectly centered in viewport */}
-            <div 
-              className="absolute inset-0 w-full h-full flex items-center justify-center p-4 sm:p-10 md:p-14 overflow-hidden select-none touch-pan-y"
+            {/* Gallery Track Viewport: Smooth 1:1 touch/drag swiping with slim 6px gap and zero border line */}
+            <div
+              className="absolute inset-0 w-full h-full overflow-hidden select-none touch-none"
               onTouchStart={handleTouchStart}
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
@@ -2466,28 +2783,100 @@ export const DepartmentAlbumView: React.FC<DepartmentAlbumViewProps> = ({
               onMouseLeave={handleMouseUp}
               onWheel={handleWheel}
             >
-              <div 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (hasMomentDraggedRef.current) {
-                    hasMomentDraggedRef.current = false;
-                    return;
-                  }
-                  // Clicking on image toggles background mode
-                  setMomentCardMode((prev) => (prev === 'light' ? 'dark' : 'light'));
-                }}
-                className="w-full h-full flex items-center justify-center transition-transform duration-150 ease-out origin-center cursor-default"
+              <div
+                className="h-full flex items-center will-change-transform"
                 style={{
-                  transform: `translate(${momentPanPos.x}px, ${momentPanPos.y}px) scale(${momentZoomScale})`,
-                  cursor: momentZoomScale > 1.05 ? 'grab' : lightboxMomentsList.length > 1 ? 'grab' : 'pointer',
+                  width: `calc(300vw + ${gapPx * 2}px)`,
+                  gap: `${gapPx}px`,
+                  transform: `translate3d(calc(-100vw - ${gapPx}px + ${momentSwipeOffsetPx}px), 0, 0)`,
+                  transition: momentSwipeTransition
+                    ? 'transform 320ms cubic-bezier(0.22, 1, 0.36, 1)'
+                    : 'none',
+                  cursor:
+                    momentZoomScale > 1.05
+                      ? 'grab'
+                      : totalCount > 1
+                      ? 'grab'
+                      : 'default',
                 }}
               >
-                <img
-                  src={currentMoment.url}
-                  alt={currentMoment.title}
-                  className="max-w-full max-h-full object-contain rounded-none select-none drop-shadow-2xl pointer-events-none"
-                  draggable={false}
-                />
+                {/* Previous Image Slide */}
+                <div className="w-screen h-full shrink-0 flex items-center justify-center py-12 px-0">
+                  {totalCount > 1 && prevMoment && (
+                    <div className="max-w-full max-h-full flex items-center justify-center overflow-hidden">
+                      <img
+                        key={`prev-${prevMoment.id}`}
+                        src={prevMoment.url}
+                        alt=""
+                        loading="eager"
+                        decoding="sync"
+                        onLoad={() =>
+                          setLoadedMomentUrls((prev) =>
+                            prev[prevMoment.url] ? prev : { ...prev, [prevMoment.url]: true }
+                          )
+                        }
+                        className={`max-w-full max-h-[84vh] object-contain select-none pointer-events-none transition-opacity duration-150 ${
+                          loadedMomentUrls[prevMoment.url] ? 'opacity-100' : 'opacity-0'
+                        }`}
+                        draggable={false}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Current Active Image Slide — Single tap on image ONLY toggles theme; double tap on image ONLY toggles zoom */}
+                <div className="w-screen h-full shrink-0 flex items-center justify-center py-12 px-0">
+                  <div
+                    className="max-w-full max-h-full flex items-center justify-center overflow-hidden origin-center will-change-transform"
+                    style={{
+                      transform: `translate3d(${momentPanPos.x}px, ${momentPanPos.y}px, 0) scale(${momentZoomScale})`,
+                      transition: isDraggingMomentRef.current ? 'none' : 'transform 160ms ease-out',
+                    }}
+                  >
+                    <img
+                      key={`curr-${currentMoment.id}`}
+                      ref={activeMomentImgRef}
+                      src={currentMoment.url}
+                      alt=""
+                      loading="eager"
+                      decoding="sync"
+                      onClick={handleActiveImageClick}
+                      onLoad={() =>
+                        setLoadedMomentUrls((prev) =>
+                          prev[currentMoment.url] ? prev : { ...prev, [currentMoment.url]: true }
+                        )
+                      }
+                      className={`max-w-full max-h-[84vh] object-contain select-none pointer-events-auto cursor-pointer transition-opacity duration-150 ${
+                        loadedMomentUrls[currentMoment.url] ? 'opacity-100' : 'opacity-0'
+                      }`}
+                      draggable={false}
+                    />
+                  </div>
+                </div>
+
+                {/* Next Image Slide */}
+                <div className="w-screen h-full shrink-0 flex items-center justify-center py-12 px-0">
+                  {totalCount > 1 && nextMoment && (
+                    <div className="max-w-full max-h-full flex items-center justify-center overflow-hidden">
+                      <img
+                        key={`next-${nextMoment.id}`}
+                        src={nextMoment.url}
+                        alt=""
+                        loading="eager"
+                        decoding="sync"
+                        onLoad={() =>
+                          setLoadedMomentUrls((prev) =>
+                            prev[nextMoment.url] ? prev : { ...prev, [nextMoment.url]: true }
+                          )
+                        }
+                        className={`max-w-full max-h-[84vh] object-contain select-none pointer-events-none transition-opacity duration-150 ${
+                          loadedMomentUrls[nextMoment.url] ? 'opacity-100' : 'opacity-0'
+                        }`}
+                        draggable={false}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>

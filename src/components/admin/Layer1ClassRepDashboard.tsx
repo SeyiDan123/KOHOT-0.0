@@ -217,7 +217,15 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
 
   // Technical constraints from master config (KoHot owner dashboard)
   const maxImagesPerAlbum = contentOverride?.maxImagesPerAlbum || 400;
-  const compressionResolution = contentOverride?.defaultCompressionResolution || 720;
+  const compressionResolution = (() => {
+    const candidate = Number(contentOverride?.defaultCompressionResolution);
+    if (candidate === 1280 || candidate === 1440 || candidate === 1920) return candidate;
+    try {
+      const saved = Number(localStorage.getItem('kohot_compression_resolution_px'));
+      if (saved === 1280 || saved === 1440 || saved === 1920) return saved;
+    } catch {}
+    return 1440;
+  })();
 
   // Student Directory & Hierarchy Management State
   const initialPendingCount = useMemo(() => {
@@ -379,7 +387,10 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const [editClassRepName, setEditClassRepName] = useState(currentSet.classRepName || '');
   const [editConvocationDate, setEditConvocationDate] = useState(currentSet.convocationDate || '');
 
-  // Social Handles State
+  // Social Handles & Department Association Name State
+  const [departmentAssociationName, setDepartmentAssociationName] = useState(
+    currentSet.departmentAssociationName || ''
+  );
   const [socials, setSocials] = useState<DepartmentSocials>(
     currentSet.socials || {
       youtube: '',
@@ -661,6 +672,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     setEditClassSlogan(currentSet.classSlogan || '');
     setEditClassRepName(currentSet.classRepName || '');
     setEditConvocationDate(currentSet.convocationDate || '');
+    setDepartmentAssociationName(currentSet.departmentAssociationName || '');
     if (currentSet.socials) setSocials(currentSet.socials);
     if (currentSet.videos) {
       setVideos(
@@ -681,6 +693,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     currentSet.classSlogan,
     currentSet.classRepName,
     currentSet.convocationDate,
+    currentSet.departmentAssociationName,
     currentSet.socials,
     currentSet.videos,
   ]);
@@ -852,6 +865,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       bannerImageUrl: heroBannerUrl,
       legacyGroupImageUrl: legacyFooterUrl,
       legacyFooterUrl: legacyFooterUrl,
+      departmentAssociationName: departmentAssociationName.trim() || undefined,
       socials: socials,
       videos: videos,
     });
@@ -1228,11 +1242,11 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
           }
           if (res.pricing) {
             setCohortPricing(res.pricing);
-            const stdNgn = Math.round((res.pricing.standardPriceKobo || res.pricing.listPriceKobo || 50000) / 100);
+            const stdNgn = Math.round((res.pricing.standardPriceKobo || res.pricing.listPriceKobo || 100000) / 100);
             const effNgn = Math.round(
               (res.pricing.kind === 'discount'
                 ? res.pricing.effectivePriceKobo
-                : res.pricing.standardPriceKobo || res.pricing.listPriceKobo || 50000) / 100
+                : res.pricing.standardPriceKobo || res.pricing.listPriceKobo || 100000) / 100
             );
             setStandardSlotPriceNaira(stdNgn);
             setSlotPriceNaira(effNgn);
@@ -1254,11 +1268,11 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
         }
         if (data?.resolvedPricing) {
           setCohortPricing(data.resolvedPricing);
-          const stdNgn = Math.round((data.resolvedPricing.standardPriceKobo || data.resolvedPricing.listPriceKobo || feeKobo || 50000) / 100);
+          const stdNgn = Math.round((data.resolvedPricing.standardPriceKobo || data.resolvedPricing.listPriceKobo || feeKobo || 100000) / 100);
           const effNgn = Math.round(
             (data.resolvedPricing.kind === 'discount'
               ? data.resolvedPricing.effectivePriceKobo
-              : data.resolvedPricing.standardPriceKobo || data.resolvedPricing.listPriceKobo || feeKobo || 50000) / 100
+              : data.resolvedPricing.standardPriceKobo || data.resolvedPricing.listPriceKobo || feeKobo || 100000) / 100
           );
           setStandardSlotPriceNaira(stdNgn);
           setSlotPriceNaira(effNgn);
@@ -3105,22 +3119,29 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   // BATCH MOMENTS UPLOAD & HIERARCHY HANDLERS
   // ==========================================
 
+  const [batchUploadProgress, setBatchUploadProgress] = useState<number | null>(null);
+
   // Multi-image upload for new batch creation with automated date extraction
   const handleBatchFilesUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
     setIsCompressingBatch(true);
+    setBatchUploadProgress(0);
     setIsScanningMetadata(true);
     try {
+      const totalFiles = files.length;
       const newItems: Array<{ id: string; url: string; caption: string }> = [];
-      for (let i = 0; i < files.length; i++) {
+      for (let i = 0; i < totalFiles; i++) {
         const file = files[i];
+        setBatchUploadProgress(Math.round((i / totalFiles) * 100));
         const res = await compressImageToWebP(file, compressionResolution, 0.85);
+        setBatchUploadProgress(Math.round(((i + 0.5) / totalFiles) * 100));
         const upRes = await uploadMediaToR2(res.dataUrl, {
           setId: currentSet.id,
           category: 'moments',
           fileName: file.name || `moment-${i + 1}.webp`,
         });
+        setBatchUploadProgress(Math.round(((i + 1) / totalFiles) * 100));
         if (!upRes.success || !upRes.url) {
           showError('Upload failed', upRes.error || `Failed to upload ${file.name || 'image'}. Please retry.`);
           continue;
@@ -3153,6 +3174,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       console.error('Error processing batch files:', err);
     } finally {
       setIsCompressingBatch(false);
+      setBatchUploadProgress(null);
       setIsScanningMetadata(false);
     }
   };
@@ -3542,16 +3564,21 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   const handleAppendFilesToEditingMomentModal = async (files: FileList | null) => {
     if (!files || files.length === 0 || !editingMomentBatchModal) return;
     setIsCompressingBatch(true);
+    setBatchUploadProgress(0);
     try {
+      const totalFiles = files.length;
       const newItems: Array<{ id: string; url: string; caption: string }> = [];
-      for (let i = 0; i < files.length; i++) {
+      for (let i = 0; i < totalFiles; i++) {
         const file = files[i];
+        setBatchUploadProgress(Math.round((i / totalFiles) * 100));
         const res = await compressImageToWebP(file, compressionResolution, 0.85);
+        setBatchUploadProgress(Math.round(((i + 0.5) / totalFiles) * 100));
         const upRes = await uploadMediaToR2(res.dataUrl, {
           setId: currentSet.id,
           category: 'moments',
           fileName: file.name || `moment-${i + 1}.webp`,
         });
+        setBatchUploadProgress(Math.round(((i + 1) / totalFiles) * 100));
         if (!upRes.success || !upRes.url) {
           showError('Upload failed', upRes.error || `Failed to upload ${file.name || 'image'}. Please retry.`);
           continue;
@@ -3577,6 +3604,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
       console.error('Error adding photos to editing moment:', err);
     } finally {
       setIsCompressingBatch(false);
+      setBatchUploadProgress(null);
       if (editMomentAddPhotosInputRef.current) editMomentAddPhotosInputRef.current.value = '';
     }
   };
@@ -3962,21 +3990,46 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
   };
 
   const isSoftDeleted = Boolean(currentSet.deletedAt);
-  const daysSinceDeleted = currentSet.deletedAt
-    ? Math.floor((Date.now() - new Date(currentSet.deletedAt).getTime()) / (1000 * 60 * 60 * 24))
-    : 0;
-  const daysRemainingToRecover = Math.max(0, 30 - daysSinceDeleted);
+  const [recoveryNowMs, setRecoveryNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!isSoftDeleted) return;
+    setRecoveryNowMs(Date.now());
+    const interval = window.setInterval(() => {
+      setRecoveryNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [isSoftDeleted, currentSet.deletedAt]);
+
+  const RECOVERY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+  const deletedAtTimestampMs = currentSet.deletedAt ? new Date(currentSet.deletedAt).getTime() : 0;
+  const recoveryDeadlineMs =
+    deletedAtTimestampMs > 0 ? deletedAtTimestampMs + RECOVERY_WINDOW_MS : 0;
+  const remainingRecoveryMs =
+    recoveryDeadlineMs > 0 ? Math.max(0, recoveryDeadlineMs - recoveryNowMs) : 0;
+  const recoveryCountdownDays = Math.floor(remainingRecoveryMs / (1000 * 60 * 60 * 24));
+  const recoveryCountdownHours = Math.floor(
+    (remainingRecoveryMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+  );
+  const recoveryCountdownMinutes = Math.floor(
+    (remainingRecoveryMs % (1000 * 60 * 60)) / (1000 * 60)
+  );
+  const recoveryCountdownSeconds = Math.floor((remainingRecoveryMs % (1000 * 60)) / 1000);
+  const daysRemainingToRecover = remainingRecoveryMs > 0 ? Math.max(1, recoveryCountdownDays) : 0;
   const isHiddenFromClassAdmin = (isSoftDeleted || Boolean(currentSet.keptByHostOnly)) && currentUser.role !== 'master_host';
+  const [isRestoringAlbum, setIsRestoringAlbum] = useState(false);
 
   const [isPermanentDeleteModalOpen, setIsPermanentDeleteModalOpen] = useState(false);
+  const [deleteAlbumConfirmInput, setDeleteAlbumConfirmInput] = useState('');
 
   // Guard: Navigating away or changing album/route must NEVER trigger deletion or leave deletion modals open
   useEffect(() => {
     setIsRequestDeletionModalOpen(false);
     setIsPermanentDeleteModalOpen(false);
+    setDeleteAlbumConfirmInput('');
     const closeDeletionModalsOnNav = () => {
       setIsRequestDeletionModalOpen(false);
       setIsPermanentDeleteModalOpen(false);
+      setDeleteAlbumConfirmInput('');
     };
     window.addEventListener('popstate', closeDeletionModalsOnNav);
     window.addEventListener('hashchange', closeDeletionModalsOnNav);
@@ -3986,7 +4039,22 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     };
   }, [currentSet.id]);
 
+  useEffect(() => {
+    if (!isRequestDeletionModalOpen) {
+      setDeleteAlbumConfirmInput('');
+    }
+  }, [isRequestDeletionModalOpen]);
+
+  const isDeleteAlbumConfirmValid =
+    deleteAlbumConfirmInput.trim().toUpperCase() === 'DELETE' ||
+    (Boolean(currentSet.departmentName) &&
+      deleteAlbumConfirmInput.trim().toLowerCase() === currentSet.departmentName.trim().toLowerCase());
+
   const handleConfirmSoftDelete = () => {
+    if (!isDeleteAlbumConfirmValid) {
+      showError('Confirmation Required', 'Please type DELETE to confirm deleting this class album.');
+      return;
+    }
     const nowIso = new Date().toISOString();
     const updated: ClassSet = {
       ...currentSet,
@@ -4000,6 +4068,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     onUpdateSet(updated);
     apiClientSoftDeleteAlbum(currentSet.id, currentSet.classSetName || currentSet.departmentName);
     setIsRequestDeletionModalOpen(false);
+    setDeleteAlbumConfirmInput('');
     setDeletionReason('');
     showSuccess(
       'Album Deleted (30-Day Recovery)',
@@ -4018,26 +4087,51 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     onSwitchRole('visitor');
   };
 
-  const handleRecoverAlbum = () => {
-    if (daysRemainingToRecover <= 0) {
-      showError('Recovery Expired', 'The 30-day recovery window for this class album has expired.');
+  const handleRecoverAlbum = async () => {
+    if (remainingRecoveryMs <= 0) {
+      showError(
+        'Recovery Window Expired',
+        'The 30-day recovery window for this class album has expired and it has been permanently purged.'
+      );
+      onSwitchRole('visitor');
       return;
     }
-    const updated: ClassSet = {
-      ...currentSet,
-      deletedAt: undefined,
-      deletedBy: undefined,
-      keptByHostOnly: undefined,
-      keptByHostAt: undefined,
-      isUnpublished: false,
-      activationStatus: 'active',
-      deletionRequest: undefined,
-    };
-    onUpdateSet(updated);
-    apiClientRestoreAlbum(currentSet.id);
-    setIsRequestDeletionModalOpen(false);
-    setIsPermanentDeleteModalOpen(false);
-    showSuccess('Album Recovered', 'Your class album and all cohort records have been restored to your dashboard.');
+    setIsRestoringAlbum(true);
+    try {
+      const res = await apiClientRestoreAlbum(currentSet.id);
+      if (!res.success) {
+        if (res.expired) {
+          showError(
+            '30-Day Recovery Window Expired',
+            res.error || 'The 30-day recovery deadline has passed and this album was permanently purged.'
+          );
+          onSwitchRole('visitor');
+          return;
+        }
+        showError('Restore Failed', res.error || 'Could not restore your class album. Please try again.');
+        return;
+      }
+
+      const updated: ClassSet = {
+        ...currentSet,
+        deletedAt: undefined,
+        deletedBy: undefined,
+        keptByHostOnly: undefined,
+        keptByHostAt: undefined,
+        isUnpublished: false,
+        activationStatus: 'active',
+        deletionRequest: undefined,
+      };
+      onUpdateSet(updated);
+      setIsRequestDeletionModalOpen(false);
+      setIsPermanentDeleteModalOpen(false);
+      showSuccess(
+        'Album Recovered',
+        'Your class album, graduate profiles, media, and settings have been restored to your dashboard.'
+      );
+    } finally {
+      setIsRestoringAlbum(false);
+    }
   };
 
   const handleSaveStory = () => {
@@ -4061,7 +4155,8 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
     Boolean(editingAwardModalItem) ||
     Boolean(editingVoiceModalItem) ||
     isShareAlbumModalOpen ||
-    isRequestDeletionModalOpen
+    isRequestDeletionModalOpen ||
+    isPermanentDeleteModalOpen
   );
 
   return (
@@ -4228,23 +4323,65 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               </p>
             </div>
 
-            {daysRemainingToRecover > 0 && !currentSet.keptByHostOnly ? (
-              <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
+            {remainingRecoveryMs > 0 && !currentSet.keptByHostOnly ? (
+              <div className="p-5 sm:p-6 rounded-2xl bg-white/[0.03] border border-white/10 space-y-5">
                 <div className="flex items-center justify-center gap-2 text-amber-300 font-mono-tech text-xs font-bold uppercase tracking-wider">
                   <AlertCircle className="w-4 h-4" />
-                  <span>{daysRemainingToRecover} Day{daysRemainingToRecover === 1 ? '' : 's'} Remaining Before Permanent Erasure</span>
+                  <span>Time Remaining Until Permanent Deletion (30-Day Window)</span>
                 </div>
-                <p className="font-body text-xs text-zinc-400">
-                  You can recover this class album and restore all profiles, memories, and settings before the 30-day retention window expires.
+
+                {/* Live Countdown Grid: Days, Hours, Minutes, Seconds */}
+                <div className="grid grid-cols-4 gap-2.5 max-w-md mx-auto">
+                  <div className="p-3 rounded-xl bg-black/60 border border-amber-400/30 text-center">
+                    <p className="font-syne font-extrabold text-xl sm:text-2xl text-white">
+                      {String(recoveryCountdownDays).padStart(2, '0')}
+                    </p>
+                    <span className="text-[10px] font-mono-tech uppercase tracking-wider text-amber-300">
+                      Days
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-black/60 border border-amber-400/30 text-center">
+                    <p className="font-syne font-extrabold text-xl sm:text-2xl text-white">
+                      {String(recoveryCountdownHours).padStart(2, '0')}
+                    </p>
+                    <span className="text-[10px] font-mono-tech uppercase tracking-wider text-amber-300">
+                      Hours
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-black/60 border border-amber-400/30 text-center">
+                    <p className="font-syne font-extrabold text-xl sm:text-2xl text-white">
+                      {String(recoveryCountdownMinutes).padStart(2, '0')}
+                    </p>
+                    <span className="text-[10px] font-mono-tech uppercase tracking-wider text-amber-300">
+                      Minutes
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-black/60 border border-white/10 text-center">
+                    <p className="font-syne font-extrabold text-xl sm:text-2xl text-zinc-300">
+                      {String(recoveryCountdownSeconds).padStart(2, '0')}
+                    </p>
+                    <span className="text-[10px] font-mono-tech uppercase tracking-wider text-zinc-400">
+                      Seconds
+                    </span>
+                  </div>
+                </div>
+
+                <p className="font-body text-xs text-zinc-400 max-w-md mx-auto">
+                  Your complete album data, graduate profiles, Moments media, and settings are safely retained for{' '}
+                  <strong className="text-white">
+                    {recoveryCountdownDays}d {recoveryCountdownHours}h {recoveryCountdownMinutes}m
+                  </strong>
+                  . Click <strong className="text-emerald-400">Recover Album</strong> below to restore everything immediately to your working dashboard.
                 </p>
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-1">
                   <button
                     id="recover-deleted-album-btn"
                     type="button"
+                    disabled={isRestoringAlbum}
                     onClick={handleRecoverAlbum}
-                    className="w-full sm:w-auto px-7 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-500/20"
+                    className="w-full sm:w-auto px-8 py-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-syne font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-500/20"
                   >
-                    Recover Class Album Now
+                    {isRestoringAlbum ? 'Restoring Album...' : 'Recover Album'}
                   </button>
                   <button
                     id="permanent-delete-album-now-btn"
@@ -5966,7 +6103,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                             setBottomSheetActionMode('none');
                             setBottomSheetReasonInput('');
                           }}
-                          className="px-3.5 py-1.5 rounded-xl bg-white/5 text-xs font-mono-tech text-zinc-400 cursor-pointer"
+                          className="px-3.5 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 border border-slate-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-200 dark:border-white/15 text-xs font-mono-tech font-semibold transition-colors cursor-pointer"
                         >
                           Cancel
                         </button>
@@ -7087,15 +7224,29 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                 <div>
                   <h4 className="font-syne font-bold text-base text-white flex items-center gap-2">
                     <Share2 className="w-4 h-4 text-amber-400" />
-                    <span>Official Department Social Handles</span>
+                    <span>Department Association &amp; Social Handles</span>
                   </h4>
                   <p className="text-xs text-zinc-400 font-mono-tech mt-0.5">
-                    Links displayed in the album header, footer, and media clips section
+                    Displayed directly under the Album Admin name as &ldquo;Follow {departmentAssociationName.trim() || 'NAPAS'} on:&rdquo; once at least one social handle is added. Replicated across all class albums of your department.
                   </p>
                 </div>
                 <span className="text-[10px] font-mono-tech uppercase tracking-widest text-zinc-500 bg-white/5 px-2.5 py-1 rounded-full border border-white/10 shrink-0">
                   Social Connectivity
                 </span>
+              </div>
+
+              <div className="pt-1">
+                <label className="block font-mono-tech text-[10px] uppercase tracking-wider text-zinc-300 mb-1.5">
+                  Department Association Name (e.g. NAPAS, NACOSS, LAWSAN)
+                </label>
+                <input
+                  id="edit-department-association-name-input"
+                  type="text"
+                  value={departmentAssociationName}
+                  onChange={(e) => setDepartmentAssociationName(e.target.value)}
+                  placeholder="e.g. NAPAS"
+                  className="w-full sm:max-w-sm px-3.5 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white font-syne font-bold text-xs focus:outline-none focus:border-[#d4af37]"
+                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
@@ -7695,23 +7846,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     />
                   </div>
 
-                  {/* External Link for More Photos in this Category (Optional) */}
-                  <div className="space-y-1.5">
-                    <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-400">
-                      External Link for More Photos (Optional)
-                    </label>
-                    <input
-                      type="url"
-                      value={batchMorePhotosUrl}
-                      onChange={(e) => setBatchMorePhotosUrl(e.target.value)}
-                      placeholder="https://drive.google.com/... or Pixieset / iCloud gallery link"
-                      className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder:text-zinc-600 font-mono-tech text-xs focus:border-amber-400 focus:outline-none transition-colors"
-                    />
-                    <p className="font-body text-[11px] text-zinc-400">
-                      If added, an &ldquo;Explore full photo archive&rdquo; link will appear under this category on the public album.
-                    </p>
-                  </div>
-
                   {/* Upload Photos + Hold & Drag-and-Drop Rearrange */}
                   <div className="p-4 rounded-2xl bg-[var(--kh-surface-subtle)] border border-[var(--kh-border)] space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -7732,7 +7866,11 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                         className="py-2 px-4 rounded-xl bg-[#d4af37] hover:bg-[#e3be42] text-black font-mono-tech text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
                       >
                         <Upload className="w-3.5 h-3.5" />
-                        <span>{isCompressingBatch ? 'Processing...' : 'Select Photos'}</span>
+                        <span>
+                          {isCompressingBatch
+                            ? `Uploading ${batchUploadProgress !== null ? `${batchUploadProgress}%` : '0%'}...`
+                            : 'Select Photos'}
+                        </span>
                       </button>
                     </div>
 
@@ -7746,7 +7884,7 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                     />
 
                     {batchImages.length > 0 && (
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1 max-h-60 overflow-y-auto pr-1">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[320px] overflow-y-auto pr-1 pt-1">
                         {batchImages.map((img, index) => {
                           const isBeingDragged = draggedDraftPhotoIndex === index;
                           return (
@@ -7792,34 +7930,43 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                                   setDragOverDraftPhotoIndex(index);
                                 }, 120);
                               }}
-                              className={`p-2 rounded-xl bg-[var(--kh-surface)] border transition-all flex items-center gap-2 cursor-grab active:cursor-grabbing select-none ${
+                              className={`rounded-xl bg-[var(--kh-surface)] border p-2 flex flex-col justify-between gap-2 transition-all cursor-grab active:cursor-grabbing select-none ${
                                 isBeingDragged
                                   ? 'kohot-drag-active-card border-[#d4af37] ring-2 ring-[#d4af37]/60 scale-[1.01] shadow-xl z-20'
                                   : 'border-[var(--kh-border)] hover:border-[var(--kh-border-strong)]'
                               }`}
                             >
-                              <div className="relative shrink-0">
+                              <div className="relative aspect-[4/3] w-full rounded-lg overflow-hidden bg-zinc-900 border border-[var(--kh-border)]">
                                 <img
                                   src={img.url}
                                   alt={`Photo ${index + 1}`}
-                                  className="w-12 h-12 rounded-lg object-cover border border-[var(--kh-border)] pointer-events-none"
+                                  className="w-full h-full object-cover pointer-events-none"
                                 />
-                                <span className="absolute -top-1 -left-1 px-1.5 py-0.2 rounded bg-black/85 border border-white/20 text-[9px] font-mono-tech text-white font-bold">
-                                  {index + 1}
-                                </span>
+                                <div className="absolute top-1.5 inset-x-1.5 flex items-center justify-between pointer-events-none">
+                                  <span className="px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-md border border-white/15 text-[10px] font-mono-tech text-white font-bold">
+                                    #{index + 1}
+                                  </span>
+                                  <span className="p-1 rounded-md bg-black/80 text-zinc-300 border border-white/10">
+                                    <GripVertical className="w-3 h-3" />
+                                  </span>
+                                </div>
                               </div>
-                              <div className="min-w-0 flex-1 flex flex-col gap-1 text-[11px] font-mono-tech">
+                              <div
+                                className="flex items-center justify-end gap-1 pt-0.5"
+                                onClick={(e) => e.stopPropagation()}
+                              >
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setBatchImages(batchImages.filter((_, i) => i !== index));
                                   }}
-                                  className="text-[var(--kh-danger)] hover:underline cursor-pointer text-left"
+                                  className="p-1 rounded-lg bg-[var(--kh-surface-subtle)] hover:bg-[var(--kh-danger-bg)] text-[var(--kh-text-muted)] hover:text-[var(--kh-danger)] cursor-pointer flex items-center gap-1 px-2 text-[10px] font-mono-tech"
+                                  title="Remove photo"
                                 >
-                                  Remove
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Remove</span>
                                 </button>
                               </div>
-                              <GripVertical className="w-3.5 h-3.5 text-[var(--kh-text-muted)] shrink-0" />
                             </div>
                           );
                         })}
@@ -7858,45 +8005,25 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               >
                 {editingMomentBatchModal && (
                   <form onSubmit={handleSaveEditMomentBatchModal} className="space-y-4 text-xs font-body">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                      {/* Category Title */}
-                      <div className="space-y-1.5">
-                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                          Moment Title / Category Name *
-                        </label>
-                        <input
-                          required
-                          type="text"
-                          value={editingMomentBatchModal.title}
-                          onChange={(e) =>
-                            setEditingMomentBatchModal({
-                              ...editingMomentBatchModal,
-                              title: e.target.value,
-                            })
-                          }
-                          placeholder="e.g. Sign-out Day & White Shirt Signing"
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-syne font-bold text-xs focus:border-[#d4af37] focus:outline-none"
-                        />
-                      </div>
-
-                      {/* Short Badge Tag */}
-                      <div className="space-y-1.5">
-                        <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                          Category Badge Label
-                        </label>
-                        <input
-                          type="text"
-                          value={editingMomentBatchModal.eventTag}
-                          onChange={(e) =>
-                            setEditingMomentBatchModal({
-                              ...editingMomentBatchModal,
-                              eventTag: e.target.value,
-                            })
-                          }
-                          placeholder="e.g. Sign-out Day, Dinner Party"
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none"
-                        />
-                      </div>
+                    {/* Category Title */}
+                    <div className="space-y-1.5">
+                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
+                        Moment Title / Category Name *
+                      </label>
+                      <input
+                        required
+                        type="text"
+                        value={editingMomentBatchModal.title}
+                        onChange={(e) =>
+                          setEditingMomentBatchModal({
+                            ...editingMomentBatchModal,
+                            title: e.target.value,
+                            eventTag: e.target.value,
+                          })
+                        }
+                        placeholder="e.g. Sign-out Day & White Shirt Signing"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white font-syne font-bold text-xs focus:border-[#d4af37] focus:outline-none"
+                      />
                     </div>
 
                     {/* Event Date Picker */}
@@ -7977,28 +8104,6 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                       />
                     </div>
 
-                    {/* External Link for More Photos in this Category (Optional) */}
-                    <div className="space-y-1.5">
-                      <label className="block font-mono-tech text-[11px] uppercase tracking-wider text-zinc-300 font-semibold">
-                        External Link for More Photos (Optional)
-                      </label>
-                      <input
-                        type="url"
-                        value={editingMomentBatchModal.morePhotosUrl || ''}
-                        onChange={(e) =>
-                          setEditingMomentBatchModal({
-                            ...editingMomentBatchModal,
-                            morePhotosUrl: e.target.value,
-                          })
-                        }
-                        placeholder="https://drive.google.com/... or Pixieset / iCloud gallery link"
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#08090e] border border-white/15 text-white placeholder:text-zinc-600 font-mono-tech text-xs focus:border-[#d4af37] focus:outline-none"
-                      />
-                      <p className="font-body text-[11px] text-zinc-400">
-                        When provided, visitors can open the full external photo archive directly from this moment category on the public album.
-                      </p>
-                    </div>
-
                     {/* Hold & Drag-and-Drop Photo Grid */}
                     <div className="p-4 rounded-2xl bg-[var(--kh-surface-subtle)] border border-[var(--kh-border)] space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -8018,7 +8123,11 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                           className="px-3.5 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e3be42] text-black font-mono-tech text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>{isCompressingBatch ? 'Adding...' : 'Add Photos'}</span>
+                          <span>
+                            {isCompressingBatch
+                              ? `Uploading ${batchUploadProgress !== null ? `${batchUploadProgress}%` : '0%'}...`
+                              : 'Add Photos'}
+                          </span>
                         </button>
 
                         <input
@@ -8915,10 +9024,27 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
                   What happens when you delete:
                 </p>
                 <ul className="list-disc pl-4 space-y-1 text-[11px] text-zinc-300">
-                  <li>Album data is immediately wiped and hidden from your dashboard and the public album.</li>
-                  <li>You can still sign in within <span className="text-white font-semibold">30 days</span> to recover your album.</li>
-                  <li>After 30 days, the album is permanently purged for your account.</li>
+                  <li>Your album is immediately removed from public view and placed in a <span className="text-white font-semibold">30-day recovery window</span>.</li>
+                  <li>You can still sign in to your account within <span className="text-white font-semibold">30 days</span> to see the deletion countdown and restore your album.</li>
+                  <li>If not restored within 30 days, the album and all associated database records and Cloudflare R2 media files are automatically wiped (unless retained by the Host).</li>
                 </ul>
+              </div>
+              <div className="pt-1">
+                <label
+                  htmlFor="delete-album-confirm-input"
+                  className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1.5"
+                >
+                  Type <span className="text-red-400 font-bold">DELETE</span> to confirm *
+                </label>
+                <input
+                  id="delete-album-confirm-input"
+                  type="text"
+                  value={deleteAlbumConfirmInput}
+                  onChange={(e) => setDeleteAlbumConfirmInput(e.target.value)}
+                  placeholder="Type DELETE to confirm"
+                  autoComplete="off"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white font-mono-tech text-xs focus:outline-none focus:border-red-500"
+                />
               </div>
             </div>
 
@@ -8933,8 +9059,9 @@ export const Layer1ClassRepDashboard: React.FC<Layer1ClassRepDashboardProps> = (
               <button
                 id="confirm-soft-delete-album-btn"
                 type="button"
+                disabled={!isDeleteAlbumConfirmValid}
                 onClick={handleConfirmSoftDelete}
-                className="px-6 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-syne font-bold text-xs uppercase shadow-md cursor-pointer transition-colors"
+                className="px-6 py-2 rounded-full bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-syne font-bold text-xs uppercase shadow-md cursor-pointer transition-colors"
               >
                 Delete Album
               </button>

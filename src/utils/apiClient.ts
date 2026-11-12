@@ -301,6 +301,11 @@ export async function fetchPublicPaymentConfig(params?: {
   mode: 'live' | 'test' | 'unconfigured';
   studentFeeKobo: number;
   slotFeeKobo: number;
+  foundingDiscountPercent: number;
+  foundingDiscountName: string;
+  foundingDiscountDescription: string;
+  discountedFeeKobo: number;
+  compressionResolutionPx: number;
   resolvedPricing?: ResolvedCohortPricing | null;
 }> {
   try {
@@ -313,25 +318,49 @@ export async function fetchPublicPaymentConfig(params?: {
     const res = await fetch(url, { credentials: 'include' });
     if (res.ok) {
       const data = await res.json();
-      const stdKobo = Number(data.studentFeeKobo) || 50000;
+      const stdKobo = Number(data.studentFeeKobo) || 100000;
       const effKobo =
         data.resolvedPricing && typeof data.resolvedPricing.effectivePriceKobo === 'number'
           ? Number(data.resolvedPricing.effectivePriceKobo)
           : stdKobo;
+      const discPercent = Number.isFinite(Number(data.foundingDiscountPercent))
+        ? Number(data.foundingDiscountPercent)
+        : 20;
+      const discFeeKobo = Number.isFinite(Number(data.discountedFeeKobo))
+        ? Number(data.discountedFeeKobo)
+        : Math.max(0, Math.round((stdKobo * (100 - discPercent)) / 100));
       return {
         paystackPublicKey: (data.paystackPublicKey || '').trim(),
         mode: data.mode || 'unconfigured',
         studentFeeKobo: stdKobo,
         slotFeeKobo: effKobo > 0 ? effKobo : stdKobo,
+        foundingDiscountPercent: discPercent,
+        foundingDiscountName: data.foundingDiscountName || 'Founding Class Departmental Discount',
+        foundingDiscountDescription:
+          data.foundingDiscountDescription ||
+          'Special rate for the founding graduating class of a department.',
+        discountedFeeKobo: discFeeKobo,
+        compressionResolutionPx: Number(data.compressionResolutionPx) || 1440,
         resolvedPricing: data.resolvedPricing || null,
       };
     }
   } catch {}
+  const localFallback = getLocalPlatformSettingsFallback();
+  const fallbackStd = localFallback.student_fee_kobo || 100000;
+  const fallbackDisc = localFallback.default_discount_percent ?? 20;
   return {
     paystackPublicKey: '',
     mode: 'unconfigured',
-    studentFeeKobo: 50000,
-    slotFeeKobo: 50000,
+    studentFeeKobo: fallbackStd,
+    slotFeeKobo: fallbackStd,
+    foundingDiscountPercent: fallbackDisc,
+    foundingDiscountName:
+      localFallback.founding_discount_name || 'Founding Class Departmental Discount',
+    foundingDiscountDescription:
+      localFallback.founding_discount_description ||
+      'Special rate for the founding graduating class of a department.',
+    discountedFeeKobo: Math.max(0, Math.round((fallbackStd * (100 - fallbackDisc)) / 100)),
+    compressionResolutionPx: localFallback.compression_resolution_px || 1440,
     resolvedPricing: null,
   };
 }
@@ -357,7 +386,7 @@ export async function resolveCohortPricingFromServer(params: {
       if (data?.pricing) return data.pricing as ResolvedCohortPricing;
     }
   } catch {}
-  const fallbackFee = getLocalPlatformSettingsFallback().student_fee_kobo || 50000;
+  const fallbackFee = getLocalPlatformSettingsFallback().student_fee_kobo || 100000;
   return {
     kind: 'standard',
     standardPriceKobo: fallbackFee,
@@ -751,13 +780,33 @@ export async function apiClientSoftDeleteAlbum(albumId: string, albumName: strin
   return { success: true };
 }
 
-export async function apiClientRestoreAlbum(albumId: string): Promise<{ success: boolean; error?: string }> {
+export async function apiClientRestoreAlbum(albumId: string): Promise<{
+  success: boolean;
+  expired?: boolean;
+  error?: string;
+  message?: string;
+}> {
   try {
     const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/restore`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getStoredSessionAuthHeaders({ 'Content-Type': 'application/json' }),
+      credentials: 'include',
     });
-    if (res.ok) return await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 410) {
+      return {
+        success: false,
+        expired: true,
+        error: data.error || 'recovery_window_expired',
+        message: data.message || 'The 30-day recovery window for this album has expired.',
+      };
+    }
+    if (res.ok) return { success: true, ...data };
+    return {
+      success: false,
+      error: data.error || 'restore_failed',
+      message: data.message || data.error || 'Could not restore album.',
+    };
   } catch {}
   return { success: true };
 }
@@ -850,7 +899,13 @@ export async function uploadMediaToR2(
     const targetFileName = options?.fileName || `media-${Date.now()}.webp`;
 
     let effectiveInviteToken = options?.inviteToken || '';
-    if (!effectiveInviteToken && targetSetId !== 'site-hero' && targetCategory !== 'hero-video') {
+    if (
+      !effectiveInviteToken &&
+      targetSetId !== 'site-hero' &&
+      targetSetId !== 'site-audio' &&
+      targetCategory !== 'hero-video' &&
+      targetCategory !== 'ambient-audio'
+    ) {
       effectiveInviteToken = await fetchInviteUploadTokenFromServer(targetSetId);
     }
 
@@ -1633,6 +1688,10 @@ const LOCAL_FINANCE_LEDGER_KEY = 'kohot_finance_ledger_v1';
 
 export function getLocalPlatformSettingsFallback(): {
   student_fee_kobo: number;
+  default_discount_percent: number;
+  founding_discount_name: string;
+  founding_discount_description: string;
+  compression_resolution_px: number;
   min_funded_to_publish: number;
   profile_cap_default: number;
   reinstate_days: number;
@@ -1645,12 +1704,16 @@ export function getLocalPlatformSettingsFallback(): {
   institution_currencies: Record<string, string>;
 } {
   const defaults = {
-    student_fee_kobo: 50000,
+    student_fee_kobo: 100000,
+    default_discount_percent: 20,
+    founding_discount_name: 'Founding Class Departmental Discount',
+    founding_discount_description: 'Special rate for the founding graduating class of a department.',
+    compression_resolution_px: 1440,
     min_funded_to_publish: 10,
     profile_cap_default: 200,
     reinstate_days: 7,
     draft_retention_days: 30,
-    recovery_period_days: 14,
+    recovery_period_days: 30,
     default_kohot_slots_per_album: 0,
     public_directory_enabled: false,
     hidden_directory_institutions: [] as string[],
@@ -1909,7 +1972,7 @@ export async function markTransactionRefundedOnServer(
   try {
     const res = await fetch('/api/admin/finances/refund', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       credentials: 'include',
       body: JSON.stringify({ reference, note }),
     });
@@ -1934,6 +1997,154 @@ export async function markTransactionRefundedOnServer(
     }
   } catch {}
   return { success: true };
+}
+
+export async function fetchHistoricalTransactionsAuditFromServer(): Promise<{
+  success: boolean;
+  historical25kCandidates: any[];
+  auditItems: any[];
+}> {
+  try {
+    const res = await fetch('/api/admin/finances/historical-audit', {
+      headers: getAuthHeaders(),
+      credentials: 'include',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        historical25kCandidates: Array.isArray(data.historical25kCandidates) ? data.historical25kCandidates : [],
+        auditItems: Array.isArray(data.auditItems) ? data.auditItems : [],
+      };
+    }
+  } catch {}
+  return { success: false, historical25kCandidates: [], auditItems: [] };
+}
+
+export async function voidTransactionOnServer(payload: {
+  reference: string;
+  reason: string;
+  confirm: boolean;
+  classifyAsTest?: boolean;
+}): Promise<{
+  success: boolean;
+  reference?: string;
+  previousStatus?: string;
+  status?: string;
+  environment?: 'live' | 'test' | 'legacy';
+  voidedAt?: string;
+  voidedBy?: string;
+  voidReason?: string;
+  slotsReversed?: number;
+  reversalLedgerId?: string | null;
+  albumSlotBalance?: number | null;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/finances/void', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return { success: true, ...data };
+    }
+    return {
+      success: false,
+      error: data.error || 'Could not void transaction.',
+      message: data.message || data.error || 'Could not void transaction.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error while voiding transaction.',
+      message: err?.message || 'Network error while voiding transaction.',
+    };
+  }
+}
+
+export async function restoreTransactionOnServer(payload: {
+  reference: string;
+  reason: string;
+  confirm: boolean;
+}): Promise<{
+  success: boolean;
+  reference?: string;
+  status?: string;
+  environment?: 'live' | 'test' | 'legacy';
+  restoredAt?: string;
+  restoredBy?: string;
+  restoreReason?: string;
+  slotsRestored?: number;
+  restoreLedgerId?: string | null;
+  albumSlotBalance?: number | null;
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/finances/restore', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return { success: true, ...data };
+    }
+    return {
+      success: false,
+      error: data.error || 'Could not restore voided transaction.',
+      message: data.message || data.error || 'Could not restore voided transaction.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error while restoring transaction.',
+      message: err?.message || 'Network error while restoring transaction.',
+    };
+  }
+}
+
+export async function classifyTransactionEnvironmentOnServer(payload: {
+  reference: string;
+  environment: 'test' | 'live' | 'legacy';
+  reason: string;
+  confirm: boolean;
+}): Promise<{
+  success: boolean;
+  reference?: string;
+  previousEnvironment?: string;
+  environment?: 'test' | 'live' | 'legacy';
+  error?: string;
+  message?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/finances/classify-environment', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return { success: true, ...data };
+    }
+    return {
+      success: false,
+      error: data.error || 'Could not classify transaction environment.',
+      message: data.message || data.error || 'Could not classify transaction environment.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error while classifying transaction.',
+      message: err?.message || 'Network error while classifying transaction.',
+    };
+  }
 }
 
 export async function fetchPublicDirectoryFromServer(): Promise<{
@@ -2028,14 +2239,14 @@ export async function fetchOfferProgrammesFromServer(): Promise<{
       return {
         success: true,
         programmes: Array.isArray(data.programmes) ? data.programmes : [],
-        standardPriceKobo: Number(data.standardPriceKobo) || 50000,
+        standardPriceKobo: Number(data.standardPriceKobo) || 100000,
       };
     }
   } catch {}
   return {
     success: false,
     programmes: [],
-    standardPriceKobo: getLocalPlatformSettingsFallback().student_fee_kobo || 50000,
+    standardPriceKobo: getLocalPlatformSettingsFallback().student_fee_kobo || 100000,
   };
 }
 
@@ -2167,7 +2378,7 @@ export async function fetchCohortOffersFromServer(
         allocations: Array.isArray(data.allocations) ? data.allocations : [],
         albums: Array.isArray(data.albums) ? data.albums : [],
         availableYears: Array.isArray(data.availableYears) ? data.availableYears : [new Date().getFullYear()],
-        standardPriceKobo: Number(data.standardPriceKobo) || 50000,
+        standardPriceKobo: Number(data.standardPriceKobo) || 100000,
       };
     }
   } catch {}
@@ -2176,7 +2387,7 @@ export async function fetchCohortOffersFromServer(
     allocations: [],
     albums: [],
     availableYears: [new Date().getFullYear(), 2026, 2025, 2024],
-    standardPriceKobo: getLocalPlatformSettingsFallback().student_fee_kobo || 50000,
+    standardPriceKobo: getLocalPlatformSettingsFallback().student_fee_kobo || 100000,
   };
 }
 
@@ -2455,3 +2666,314 @@ export async function exportDatabaseBackupFromD1(): Promise<{
     return { success: false, error: err?.message || 'Network error while exporting backup.' };
   }
 }
+
+export interface R2MediaInventoryItem {
+  key: string;
+  url: string;
+  fileName: string;
+  filename: string;
+  mimeType: string;
+  fileType: 'image' | 'audio' | 'video' | 'other';
+  sizeBytes: number;
+  uploadedAt: string;
+  inR2: boolean;
+  inD1Assets: boolean;
+  status: 'linked' | 'orphaned' | 'recoverable' | 'missing-reference' | 'unrecognised';
+  associatedAlbumId: string | null;
+  associatedAlbumName: string | null;
+  associatedRecordType: string;
+  associatedRecordId: string | null;
+  associatedRecordLabel: string | null;
+  suggestedRecovery?: {
+    albumId: string;
+    albumName: string;
+    targetAlbumId: string;
+    targetAlbumName: string;
+    targetType: 'moment' | 'profile' | 'banner' | 'footer' | 'logo';
+    targetRecordType: 'moment' | 'profile' | 'banner' | 'footer' | 'logo';
+    targetRecordId?: string;
+    targetRecordLabel?: string;
+    targetCategoryTitle?: string;
+    replacementKey?: string;
+    confidence: 'high' | 'medium';
+    reason: string;
+  } | null;
+  isProtectedFromAutoDelete: boolean;
+  protectionReason?: string;
+  canDeletePermanently: boolean;
+  deleteBlockedReason?: string;
+}
+
+export interface R2MediaInventorySummary {
+  totalObjects: number;
+  totalR2Objects: number;
+  totalBytes: number;
+  linkedCount: number;
+  orphanedCount: number;
+  recoverableCount: number;
+  missingReferenceCount: number;
+  unrecognisedCount: number;
+  scannedAt: string;
+}
+
+export interface R2MediaInventoryResponse {
+  success: boolean;
+  summary: R2MediaInventorySummary;
+  counts: {
+    all: number;
+    linked: number;
+    orphaned: number;
+    recoverable: number;
+    missingReference: number;
+    unrecognised: number;
+    totalBytesInR2: number;
+  };
+  items: R2MediaInventoryItem[];
+  availableAlbums: Array<{
+    id: string;
+    name: string;
+    departmentName: string;
+    graduationYear: number;
+    isDeleted: boolean;
+    profiles: Array<{ id: string; fullName: string }>;
+    momentCategories: Array<{ id: string; title: string }>;
+  }>;
+  scanHistory: Array<{
+    id: string;
+    scannedAt: string;
+    timestamp: string;
+    scannedBy: string;
+    summary: string;
+    totalObjects: number;
+    totalBytes: number;
+    linked: number;
+    orphaned: number;
+    recoverable: number;
+    missingReference: number;
+    unrecognised: number;
+  }>;
+  actionLogs: Array<{
+    id: string;
+    user_email: string;
+    action: string;
+    details: string;
+    summary: string;
+    created_at: string;
+    timestamp: string;
+  }>;
+}
+
+export async function fetchR2MediaInventoryFromServer(): Promise<R2MediaInventoryResponse> {
+  try {
+    const res = await fetch('/api/admin/r2-media-inventory', {
+      headers: getStoredSessionAuthHeaders(),
+      credentials: 'include',
+    });
+    if (res.ok) {
+      const raw = await res.json();
+      const counts = raw.counts || {
+        all: 0,
+        linked: 0,
+        orphaned: 0,
+        recoverable: 0,
+        missingReference: 0,
+        unrecognised: 0,
+        totalBytesInR2: 0,
+      };
+      const summary: R2MediaInventorySummary = raw.summary || {
+        totalObjects: counts.all || 0,
+        totalR2Objects: counts.all || 0,
+        totalBytes: counts.totalBytesInR2 || 0,
+        linkedCount: counts.linked || 0,
+        orphanedCount: counts.orphaned || 0,
+        recoverableCount: counts.recoverable || 0,
+        missingReferenceCount: counts.missingReference || 0,
+        unrecognisedCount: counts.unrecognised || 0,
+        scannedAt: new Date().toISOString(),
+      };
+      const items: R2MediaInventoryItem[] = (raw.items || []).map((it: any) => ({
+        ...it,
+        fileName: it.fileName || it.filename || it.key || '',
+        filename: it.filename || it.fileName || it.key || '',
+        canDeletePermanently:
+          typeof it.canDeletePermanently === 'boolean'
+            ? it.canDeletePermanently
+            : !it.isProtectedFromAutoDelete,
+        deleteBlockedReason: it.deleteBlockedReason || it.protectionReason,
+        suggestedRecovery: it.suggestedRecovery
+          ? {
+              ...it.suggestedRecovery,
+              albumId: it.suggestedRecovery.albumId || it.suggestedRecovery.targetAlbumId,
+              albumName: it.suggestedRecovery.albumName || it.suggestedRecovery.targetAlbumName,
+              targetAlbumId: it.suggestedRecovery.targetAlbumId || it.suggestedRecovery.albumId,
+              targetAlbumName:
+                it.suggestedRecovery.targetAlbumName || it.suggestedRecovery.albumName,
+              targetType:
+                it.suggestedRecovery.targetType || it.suggestedRecovery.targetRecordType || 'moment',
+              targetRecordType:
+                it.suggestedRecovery.targetRecordType || it.suggestedRecovery.targetType || 'moment',
+            }
+          : null,
+      }));
+      const scanHistory = (raw.scanHistory || []).map((s: any) => ({
+        ...s,
+        timestamp: s.timestamp || s.scannedAt || new Date().toISOString(),
+        summary:
+          s.summary ||
+          `${s.totalObjects ?? 0} objects (${s.linked ?? 0} linked, ${s.orphaned ?? 0} orphaned, ${s.recoverable ?? 0} recoverable)`,
+      }));
+      const actionLogs = (raw.actionLogs || []).map((a: any) => ({
+        ...a,
+        timestamp: a.timestamp || a.created_at || new Date().toISOString(),
+        summary: a.summary || a.details || a.action || '',
+      }));
+      return {
+        ...raw,
+        success: true,
+        counts,
+        summary,
+        items,
+        availableAlbums: raw.availableAlbums || [],
+        scanHistory,
+        actionLogs,
+      };
+    }
+  } catch {}
+  return {
+    success: false,
+    summary: {
+      totalObjects: 0,
+      totalR2Objects: 0,
+      totalBytes: 0,
+      linkedCount: 0,
+      orphanedCount: 0,
+      recoverableCount: 0,
+      missingReferenceCount: 0,
+      unrecognisedCount: 0,
+      scannedAt: new Date().toISOString(),
+    },
+    counts: {
+      all: 0,
+      linked: 0,
+      orphaned: 0,
+      recoverable: 0,
+      missingReference: 0,
+      unrecognised: 0,
+      totalBytesInR2: 0,
+    },
+    items: [],
+    availableAlbums: [],
+    scanHistory: [],
+    actionLogs: [],
+  };
+}
+
+export async function recoverR2MediaItemsOnServer(
+  payload:
+    | {
+        items: Array<{
+          key: string;
+          replacementKey?: string;
+          targetAlbumId: string;
+          targetType?: 'moment' | 'profile' | 'banner' | 'footer' | 'logo';
+          targetRecordType?: 'moment' | 'profile' | 'banner' | 'footer' | 'logo';
+          targetProfileId?: string;
+          targetRecordId?: string;
+          momentCategoryTitle?: string;
+          targetCategoryTitle?: string;
+          caption?: string;
+        }>;
+        restoreDeletedAlbum?: boolean;
+      }
+    | Array<{
+        key: string;
+        replacementKey?: string;
+        targetAlbumId: string;
+        targetType?: 'moment' | 'profile' | 'banner' | 'footer' | 'logo';
+        targetRecordType?: 'moment' | 'profile' | 'banner' | 'footer' | 'logo';
+        targetProfileId?: string;
+        targetRecordId?: string;
+        momentCategoryTitle?: string;
+        targetCategoryTitle?: string;
+        caption?: string;
+      }>
+): Promise<{
+  success: boolean;
+  recoveredCount?: number;
+  updatedAlbums?: any[];
+  results?: Array<{ key: string; albumId: string; targetType: string; detail: string }>;
+  error?: string;
+}> {
+  try {
+    const rawItems = Array.isArray(payload) ? payload : payload.items || [];
+    const normalizedItems = rawItems.map((it) => {
+      const resolvedType = it.targetType || it.targetRecordType || 'moment';
+      return {
+        key: it.key,
+        replacementKey: it.replacementKey,
+        targetAlbumId: it.targetAlbumId,
+        targetType: resolvedType === 'logo' ? 'banner' : resolvedType,
+        targetProfileId: it.targetProfileId || it.targetRecordId,
+        momentCategoryTitle: it.momentCategoryTitle || it.targetCategoryTitle,
+        caption: it.caption,
+      };
+    });
+    const res = await fetch('/api/admin/r2-media-recover', {
+      method: 'POST',
+      headers: getStoredSessionAuthHeaders({ 'Content-Type': 'application/json' }),
+      credentials: 'include',
+      body: JSON.stringify({
+        items: normalizedItems,
+        restoreDeletedAlbum: Array.isArray(payload) ? true : (payload.restoreDeletedAlbum ?? true),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return data;
+    }
+    return { success: false, error: data.error || 'Failed to recover or relink media items.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while recovering media.' };
+  }
+}
+
+export async function deleteR2MediaItemsOnServer(
+  payload:
+    | {
+        keys: string[];
+        confirmPermanentDelete?: boolean;
+      }
+    | string[]
+): Promise<{
+  success: boolean;
+  deletedCount?: number;
+  deletedKeys?: string[];
+  skippedProtectedCount?: number;
+  skippedProtectedKeys?: Array<{ key: string; reason: string }>;
+  blocked?: Array<{ key: string; reason: string }>;
+  error?: string;
+}> {
+  try {
+    const normalizedPayload = Array.isArray(payload)
+      ? { keys: payload, confirmPermanentDelete: true }
+      : { keys: payload.keys, confirmPermanentDelete: payload.confirmPermanentDelete ?? true };
+    const res = await fetch('/api/admin/r2-media-delete', {
+      method: 'POST',
+      headers: getStoredSessionAuthHeaders({ 'Content-Type': 'application/json' }),
+      credentials: 'include',
+      body: JSON.stringify(normalizedPayload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return {
+        ...data,
+        blocked: data.blocked || data.skippedProtectedKeys || [],
+      };
+    }
+    return { success: false, error: data.error || 'Failed to permanently delete R2 media.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while deleting R2 media.' };
+  }
+}
+
+

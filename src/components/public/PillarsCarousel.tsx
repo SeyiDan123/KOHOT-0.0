@@ -247,10 +247,10 @@ const PILLARS: PillarItem[] = [
 export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
   onExploreDemoAlbum,
   onOpenOnboarding,
-  onScrollToHowItWorks,
   contentOverride,
 }) => {
   const [activeIndex, setActiveIndex] = useState<number>(0);
+  const [isPaused, setIsPaused] = useState<boolean>(false);
   const trackRef = useRef<HTMLDivElement>(null);
 
   // Dynamically update transition dots on horizontal swipe/scroll
@@ -276,20 +276,11 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
     return () => track.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const handleNext = () => {
-    const next = (activeIndex + 1) % PILLARS.length;
-    scrollToIndex(next);
-  };
-
-  const handlePrev = () => {
-    const prev = (activeIndex - 1 + PILLARS.length) % PILLARS.length;
-    scrollToIndex(prev);
-  };
-
   const scrollToIndex = (idx: number) => {
-    setActiveIndex(idx);
-    if (trackRef.current && trackRef.current.children && trackRef.current.children[idx]) {
-      const card = trackRef.current.children[idx] as HTMLElement;
+    const bounded = (idx + PILLARS.length) % PILLARS.length;
+    setActiveIndex(bounded);
+    if (trackRef.current && trackRef.current.children && trackRef.current.children[bounded]) {
+      const card = trackRef.current.children[bounded] as HTMLElement;
       if (card) {
         trackRef.current.scrollTo({
           left: card.offsetLeft - trackRef.current.offsetLeft,
@@ -298,6 +289,15 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
       }
     }
   };
+
+  // Automatic swiping with transition dots
+  useEffect(() => {
+    if (isPaused) return;
+    const timer = window.setInterval(() => {
+      scrollToIndex(activeIndex + 1);
+    }, 4500);
+    return () => window.clearInterval(timer);
+  }, [activeIndex, isPaused]);
 
   const handleCardCta = (action: PillarItem['ctaAction']) => {
     if (action === 'demo') {
@@ -346,7 +346,7 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
                 Physical paper albums get damaged, lost, or left behind in family basements. But the bonds you built over years of late-night studio sessions, lab defenses, and dinner galas deserve more than fading away.
               </p>
               <p className="text-slate-900 dark:text-white font-semibold">
-                KoHot gives your class somewhere to remain.
+                KOHOT gives your class somewhere to remain.
               </p>
             </div>
           </ScrollReveal>
@@ -354,7 +354,7 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
 
         {/* =====================================================================
             PART 2: THREE PILLARS
-            SLOW-MOTION: Title first, then Caption
+            SLOW-MOTION: Title first, then Caption (No upper navigation arrows)
             ===================================================================== */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6 pt-10 border-t border-slate-200 dark:border-zinc-800 text-left">
           <div className="max-w-2xl space-y-3">
@@ -369,35 +369,20 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
             </ScrollReveal>
 
             <ScrollReveal delayMs={480} durationMs={1350}>
-              {/* Rich medium slate subheading in light mode, calm white in dark mode */}
               <p className="font-body text-sm sm:text-base text-slate-600 dark:text-zinc-200 font-normal">
                 {contentOverride?.pillarsSubtitle || 'Three essential elements to preserve your people, your memories, and your story.'}
               </p>
             </ScrollReveal>
-          </div>
-
-          {/* Nav Controls */}
-          <div className="flex items-center gap-3 self-start md:self-end">
-            <button
-              onClick={handlePrev}
-              className="w-11 h-11 rounded-full bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 text-slate-900 dark:text-white flex items-center justify-center transition-all cursor-pointer shadow-sm hover:shadow active:scale-95"
-              aria-label="Previous pillar"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <button
-              onClick={handleNext}
-              className="w-11 h-11 rounded-full bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 text-slate-900 dark:text-white flex items-center justify-center transition-all cursor-pointer shadow-sm hover:shadow active:scale-95"
-              aria-label="Next pillar"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
           </div>
         </div>
 
         {/* Carousel Track */}
         <div
           ref={trackRef}
+          onMouseEnter={() => setIsPaused(true)}
+          onMouseLeave={() => setIsPaused(false)}
+          onTouchStart={() => setIsPaused(true)}
+          onTouchEnd={() => setIsPaused(false)}
           className="flex gap-6 overflow-x-auto snap-x snap-mandatory pb-4 pt-2 scrollbar-none no-scrollbar -mx-6 px-6 sm:-mx-10 sm:px-10 lg:grid lg:grid-cols-3 lg:overflow-visible lg:p-0"
           style={{ scrollBehavior: 'smooth' }}
         >
@@ -421,16 +406,17 @@ export const PillarsCarousel: React.FC<PillarsCarouselProps> = ({
           })}
         </div>
 
-        {/* Indicator dots for mobile/tablet */}
-        <div className="flex lg:hidden items-center justify-center gap-2 mt-8">
+        {/* Swiping transition dots */}
+        <div className="flex items-center justify-center gap-2 mt-8">
           {PILLARS.map((_, idx) => (
             <button
               key={idx}
+              type="button"
               onClick={() => scrollToIndex(idx)}
               className={`h-1.5 transition-all duration-300 rounded-full cursor-pointer ${
                 activeIndex === idx
-                  ? 'w-8 bg-zinc-900'
-                  : 'w-2 bg-zinc-300 hover:bg-zinc-400'
+                  ? 'w-8 bg-[#d4af37]'
+                  : 'w-2 bg-zinc-300 dark:bg-zinc-700 hover:bg-zinc-400 dark:hover:bg-zinc-500'
               }`}
               aria-label={`Go to pillar ${idx + 1}`}
             />

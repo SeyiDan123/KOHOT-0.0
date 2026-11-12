@@ -116,6 +116,9 @@ function extractMediaKeyFromUrl(val: unknown): string | null {
   if (trimmed.startsWith('/media/')) {
     return decodeURIComponent(trimmed.slice('/media/'.length));
   }
+  if (trimmed.startsWith('/api/media/')) {
+    return decodeURIComponent(trimmed.slice('/api/media/'.length));
+  }
   if (trimmed.startsWith('albums/')) {
     return trimmed;
   }
@@ -169,12 +172,14 @@ function sanitizePublicAlbum(rawAlbum: any): any {
 
 async function getPlatformSettingsMap(env: Env): Promise<Record<string, string>> {
   const defaults: Record<string, string> = {
-    student_fee_kobo: '50000',
+    student_fee_kobo: '100000',
+    default_discount_percent: '20',
+    compression_resolution_px: '1440',
     min_funded_to_publish: '10',
     profile_cap_default: '200',
     reinstate_days: '7',
     draft_retention_days: '30',
-    recovery_period_days: '14',
+    recovery_period_days: '30',
     gate_mode: 'publish',
     default_kohot_slots_per_album: '0',
     public_directory_enabled: '0',
@@ -1065,6 +1070,16 @@ export function getCanonicalAlbumId(institutionId: string, departmentId: string,
   return `${inst}-${deptShort}-${graduationYear}`;
 }
 
+export function getCanonicalCohortKey(institutionId: string, departmentId: string, graduationYear: number, departmentName?: string): string {
+  return getCanonicalAlbumId(institutionId, departmentId, graduationYear, departmentName);
+}
+
+export function generatePermanentAlbumId(institutionId: string, departmentId: string, graduationYear: number, departmentName?: string): string {
+  const baseKey = getCanonicalCohortKey(institutionId, departmentId, graduationYear, departmentName);
+  const randSuffix = Math.random().toString(36).slice(2, 8);
+  return `set-${baseKey}-${randSuffix}`;
+}
+
 // Automatic 30-day expired soft-deleted album cleanup (respects keepByHost / keptByHostOnly and shared R2 references)
 export async function cleanupExpiredSoftDeletedAlbums(env: Env): Promise<{ purgedAlbumIds: string[]; skippedHostKept: string[] }> {
   const purgedAlbumIds: string[] = [];
@@ -1077,9 +1092,10 @@ export async function cleanupExpiredSoftDeletedAlbums(env: Env): Promise<{ purge
     const nowMs = Date.now();
     const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
 
-    // Collect all R2 keys referenced by non-expired albums so we NEVER delete a shared R2 object
+    // Collect all R2 keys referenced by non-expired albums, Host-kept albums, non-expired submissions, institutions, and site_content
     const activeReferencedKeys = new Set<string>();
     const expiredRows: Array<{ row: any; parsed: any }> = [];
+    const expiredAlbumIds = new Set<string>();
 
     for (const row of allRows) {
       let parsed: any = {};
@@ -1091,6 +1107,7 @@ export async function cleanupExpiredSoftDeletedAlbums(env: Env): Promise<{ purge
 
       if (isExpired && !isHostKept) {
         expiredRows.push({ row, parsed });
+        expiredAlbumIds.add(String(row.id));
       } else {
         if (isExpired && isHostKept) {
           skippedHostKept.push(String(row.id));
@@ -1100,6 +1117,45 @@ export async function cleanupExpiredSoftDeletedAlbums(env: Env): Promise<{ purge
         }
       }
     }
+
+    // Protect keys referenced by non-expired profile_submissions, institutions, and site_content
+    try {
+      const allSubsRes = await env.DB.prepare(`SELECT album_id, status, photo_key, payload_json FROM profile_submissions WHERE status != 'removed'`).all();
+      for (const sr of allSubsRes?.results || []) {
+        if (expiredAlbumIds.has(String(sr.album_id))) continue;
+        const pk = extractMediaKeyFromUrl(sr.photo_key);
+        if (pk) activeReferencedKeys.add(pk);
+        if (sr.payload_json) {
+          try {
+            for (const k of collectAlbumMediaKeys(JSON.parse(sr.payload_json))) activeReferencedKeys.add(k);
+          } catch {}
+        }
+      }
+    } catch {}
+
+    try {
+      const instRes = await env.DB.prepare(`SELECT logo_url, data_json FROM institutions`).all();
+      for (const ir of instRes?.results || []) {
+        const lk = extractMediaKeyFromUrl(ir.logo_url);
+        if (lk) activeReferencedKeys.add(lk);
+        if (ir.data_json) {
+          try {
+            for (const k of collectAlbumMediaKeys(JSON.parse(ir.data_json))) activeReferencedKeys.add(k);
+          } catch {}
+        }
+      }
+    } catch {}
+
+    try {
+      const siteRes = await env.DB.prepare(`SELECT value_json FROM site_content`).all();
+      for (const sc of siteRes?.results || []) {
+        if (sc.value_json) {
+          try {
+            for (const k of collectAlbumMediaKeys(JSON.parse(sc.value_json))) activeReferencedKeys.add(k);
+          } catch {}
+        }
+      }
+    } catch {}
 
     for (const { row, parsed } of expiredRows) {
       const albumId = String(row.id);
@@ -1138,6 +1194,48 @@ export async function cleanupExpiredSoftDeletedAlbums(env: Env): Promise<{ purge
       try { await env.DB.prepare(`DELETE FROM profile_submissions WHERE album_id = ?`).bind(albumId).run(); } catch {}
       try { await env.DB.prepare(`DELETE FROM slot_ledger WHERE album_id = ?`).bind(albumId).run(); } catch {}
       try { await env.DB.prepare(`DELETE FROM class_sets WHERE id = ?`).bind(albumId).run(); } catch {}
+
+      // Also clean up any matching cohort registration & album-specific admin credentials if they manage no other albums
+      const instId = String(row.institution_id || parsed.institutionId || '').trim();
+      const deptId = String(row.department_id || parsed.departmentId || '').trim();
+      const gradYear = Number(row.graduation_year || parsed.graduationYear) || 0;
+      const adminEmail = String(row.admin_user_id || parsed.classRepEmail || '').trim().toLowerCase();
+      if (instId && deptId && gradYear) {
+        try {
+          await env.DB.prepare(
+            `DELETE FROM registrations WHERE LOWER(institution_id) = ? AND LOWER(department_id) = ? AND graduation_year = ?`
+          ).bind(instId.toLowerCase(), deptId.toLowerCase(), gradYear).run();
+        } catch {}
+      }
+      if (adminEmail && adminEmail.includes('@')) {
+        try {
+          const remainingRes = await env.DB.prepare(`SELECT id, admin_user_id, data_json FROM class_sets`).all();
+          const stillManagesOtherAlbum = (remainingRes?.results || []).some((r: any) => {
+            if (String(r.id) === albumId) return false;
+            if (String(r.admin_user_id || '').trim().toLowerCase() === adminEmail) return true;
+            try {
+              const rp = JSON.parse(r.data_json || '{}');
+              if (String(rp.classRepEmail || '').trim().toLowerCase() === adminEmail) return true;
+            } catch {}
+            return false;
+          });
+          if (!stillManagesOtherAlbum) {
+            await env.DB.prepare(`DELETE FROM users WHERE LOWER(email) = ? AND role != 'master_host'`).bind(adminEmail).run();
+          }
+        } catch {}
+      }
+
+      try {
+        const logId = `log-exp30d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        await env.DB.prepare(
+          `INSERT INTO audit_logs (id, user_email, action, details, ip_address, created_at) VALUES (?, ?, 'album_expired_30d_purged', ?, 'system-cron', datetime('now'))`
+        ).bind(
+          logId,
+          adminEmail || 'system',
+          `Soft-deleted album ${albumId} exceeded 30-day retention window (deletedAt: ${parsed.deletedAt}) and was permanently purged with exclusive D1 records and R2 media.`
+        ).run();
+      } catch {}
+
       purgedAlbumIds.push(albumId);
     }
   } catch (err: any) {
@@ -1190,41 +1288,76 @@ export default {
         { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
 
-    // Helper: delete R2 object from BUCKET and media_assets record ONLY if no other album, submission, institution, or site content references it
-    const deleteR2ObjectAndRecord = async (keyOrUrl: unknown, excludingAlbumId?: string) => {
+    // Helper: delete R2 object from BUCKET and media_assets record ONLY if no other active album, soft-deleted album within 30-day recovery window, Host-retained album, submission, institution, or site content references it
+    const deleteR2ObjectAndRecord = async (keyOrUrl: unknown, excludingAlbumId?: string): Promise<boolean> => {
       const key = extractMediaKeyFromUrl(keyOrUrl);
-      if (!key) return;
+      if (!key) return false;
       if (env.DB) {
         try {
-          const otherSets = await env.DB.prepare(`SELECT id, data_json FROM class_sets WHERE status != 'deleted'`).all();
-          for (const sRow of otherSets?.results || []) {
-            if (excludingAlbumId && String(sRow.id) === String(excludingAlbumId)) continue;
-            if (String(sRow.data_json || '').includes(key)) {
-              // Key is still referenced by another album! Do NOT delete from R2.
-              return;
+          const nowMs = Date.now();
+          const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+          const allSets = await env.DB.prepare(`SELECT id, status, data_json FROM class_sets`).all();
+          const protectedAlbumIds = new Set<string>();
+          for (const sRow of allSets?.results || []) {
+            const sid = String(sRow.id || '');
+            if (excludingAlbumId && sid === String(excludingAlbumId)) continue;
+            let sp: any = {};
+            try { sp = JSON.parse(sRow.data_json || '{}'); } catch {}
+            const isDeleted = sRow.status === 'deleted' || Boolean(sp.deletedAt);
+            const deletedAtMs = sp.deletedAt ? new Date(sp.deletedAt).getTime() : 0;
+            const withinRecoveryWindow = !isDeleted || deletedAtMs === 0 || (nowMs - deletedAtMs < thirtyDaysMs);
+            const isHostKept = Boolean(sp.keepByHost || sp.keptByHostOnly);
+            if (!isDeleted || withinRecoveryWindow || isHostKept) {
+              protectedAlbumIds.add(sid);
+              if (String(sRow.data_json || '').includes(key) || collectAlbumMediaKeys(sp).has(key)) {
+                // Key is still referenced by another active, recoverable (within 30 days), or Host-retained album!
+                return false;
+              }
             }
           }
-          const otherSub = excludingAlbumId
+          const settingsMap = await getPlatformSettingsMap(env);
+          const reinstateDaysMs = (Number(settingsMap.reinstate_days) || 7) * 24 * 60 * 60 * 1000;
+          const subCandidates = excludingAlbumId
             ? await env.DB.prepare(
-                `SELECT id FROM profile_submissions WHERE album_id != ? AND status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
-              ).bind(excludingAlbumId, key, `%${key}%`).first()
+                `SELECT id, album_id, status, declined_at, updated_at FROM profile_submissions WHERE album_id != ? AND status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
+              ).bind(excludingAlbumId, key, `%${key}%`).all()
             : await env.DB.prepare(
-                `SELECT id FROM profile_submissions WHERE status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
-              ).bind(key, `%${key}%`).first();
-          if (otherSub) {
-            return;
+                `SELECT id, album_id, status, declined_at, updated_at FROM profile_submissions WHERE status != 'removed' AND (photo_key = ? OR payload_json LIKE ?)`
+              ).bind(key, `%${key}%`).all();
+          for (const subRow of subCandidates?.results || []) {
+            if (subRow.status === 'declined') {
+              const decMs = subRow.declined_at ? new Date(String(subRow.declined_at)).getTime() : (subRow.updated_at ? new Date(String(subRow.updated_at)).getTime() : 0);
+              if (decMs > 0 && nowMs - decMs > reinstateDaysMs) {
+                continue;
+              }
+            }
+            if (!subRow.album_id || protectedAlbumIds.has(String(subRow.album_id))) {
+              return false;
+            }
           }
           const otherInst = await env.DB.prepare(
-            `SELECT id FROM institutions WHERE logo_url LIKE ? OR data_json LIKE ?`
+            `SELECT id FROM institutions WHERE logo_url LIKE ? OR departments_json LIKE ?`
           ).bind(`%${key}%`, `%${key}%`).first().catch(() => null);
           if (otherInst) {
-            return;
+            return false;
+          }
+          const otherSiteOverride = await env.DB.prepare(
+            `SELECT id FROM website_content_overrides WHERE data_json LIKE ?`
+          ).bind(`%${key}%`).first().catch(() => null);
+          if (otherSiteOverride) {
+            return false;
+          }
+          const otherTestimonial = await env.DB.prepare(
+            `SELECT id FROM testimonials WHERE admin_avatar_url LIKE ? OR avatar_url LIKE ? OR album_cover_url LIKE ?`
+          ).bind(`%${key}%`, `%${key}%`, `%${key}%`).first().catch(() => null);
+          if (otherTestimonial) {
+            return false;
           }
           const otherSite = await env.DB.prepare(
             `SELECT key FROM site_content WHERE value_json LIKE ?`
           ).bind(`%${key}%`).first().catch(() => null);
           if (otherSite) {
-            return;
+            return false;
           }
         } catch {}
       }
@@ -1238,6 +1371,7 @@ export default {
           await env.DB.prepare(`DELETE FROM media_assets WHERE object_key = ?`).bind(key).run();
         } catch {}
       }
+      return true;
     };
 
     // Helper: get current authenticated user from session (supports Bearer header for iframes + Cookie)
@@ -1371,6 +1505,22 @@ export default {
       try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN programme_id TEXT`).run(); } catch {}
       try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN list_price_kobo INTEGER`).run(); } catch {}
       try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN discount_kobo INTEGER DEFAULT 0`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN environment TEXT DEFAULT 'legacy'`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN voided_at TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN voided_by TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN void_reason TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN previous_status TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN restored_at TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN restored_by TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE transactions ADD COLUMN restore_reason TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_purchases ADD COLUMN environment TEXT DEFAULT 'legacy'`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_purchases ADD COLUMN voided_at TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_purchases ADD COLUMN voided_by TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_purchases ADD COLUMN void_reason TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_ledger ADD COLUMN environment TEXT DEFAULT 'legacy'`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_ledger ADD COLUMN reference TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_ledger ADD COLUMN reversal_of_ledger_id TEXT`).run(); } catch {}
+      try { await env.DB.prepare(`ALTER TABLE slot_ledger ADD COLUMN note TEXT`).run(); } catch {}
 
       // Merge any existing slot_allocations (KoHot slots) into programmes + cohort_allocations so existing rows keep working
       try {
@@ -1576,7 +1726,7 @@ export default {
     }) => {
       await ensureCohortOffersSchema();
       const settings = await getPlatformSettingsMap(env);
-      const standardPriceKobo = Number(settings.student_fee_kobo) || 50000;
+      const standardPriceKobo = Number(settings.student_fee_kobo) || 100000;
       const defaultCap = Number(settings.profile_cap_default) || 200;
 
       let institutionId = String(params.institutionId || '').trim();
@@ -2138,37 +2288,55 @@ export default {
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           }
-          // Enforce 30-day recovery window for non-Host admins
-          if (sessionUser.role !== 'master_host' && parsed.deletedAt) {
+          // Enforce 30-day recovery deadline strictly on every restore attempt (even if scheduled cron was delayed)
+          if (parsed.deletedAt) {
             const deletedMs = new Date(parsed.deletedAt).getTime();
             const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-            if (!isNaN(deletedMs) && Date.now() - deletedMs > thirtyDaysMs) {
+            const isHostKept = Boolean(parsed.keepByHost || parsed.keptByHostOnly);
+            if (!isNaN(deletedMs) && Date.now() - deletedMs >= thirtyDaysMs && !isHostKept) {
+              await cleanupExpiredSoftDeletedAlbums(env);
               return new Response(
-                JSON.stringify({ error: 'Recovery window expired: Soft-deleted albums can only be restored within 30 days.' }),
+                JSON.stringify({
+                  error: 'recovery_window_expired',
+                  message: 'Recovery window expired: Soft-deleted albums can only be restored within 30 days. This album has been permanently purged.',
+                }),
                 { status: 410, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
               );
             }
           }
           delete parsed.deletedAt;
-          const wasPublished = Boolean(parsed.wasPublishedBeforeDelete || parsed.published);
+          delete parsed.deletedBy;
+          const wasPublished = Boolean(parsed.wasPublishedBeforeDelete || parsed.published || parsed.isPublished);
           delete parsed.wasPublishedBeforeDelete;
           parsed.published = wasPublished;
+          parsed.isPublished = wasPublished;
+          parsed.isUnpublished = !wasPublished;
+          parsed.unpublished = !wasPublished;
+          parsed.activationStatus = 'active';
           const nextStatus = wasPublished ? 'published' : 'draft';
           parsed.lifecycleStatus = nextStatus;
           parsed.version = (Number(parsed.version) || 1) + 1;
           await env.DB.prepare(
             `UPDATE class_sets SET status = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
           ).bind(nextStatus, JSON.stringify(parsed), albumId).run();
+        } else {
+          return new Response(
+            JSON.stringify({
+              error: 'album_not_found_or_purged',
+              message: 'Album not found or its 30-day recovery period has expired.',
+            }),
+            { status: 410, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
         }
       }
 
       await logAudit(
         'album_restored',
-        `Album ${albumId} restored by ${actorEmail}.`,
+        `Album ${albumId} restored within 30-day recovery window by ${actorEmail}.`,
         actorEmail
       );
 
-      return new Response(JSON.stringify({ success: true }), {
+      return new Response(JSON.stringify({ success: true, restoredAt: new Date().toISOString() }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -2229,8 +2397,8 @@ export default {
           }
 
           for (const k of candidateKeys) {
-            await deleteR2ObjectAndRecord(k, albumId);
-            deletedR2Count++;
+            const wasDeleted = await deleteR2ObjectAndRecord(k, albumId);
+            if (wasDeleted) deletedR2Count++;
           }
 
           await env.DB.prepare(`DELETE FROM profile_submissions WHERE album_id = ?`).bind(albumId).run();
@@ -2251,15 +2419,56 @@ export default {
       });
     }
 
+    // Helper: verify that sessionUser is master_host or verified owner/co-admin of albumRow
+    const verifyAlbumAdminOrHost = (sessionUser: { email: string; role: string } | null, albumRow: any, parsedData: any): { authorized: boolean; status: 401 | 403 | 200; error?: string } => {
+      if (!sessionUser) {
+        return { authorized: false, status: 401, error: 'Authentication required' };
+      }
+      if (sessionUser.role === 'master_host') {
+        return { authorized: true, status: 200 };
+      }
+      const actor = sessionUser.email.trim().toLowerCase();
+      const ownerEmail = String(albumRow?.admin_user_id || parsedData?.classRepEmail || '').trim().toLowerCase();
+      const coAdmins = Array.isArray(parsedData?.coAdmins) ? parsedData.coAdmins : [];
+      const isCoAdmin = coAdmins.some((c: any) => String(typeof c === 'string' ? c : c?.email || '').trim().toLowerCase() === actor);
+      if (actor && (actor === ownerEmail || isCoAdmin)) {
+        return { authorized: true, status: 200 };
+      }
+      return { authorized: false, status: 403, error: 'Forbidden: Only the album owner, co-admin, or Host can modify this album.' };
+    };
+
     // 0g. Delete Individual Profile (updates D1 data_json + profile_submissions and deletes exclusive R2 photo object)
     const deleteProfileMatch = path.match(/^\/api\/albums\/([^/]+)\/profiles\/([^/]+)$/);
     if (deleteProfileMatch && request.method === 'DELETE') {
       const albumId = decodeURIComponent(deleteProfileMatch[1]);
       const profileId = decodeURIComponent(deleteProfileMatch[2]);
       const sessionUser = await getSessionUser();
-      const actorEmail = sessionUser?.email || 'admin';
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const actorEmail = sessionUser.email;
 
       if (env.DB) {
+        const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (!albumRow) {
+          return new Response(JSON.stringify({ error: 'Album not found' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        let parsed: any = {};
+        try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+        const authCheck = verifyAlbumAdminOrHost(sessionUser, albumRow, parsed);
+        if (!authCheck.authorized) {
+          return new Response(JSON.stringify({ error: authCheck.error }), {
+            status: authCheck.status,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
         try {
           const keysToDelete = new Set<string>();
           const subRow = await env.DB.prepare(`SELECT photo_key, payload_json FROM profile_submissions WHERE id = ? AND album_id = ?`).bind(profileId, albumId).first();
@@ -2275,27 +2484,21 @@ export default {
             await env.DB.prepare(`UPDATE profile_submissions SET status = 'removed', updated_at = datetime('now') WHERE id = ? AND album_id = ?`).bind(profileId, albumId).run();
           }
 
-          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
-          if (albumRow?.data_json) {
-            try {
-              const parsed = JSON.parse(albumRow.data_json);
-              const st = (parsed.students || []).find((s: any) => s.id === profileId);
-              if (st) {
-                for (const k of collectAlbumMediaKeys(st)) keysToDelete.add(k);
-              }
-              parsed.students = (parsed.students || []).filter((s: any) => s.id !== profileId);
-              parsed.version = (Number(parsed.version) || 1) + 1;
-              await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
-                .bind(JSON.stringify(parsed), albumId)
-                .run();
+          const st = (parsed.students || []).find((s: any) => s.id === profileId);
+          if (st) {
+            for (const k of collectAlbumMediaKeys(st)) keysToDelete.add(k);
+          }
+          parsed.students = (parsed.students || []).filter((s: any) => s.id !== profileId);
+          parsed.version = (Number(parsed.version) || 1) + 1;
+          await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+            .bind(JSON.stringify(parsed), albumId)
+            .run();
 
-              const remainingKeys = collectAlbumMediaKeys(parsed);
-              for (const k of keysToDelete) {
-                if (!remainingKeys.has(k)) {
-                  await deleteR2ObjectAndRecord(k, albumId);
-                }
-              }
-            } catch {}
+          const remainingKeys = collectAlbumMediaKeys(parsed);
+          for (const k of keysToDelete) {
+            if (!remainingKeys.has(k)) {
+              await deleteR2ObjectAndRecord(k, albumId);
+            }
           }
         } catch {}
       }
@@ -2318,44 +2521,63 @@ export default {
       const albumId = decodeURIComponent(deleteMemoryMatch[1]);
       const memoryId = decodeURIComponent(deleteMemoryMatch[2]);
       const sessionUser = await getSessionUser();
-      const actorEmail = sessionUser?.email || 'admin';
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const actorEmail = sessionUser.email;
 
       if (env.DB) {
+        const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (!albumRow) {
+          return new Response(JSON.stringify({ error: 'Album not found' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        let parsed: any = {};
+        try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+        const authCheck = verifyAlbumAdminOrHost(sessionUser, albumRow, parsed);
+        if (!authCheck.authorized) {
+          return new Response(JSON.stringify({ error: authCheck.error }), {
+            status: authCheck.status,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
         try {
-          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
-          if (albumRow?.data_json) {
-            const parsed = JSON.parse(albumRow.data_json);
-            const keysToDelete = new Set<string>();
-            const rawMemories = Array.isArray(parsed.memories) ? parsed.memories : [];
-            const nextMemories: any[] = [];
-            for (const m of rawMemories) {
-              if (m.id === memoryId) {
-                for (const k of collectAlbumMediaKeys(m)) keysToDelete.add(k);
+          const keysToDelete = new Set<string>();
+          const rawMemories = Array.isArray(parsed.memories) ? parsed.memories : [];
+          const nextMemories: any[] = [];
+          for (const m of rawMemories) {
+            if (m.id === memoryId) {
+              for (const k of collectAlbumMediaKeys(m)) keysToDelete.add(k);
+              continue;
+            }
+            if (Array.isArray(m.images)) {
+              const targetImg = m.images.find((img: any) => img.id === memoryId || `${m.id}-${img.id}` === memoryId);
+              if (targetImg) {
+                for (const k of collectAlbumMediaKeys(targetImg)) keysToDelete.add(k);
+                const remainingImgs = m.images.filter((img: any) => img.id !== memoryId && `${m.id}-${img.id}` !== memoryId);
+                if (remainingImgs.length > 0) {
+                  nextMemories.push({ ...m, images: remainingImgs });
+                }
                 continue;
               }
-              if (Array.isArray(m.images)) {
-                const targetImg = m.images.find((img: any) => img.id === memoryId);
-                if (targetImg) {
-                  for (const k of collectAlbumMediaKeys(targetImg)) keysToDelete.add(k);
-                  const remainingImgs = m.images.filter((img: any) => img.id !== memoryId);
-                  if (remainingImgs.length > 0) {
-                    nextMemories.push({ ...m, images: remainingImgs });
-                  }
-                  continue;
-                }
-              }
-              nextMemories.push(m);
             }
-            parsed.memories = nextMemories;
-            parsed.version = (Number(parsed.version) || 1) + 1;
-            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
-              .bind(JSON.stringify(parsed), albumId)
-              .run();
-            const remainingKeys = collectAlbumMediaKeys(parsed);
-            for (const k of keysToDelete) {
-              if (!remainingKeys.has(k)) {
-                await deleteR2ObjectAndRecord(k, albumId);
-              }
+            nextMemories.push(m);
+          }
+          parsed.memories = nextMemories;
+          parsed.version = (Number(parsed.version) || 1) + 1;
+          await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+            .bind(JSON.stringify(parsed), albumId)
+            .run();
+          const remainingKeys = collectAlbumMediaKeys(parsed);
+          for (const k of keysToDelete) {
+            if (!remainingKeys.has(k)) {
+              await deleteR2ObjectAndRecord(k, albumId);
             }
           }
         } catch {}
@@ -2379,25 +2601,44 @@ export default {
       const albumId = decodeURIComponent(deleteAwardMatch[1]);
       const awardId = decodeURIComponent(deleteAwardMatch[2]);
       const sessionUser = await getSessionUser();
-      const actorEmail = sessionUser?.email || 'admin';
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const actorEmail = sessionUser.email;
 
       if (env.DB) {
+        const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+        if (!albumRow) {
+          return new Response(JSON.stringify({ error: 'Album not found' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        let parsed: any = {};
+        try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+        const authCheck = verifyAlbumAdminOrHost(sessionUser, albumRow, parsed);
+        if (!authCheck.authorized) {
+          return new Response(JSON.stringify({ error: authCheck.error }), {
+            status: authCheck.status,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
         try {
-          const albumRow = await env.DB.prepare(`SELECT data_json FROM class_sets WHERE id = ?`).bind(albumId).first();
-          if (albumRow?.data_json) {
-            const parsed = JSON.parse(albumRow.data_json);
-            const aw = (parsed.awards || []).find((a: any) => a.id === awardId);
-            const keysToDelete = aw ? collectAlbumMediaKeys(aw) : new Set<string>();
-            parsed.awards = (parsed.awards || []).filter((a: any) => a.id !== awardId);
-            parsed.version = (Number(parsed.version) || 1) + 1;
-            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
-              .bind(JSON.stringify(parsed), albumId)
-              .run();
-            const remainingKeys = collectAlbumMediaKeys(parsed);
-            for (const k of keysToDelete) {
-              if (!remainingKeys.has(k)) {
-                await deleteR2ObjectAndRecord(k, albumId);
-              }
+          const aw = (parsed.awards || []).find((a: any) => a.id === awardId);
+          const keysToDelete = aw ? collectAlbumMediaKeys(aw) : new Set<string>();
+          parsed.awards = (parsed.awards || []).filter((a: any) => a.id !== awardId);
+          parsed.version = (Number(parsed.version) || 1) + 1;
+          await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+            .bind(JSON.stringify(parsed), albumId)
+            .run();
+          const remainingKeys = collectAlbumMediaKeys(parsed);
+          for (const k of keysToDelete) {
+            if (!remainingKeys.has(k)) {
+              await deleteR2ObjectAndRecord(k, albumId);
             }
           }
         } catch {}
@@ -2415,12 +2656,18 @@ export default {
       });
     }
 
-    // 0i-2. Host & Owner Storage Audit, Duplicate Cohort Inventory & Media Health Inspector
+    // 0i-2. Host-Only Storage Audit, Duplicate Cohort Inventory & Media Health Inspector
     if (path === '/api/admin/storage-audit' && request.method === 'GET') {
       const sessionUser = await getSessionUser();
       if (!sessionUser) {
         return new Response(JSON.stringify({ error: 'Authentication required' }), {
           status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
@@ -2467,20 +2714,26 @@ export default {
       const allLedgerRes = await env.DB.prepare(`SELECT * FROM slot_ledger`).all();
       const allLedgers = allLedgerRes?.results || [];
 
-      // List R2 objects (up to 1000) to verify physical presence in BUCKET
+      // Paginate through all R2 objects in BUCKET (using cursor loop until !listed.truncated)
       const r2ObjectMap = new Map<string, { key: string; size: number; uploaded?: string }>();
       if (env.BUCKET && typeof env.BUCKET.list === 'function') {
         try {
-          const listed = await env.BUCKET.list({ limit: 1000 });
-          for (const obj of listed?.objects || []) {
-            if (obj?.key) {
-              r2ObjectMap.set(String(obj.key), {
-                key: String(obj.key),
-                size: Number(obj.size) || 0,
-                uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : undefined,
-              });
+          let cursor: string | undefined = undefined;
+          let safetyPages = 0;
+          do {
+            const listed: any = await env.BUCKET.list(cursor ? { limit: 1000, cursor } : { limit: 1000 });
+            for (const obj of listed?.objects || []) {
+              if (obj?.key) {
+                r2ObjectMap.set(String(obj.key), {
+                  key: String(obj.key),
+                  size: Number(obj.size) || 0,
+                  uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : undefined,
+                });
+              }
             }
-          }
+            cursor = listed?.truncated && listed?.cursor ? String(listed.cursor) : undefined;
+            safetyPages++;
+          } while (cursor && safetyPages < 100);
         } catch {}
       }
 
@@ -2745,12 +2998,753 @@ export default {
       );
     }
 
-    // 0i-3. Non-Destructive Cohort Reconciliation & Merge (Merges profiles, memories, slots & R2 references from duplicate album into primary album)
+    // 0i-2b. Host-Only Complete R2 Media Management & Recovery Center Inventory (GET /api/admin/r2-media-inventory)
+    if (path === '/api/admin/r2-media-inventory' && request.method === 'GET') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser || sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      await cleanupExpiredSoftDeletedAlbums(env);
+
+      const allSetsRes = env.DB ? await env.DB.prepare(`SELECT * FROM class_sets ORDER BY created_at DESC`).all() : { results: [] };
+      const allSets = allSetsRes?.results || [];
+      const allSubsRes = env.DB ? await env.DB.prepare(`SELECT * FROM profile_submissions`).all() : { results: [] };
+      const allSubs = allSubsRes?.results || [];
+      const allAssetsRes = env.DB ? await env.DB.prepare(`SELECT * FROM media_assets ORDER BY created_at DESC`).all() : { results: [] };
+      const allAssets = allAssetsRes?.results || [];
+      const instRes = env.DB ? await env.DB.prepare(`SELECT * FROM institutions`).all().catch(() => ({ results: [] })) : { results: [] };
+      const allInsts = instRes?.results || [];
+      const testRes = env.DB ? await env.DB.prepare(`SELECT * FROM testimonials`).all().catch(() => ({ results: [] })) : { results: [] };
+      const allTestimonials = testRes?.results || [];
+      const siteOverridesRes = env.DB ? await env.DB.prepare(`SELECT * FROM website_content_overrides`).all().catch(() => ({ results: [] })) : { results: [] };
+      const allSiteOverrides = siteOverridesRes?.results || [];
+
+      const r2ObjectMap = new Map<string, { key: string; size: number; uploaded?: string; contentType?: string }>();
+      if (env.BUCKET && typeof env.BUCKET.list === 'function') {
+        try {
+          let cursor: string | undefined = undefined;
+          let pages = 0;
+          do {
+            const listed: any = await env.BUCKET.list(cursor ? { limit: 1000, cursor } : { limit: 1000 });
+            for (const obj of listed?.objects || []) {
+              if (obj?.key) {
+                r2ObjectMap.set(String(obj.key), {
+                  key: String(obj.key),
+                  size: Number(obj.size) || 0,
+                  uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : undefined,
+                  contentType: obj.httpMetadata?.contentType || undefined,
+                });
+              }
+            }
+            cursor = listed?.truncated && listed?.cursor ? String(listed.cursor) : undefined;
+            pages++;
+          } while (cursor && pages < 100);
+        } catch {}
+      }
+
+      const d1AssetMap = new Map<string, any>();
+      for (const a of allAssets) {
+        const k = extractMediaKeyFromUrl(a.object_key || a.public_url);
+        if (k) d1AssetMap.set(k, a);
+      }
+
+      const albumMap = new Map<string, { id: string; name: string; departmentName: string; graduationYear: number; isDeleted: boolean; deletedAt: string | null; parsed: any }>();
+      // Track active references and broken references
+      const activeReferenceMap = new Map<string, {
+        albumId: string;
+        albumName: string;
+        recordType: string;
+        recordId: string;
+        recordLabel: string;
+        isSoftDeletedAlbum: boolean;
+      }>();
+      const missingR2References: Array<{
+        key: string;
+        albumId: string;
+        albumName: string;
+        recordType: string;
+        recordId: string;
+        recordLabel: string;
+        referencedUrl: string;
+      }> = [];
+
+      for (const row of allSets) {
+        let parsed: any = {};
+        try { parsed = JSON.parse(row.data_json || '{}'); } catch {}
+        const aid = String(row.id || parsed.id || '');
+        const deptName = String(parsed.departmentName || row.department_id || 'Department');
+        const gradYear = Number(row.graduation_year || parsed.graduationYear) || 2026;
+        const albumName = `${deptName} (${gradYear})`;
+        const isDeleted = row.status === 'deleted' || Boolean(parsed.deletedAt);
+        albumMap.set(aid, { id: aid, name: albumName, departmentName: deptName, graduationYear: gradYear, isDeleted, deletedAt: parsed.deletedAt || null, parsed });
+
+        const registerRef = (rawUrl: unknown, recordType: string, recordId: string, recordLabel: string) => {
+          const k = extractMediaKeyFromUrl(rawUrl);
+          if (!k) return;
+          activeReferenceMap.set(k, {
+            albumId: aid,
+            albumName,
+            recordType,
+            recordId,
+            recordLabel,
+            isSoftDeletedAlbum: isDeleted,
+          });
+          if (!r2ObjectMap.has(k)) {
+            missingR2References.push({
+              key: k,
+              albumId: aid,
+              albumName,
+              recordType,
+              recordId,
+              recordLabel,
+              referencedUrl: String(rawUrl || ''),
+            });
+          }
+        };
+
+        registerRef(parsed.bannerImageUrl, 'banner', aid, `${albumName} Hero Banner`);
+        registerRef(parsed.legacyGroupImageUrl || parsed.legacyFooterUrl, 'footer', aid, `${albumName} Footer Photo`);
+        registerRef(parsed.departmentLogoUrl, 'logo', aid, `${albumName} Department Logo`);
+        registerRef(parsed.ambientAudioUrl, 'soundtrack', aid, `${albumName} Ambient Audio`);
+
+        for (const st of Array.isArray(parsed.students) ? parsed.students : []) {
+          registerRef(st.photoUrl || st.image, 'profile', String(st.id || ''), String(st.fullName || 'Graduate Profile'));
+          registerRef(st.secondaryPhotoUrl, 'profile', String(st.id || ''), `${st.fullName || 'Graduate'} (2nd Photo)`);
+        }
+        for (const mem of Array.isArray(parsed.memories) ? parsed.memories : []) {
+          registerRef(mem.imageUrl || mem.url, 'moment', String(mem.id || ''), String(mem.title || mem.category || 'Moment'));
+          if (Array.isArray(mem.images)) {
+            for (const img of mem.images) {
+              registerRef(img.url || img.imageUrl, 'moment', String(img.id || mem.id || ''), `${mem.title || 'Moment'}${img.caption ? `: ${img.caption}` : ''}`);
+            }
+          }
+        }
+      }
+
+      // Submissions references
+      for (const s of allSubs) {
+        if (s.status === 'removed') continue;
+        const aid = String(s.album_id || '');
+        const alb = albumMap.get(aid);
+        let sp: any = {};
+        try { sp = JSON.parse(s.payload_json || '{}'); } catch {}
+        const label = String(sp.fullName || s.email || 'Submission');
+        const registerSubKey = (raw: unknown) => {
+          const k = extractMediaKeyFromUrl(raw);
+          if (!k || activeReferenceMap.has(k)) return;
+          activeReferenceMap.set(k, {
+            albumId: aid,
+            albumName: alb?.name || aid || 'Submissions',
+            recordType: 'submission',
+            recordId: String(s.id || ''),
+            recordLabel: `${label} (${s.status || 'pending'})`,
+            isSoftDeletedAlbum: Boolean(alb?.isDeleted),
+          });
+        };
+        registerSubKey(s.photo_key);
+        registerSubKey(sp.photoUrl || sp.image);
+        registerSubKey(sp.secondaryPhotoUrl);
+      }
+
+      // Institutions, Testimonials, Website Content Overrides references
+      for (const inst of allInsts) {
+        const lk = extractMediaKeyFromUrl(inst.logo_url);
+        if (lk && !activeReferenceMap.has(lk)) {
+          activeReferenceMap.set(lk, {
+            albumId: 'platform-institutions',
+            albumName: String(inst.name || inst.id || 'Institution'),
+            recordType: 'logo',
+            recordId: String(inst.id || ''),
+            recordLabel: `${inst.name || inst.id} Official Logo`,
+            isSoftDeletedAlbum: false,
+          });
+        }
+      }
+      for (const t of allTestimonials) {
+        for (const u of [t.admin_avatar_url, t.avatar_url, t.album_cover_url]) {
+          const tk = extractMediaKeyFromUrl(u);
+          if (tk && !activeReferenceMap.has(tk)) {
+            activeReferenceMap.set(tk, {
+              albumId: 'platform-testimonials',
+              albumName: 'Website Testimonials',
+              recordType: 'website',
+              recordId: String(t.id || ''),
+              recordLabel: `Testimonial: ${t.admin_name || t.id}`,
+              isSoftDeletedAlbum: false,
+            });
+          }
+        }
+      }
+      for (const ov of allSiteOverrides) {
+        try {
+          const parsedOv = JSON.parse(ov.data_json || '{}');
+          for (const k of collectAlbumMediaKeys(parsedOv)) {
+            if (!activeReferenceMap.has(k)) {
+              activeReferenceMap.set(k, {
+                albumId: 'platform-website',
+                albumName: 'Website Media & Soundtrack',
+                recordType: 'website',
+                recordId: 'global',
+                recordLabel: k.includes('audio') ? 'Platform Ambient Soundtrack' : 'Website Hero / Pillar Media',
+                isSoftDeletedAlbum: false,
+              });
+            }
+          }
+        } catch {}
+      }
+
+      const inferMimeAndType = (key: string, d1Row?: any, r2Meta?: any): { mimeType: string; fileType: 'image' | 'audio' | 'video' | 'other' } => {
+        const ext = (key.split('.').pop() || '').toLowerCase();
+        const mime =
+          d1Row?.mime_type ||
+          r2Meta?.contentType ||
+          (ext === 'webp'
+            ? 'image/webp'
+            : ext === 'png'
+            ? 'image/png'
+            : ext === 'jpg' || ext === 'jpeg'
+            ? 'image/jpeg'
+            : ext === 'mp3'
+            ? 'audio/mpeg'
+            : ext === 'wav'
+            ? 'audio/wav'
+            : ext === 'ogg'
+            ? 'audio/ogg'
+            : ext === 'm4a'
+            ? 'audio/mp4'
+            : ext === 'mp4'
+            ? 'video/mp4'
+            : ext === 'webm'
+            ? 'video/webm'
+            : 'application/octet-stream');
+        const fileType: 'image' | 'audio' | 'video' | 'other' = mime.startsWith('image/')
+          ? 'image'
+          : mime.startsWith('audio/')
+          ? 'audio'
+          : mime.startsWith('video/')
+          ? 'video'
+          : 'other';
+        return { mimeType: mime, fileType };
+      };
+
+      const allKeysUnion = new Set<string>([
+        ...Array.from(r2ObjectMap.keys()),
+        ...Array.from(d1AssetMap.keys()),
+        ...missingR2References.map((m) => m.key),
+      ]);
+
+      const inventoryItems: any[] = [];
+      let totalBytesInR2 = 0;
+
+      for (const key of allKeysUnion) {
+        const r2Obj = r2ObjectMap.get(key);
+        const d1Asset = d1AssetMap.get(key);
+        const activeRef = activeReferenceMap.get(key);
+        const missingRef = missingR2References.find((m) => m.key === key);
+
+        if (r2Obj) totalBytesInR2 += r2Obj.size;
+
+        const { mimeType, fileType } = inferMimeAndType(key, d1Asset, r2Obj);
+        const fileName = d1Asset?.file_name || key.split('/').pop() || key;
+        const sizeBytes = r2Obj?.size ?? Number(d1Asset?.size_bytes || 0);
+        const uploadedAt = r2Obj?.uploaded || d1Asset?.created_at || new Date().toISOString();
+
+        // Parse prefix albums/<albumId>/<section>/...
+        const keyParts = key.split('/');
+        const isStandardAlbumPrefix = keyParts[0] === 'albums' && keyParts.length >= 3;
+        const prefixAlbumId = isStandardAlbumPrefix ? keyParts[1] : d1Asset?.set_id || '';
+        const prefixSection = isStandardAlbumPrefix ? keyParts[2] : d1Asset?.section || '';
+        const matchedAlbumByPrefix = albumMap.get(prefixAlbumId);
+
+        let status: 'linked' | 'orphaned' | 'recoverable' | 'missing-reference' | 'unrecognised' = 'linked';
+        let suggestedRecovery: any = null;
+        let isProtectedFromAutoDelete = false;
+        let protectionReason = '';
+
+        if (!r2Obj && missingRef) {
+          status = 'missing-reference';
+          isProtectedFromAutoDelete = true;
+          protectionReason = 'Active database reference awaiting media recovery';
+          // Check if another object in R2 has the same filename
+          const candidateKey = Array.from(r2ObjectMap.keys()).find((rk) => rk.endsWith(`/${fileName}`));
+          if (candidateKey) {
+            const candAlbum = albumMap.get(missingRef.albumId);
+            suggestedRecovery = {
+              albumId: missingRef.albumId,
+              albumName: candAlbum?.name || missingRef.albumName,
+              targetType: missingRef.recordType === 'profile' ? 'profile' : missingRef.recordType === 'moment' ? 'moment' : 'banner',
+              targetRecordId: missingRef.recordId,
+              targetRecordLabel: missingRef.recordLabel,
+              replacementKey: candidateKey,
+              confidence: 'high',
+              reason: `Matching R2 file "${candidateKey}" found for broken reference on ${missingRef.recordLabel}`,
+            };
+          }
+        } else if (activeRef) {
+          if (activeRef.isSoftDeletedAlbum) {
+            status = 'recoverable';
+            isProtectedFromAutoDelete = true;
+            protectionReason = 'Belongs to a soft-deleted album within its 30-day recovery period';
+            suggestedRecovery = {
+              albumId: activeRef.albumId,
+              albumName: activeRef.albumName,
+              targetType: activeRef.recordType === 'profile' ? 'profile' : activeRef.recordType === 'moment' ? 'moment' : 'banner',
+              targetRecordId: activeRef.recordId,
+              targetRecordLabel: activeRef.recordLabel,
+              confidence: 'high',
+              reason: `Associated with soft-deleted album "${activeRef.albumName}" (recoverable within 30 days)`,
+            };
+          } else {
+            status = 'linked';
+            isProtectedFromAutoDelete = true;
+            protectionReason = `Actively linked to ${activeRef.albumName} (${activeRef.recordLabel})`;
+          }
+        } else if (isStandardAlbumPrefix || d1Asset?.set_id) {
+          // Not in activeReferenceMap — check if we can confidently establish original album/record relationship
+          const inferredTargetType: 'profile' | 'moment' | 'banner' | 'footer' =
+            prefixSection.includes('student') || prefixSection.includes('profile') || prefixSection.includes('submission')
+              ? 'profile'
+              : prefixSection.includes('banner') || prefixSection.includes('hero')
+              ? 'banner'
+              : prefixSection.includes('footer')
+              ? 'footer'
+              : 'moment';
+
+          if (matchedAlbumByPrefix) {
+            status = 'recoverable';
+            if (matchedAlbumByPrefix.isDeleted) {
+              isProtectedFromAutoDelete = true;
+              protectionReason = 'Belongs to soft-deleted album within 30-day recovery window';
+            }
+            // Check if a broken reference in this album matches
+            const matchingBroken = missingR2References.find((m) => m.albumId === matchedAlbumByPrefix.id);
+            suggestedRecovery = {
+              albumId: matchedAlbumByPrefix.id,
+              albumName: matchedAlbumByPrefix.name,
+              targetType: matchingBroken ? (matchingBroken.recordType as any) : inferredTargetType,
+              targetRecordId: matchingBroken?.recordId || undefined,
+              targetRecordLabel: matchingBroken?.recordLabel || (inferredTargetType === 'moment' ? 'Recovered Moments' : inferredTargetType === 'profile' ? 'Graduate Profile' : 'Album Banner'),
+              confidence: 'high',
+              reason: `Storage path identifies album "${matchedAlbumByPrefix.name}" (${prefixSection || 'moments'})`,
+            };
+          } else {
+            status = 'orphaned';
+            const firstActiveAlbum = Array.from(albumMap.values()).find((a) => !a.isDeleted) || Array.from(albumMap.values())[0];
+            if (firstActiveAlbum) {
+              suggestedRecovery = {
+                albumId: firstActiveAlbum.id,
+                albumName: firstActiveAlbum.name,
+                targetType: inferredTargetType,
+                targetRecordLabel: inferredTargetType === 'moment' ? 'Recovered Moments' : 'Album Record',
+                confidence: 'medium',
+                reason: `Original album "${prefixAlbumId}" no longer exists; can be relinked to an active album`,
+              };
+            }
+          }
+        } else {
+          status = 'unrecognised';
+        }
+
+        inventoryItems.push({
+          key,
+          url: `/media/${key}`,
+          fileName,
+          mimeType,
+          fileType,
+          sizeBytes,
+          uploadedAt,
+          inR2: Boolean(r2Obj),
+          inD1Assets: Boolean(d1Asset),
+          status,
+          associatedAlbumId: activeRef?.albumId || matchedAlbumByPrefix?.id || prefixAlbumId || null,
+          associatedAlbumName: activeRef?.albumName || matchedAlbumByPrefix?.name || (prefixAlbumId ? `Orphaned Cohort (${prefixAlbumId})` : null),
+          associatedRecordType: activeRef?.recordType || prefixSection || 'unknown',
+          associatedRecordId: activeRef?.recordId || null,
+          associatedRecordLabel: activeRef?.recordLabel || null,
+          suggestedRecovery,
+          isProtectedFromAutoDelete,
+          protectionReason,
+        });
+      }
+
+      // Sort: recoverable & orphaned & missing-reference first so Host sees actionable media immediately, then by newest
+      const statusPriority: Record<string, number> = {
+        recoverable: 1,
+        orphaned: 2,
+        'missing-reference': 3,
+        unrecognised: 4,
+        linked: 5,
+      };
+      inventoryItems.sort((a, b) => {
+        const pa = statusPriority[a.status] || 9;
+        const pb = statusPriority[b.status] || 9;
+        if (pa !== pb) return pa - pb;
+        return new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime();
+      });
+
+      const counts = {
+        all: inventoryItems.length,
+        linked: inventoryItems.filter((i) => i.status === 'linked').length,
+        orphaned: inventoryItems.filter((i) => i.status === 'orphaned').length,
+        recoverable: inventoryItems.filter((i) => i.status === 'recoverable').length,
+        missingReference: inventoryItems.filter((i) => i.status === 'missing-reference').length,
+        unrecognised: inventoryItems.filter((i) => i.status === 'unrecognised').length,
+        totalBytesInR2,
+      };
+
+      // Record scan in platform_settings scan history
+      let scanHistory: any[] = [];
+      if (env.DB) {
+        try {
+          const settings = await getPlatformSettingsMap(env);
+          try { scanHistory = JSON.parse(settings.r2_scan_history_json || '[]'); } catch {}
+          if (!Array.isArray(scanHistory)) scanHistory = [];
+          const newEntry = {
+            id: `scan-${Date.now()}`,
+            scannedAt: new Date().toISOString(),
+            scannedBy: sessionUser.email,
+            totalObjects: counts.all,
+            totalBytes: totalBytesInR2,
+            linked: counts.linked,
+            orphaned: counts.orphaned,
+            recoverable: counts.recoverable,
+            missingReference: counts.missingReference,
+            unrecognised: counts.unrecognised,
+          };
+          scanHistory = [newEntry, ...scanHistory].slice(0, 15);
+          await env.DB.prepare(
+            `INSERT INTO platform_settings (key, value, updated_by, updated_at) VALUES ('r2_scan_history_json', ?, ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = datetime('now')`
+          ).bind(JSON.stringify(scanHistory), sessionUser.email).run();
+        } catch {}
+      }
+
+      // Fetch recent R2 & Media recovery action logs from audit_logs
+      let actionLogs: any[] = [];
+      if (env.DB) {
+        try {
+          const logsRes = await env.DB.prepare(
+            `SELECT id, user_email, action, details, created_at FROM audit_logs
+             WHERE action LIKE 'r2_media_%' OR action LIKE 'album_%' OR action LIKE 'admin_repaired_%'
+             ORDER BY created_at DESC LIMIT 30`
+          ).all();
+          actionLogs = logsRes?.results || [];
+        } catch {}
+      }
+
+      const availableAlbums = Array.from(albumMap.values()).map((a) => ({
+        id: a.id,
+        name: a.name,
+        departmentName: a.departmentName,
+        graduationYear: a.graduationYear,
+        isDeleted: a.isDeleted,
+        profiles: (Array.isArray(a.parsed.students) ? a.parsed.students : []).map((st: any) => ({
+          id: String(st.id || ''),
+          fullName: String(st.fullName || 'Graduate'),
+        })),
+        momentCategories: (Array.isArray(a.parsed.memories) ? a.parsed.memories : []).map((m: any) => ({
+          id: String(m.id || ''),
+          title: String(m.title || m.category || 'Moments'),
+        })),
+      }));
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          counts,
+          items: inventoryItems,
+          availableAlbums,
+          scanHistory,
+          actionLogs,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 0i-2c. Host-Only R2 Media Restore / Relink Endpoint (POST /api/admin/r2-media-recover)
+    if (path === '/api/admin/r2-media-recover' && request.method === 'POST') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser || sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!env.DB) {
+        return new Response(JSON.stringify({ error: 'D1 database unavailable' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        items?: Array<{
+          key: string;
+          replacementKey?: string;
+          targetAlbumId: string;
+          targetType: 'moment' | 'profile' | 'banner' | 'footer';
+          targetProfileId?: string;
+          momentCategoryTitle?: string;
+          caption?: string;
+        }>;
+        restoreDeletedAlbum?: boolean;
+      };
+
+      const items = Array.isArray(body.items) ? body.items : [];
+      if (items.length === 0) {
+        return new Response(JSON.stringify({ error: 'No media items specified for recovery.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const recoveredResults: Array<{ key: string; albumId: string; targetType: string; detail: string }> = [];
+
+      for (const item of items) {
+        const effectiveKey = extractMediaKeyFromUrl(item.replacementKey || item.key);
+        const targetAlbumId = String(item.targetAlbumId || '').trim();
+        if (!effectiveKey || !targetAlbumId) continue;
+
+        const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(targetAlbumId).first();
+        if (!albumRow) continue;
+
+        let parsed: any = {};
+        try { parsed = JSON.parse(albumRow.data_json || '{}'); } catch {}
+        const mediaUrl = `/media/${effectiveKey}`;
+
+        // Optionally restore soft-deleted album if within 30-day window
+        let nextStatus = String(albumRow.status || 'draft');
+        if (body.restoreDeletedAlbum && (albumRow.status === 'deleted' || parsed.deletedAt)) {
+          const delMs = parsed.deletedAt ? new Date(parsed.deletedAt).getTime() : Date.now();
+          if (Date.now() - delMs < 30 * 24 * 60 * 60 * 1000) {
+            delete parsed.deletedAt;
+            delete parsed.deletedBy;
+            const wasPub = Boolean(parsed.wasPublishedBeforeDelete || parsed.published || parsed.isPublished);
+            parsed.published = wasPub;
+            parsed.isPublished = wasPub;
+            parsed.isUnpublished = !wasPub;
+            parsed.activationStatus = 'active';
+            nextStatus = wasPub ? 'published' : 'draft';
+            parsed.lifecycleStatus = nextStatus;
+          }
+        }
+
+        let detail = '';
+        if (item.targetType === 'banner') {
+          parsed.bannerImageUrl = mediaUrl;
+          detail = `Relinked as Hero Banner on ${targetAlbumId}`;
+        } else if (item.targetType === 'footer') {
+          parsed.legacyGroupImageUrl = mediaUrl;
+          parsed.legacyFooterUrl = mediaUrl;
+          detail = `Relinked as Footer Legacy Photo on ${targetAlbumId}`;
+        } else if (item.targetType === 'profile') {
+          const students = Array.isArray(parsed.students) ? [...parsed.students] : [];
+          const targetIdx = item.targetProfileId
+            ? students.findIndex((s: any) => String(s.id) === String(item.targetProfileId))
+            : students.findIndex((s: any) => !s.photoUrl || extractMediaKeyFromUrl(s.photoUrl) === item.key);
+          if (targetIdx >= 0) {
+            students[targetIdx] = {
+              ...students[targetIdx],
+              photoUrl: mediaUrl,
+              image: mediaUrl,
+            };
+            detail = `Relinked to graduate profile "${students[targetIdx].fullName || students[targetIdx].id}" in ${targetAlbumId}`;
+          } else {
+            const recoveredName = (effectiveKey.split('/').pop() || 'Recovered Graduate').replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+            students.push({
+              id: `st-rec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              fullName: item.caption || recoveredName,
+              photoUrl: mediaUrl,
+              image: mediaUrl,
+              quote: 'Recovered profile record from Cloudflare R2 storage.',
+              approved: true,
+            });
+            detail = `Recovered as graduate profile in ${targetAlbumId}`;
+          }
+          parsed.students = students;
+        } else {
+          // Default: moment category without creating duplicate image entries
+          const memories = Array.isArray(parsed.memories) ? [...parsed.memories] : [];
+          const catTitle = (item.momentCategoryTitle || 'Recovered Moments').trim();
+          const alreadyInAlbum = memories.some((m: any) => {
+            if (extractMediaKeyFromUrl(m.imageUrl || m.url) === effectiveKey) return true;
+            if (Array.isArray(m.images)) {
+              return m.images.some((im: any) => extractMediaKeyFromUrl(im.url || im.imageUrl) === effectiveKey);
+            }
+            return false;
+          });
+          if (!alreadyInAlbum) {
+            const catIdx = memories.findIndex(
+              (m: any) => String(m.title || m.category || '').trim().toLowerCase() === catTitle.toLowerCase()
+            );
+            const newImgObj = {
+              id: `mem-img-rec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              url: mediaUrl,
+              caption: item.caption || '',
+              dateTime: new Date().toISOString().slice(0, 10),
+            };
+            if (catIdx >= 0) {
+              const existingImgs = Array.isArray(memories[catIdx].images) ? [...memories[catIdx].images] : [];
+              existingImgs.push(newImgObj);
+              memories[catIdx] = {
+                ...memories[catIdx],
+                images: existingImgs,
+                imageUrl: memories[catIdx].imageUrl || mediaUrl,
+              };
+            } else {
+              memories.push({
+                id: `mem-cat-rec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                title: catTitle,
+                category: catTitle,
+                eventTag: catTitle,
+                caption: 'Restored via Host Cloudflare R2 Media Recovery Center',
+                dateStr: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+                imageUrl: mediaUrl,
+                images: [newImgObj],
+              });
+            }
+            parsed.memories = memories;
+            detail = `Recovered into Moments category "${catTitle}" in ${targetAlbumId}`;
+          } else {
+            detail = `Verified existing link in Moments of ${targetAlbumId} (no duplicate created)`;
+          }
+        }
+
+        parsed.version = (Number(parsed.version) || 1) + 1;
+        await env.DB.prepare(
+          `UPDATE class_sets SET status = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`
+        ).bind(nextStatus, JSON.stringify(parsed), targetAlbumId).run();
+
+        // Ensure media_assets row is linked to targetAlbumId without duplicate
+        try {
+          const existingAsset = await env.DB.prepare(`SELECT id FROM media_assets WHERE object_key = ?`).bind(effectiveKey).first();
+          if (existingAsset) {
+            await env.DB.prepare(
+              `UPDATE media_assets SET set_id = ?, section = ? WHERE object_key = ?`
+            ).bind(targetAlbumId, item.targetType, effectiveKey).run();
+          } else {
+            const headObj = env.BUCKET && typeof env.BUCKET.head === 'function' ? await env.BUCKET.head(effectiveKey).catch(() => null) : null;
+            await env.DB.prepare(
+              `INSERT INTO media_assets (id, set_id, section, object_key, public_url, file_name, mime_type, size_bytes, uploaded_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+            ).bind(
+              `asset-rec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              targetAlbumId,
+              item.targetType,
+              effectiveKey,
+              mediaUrl,
+              effectiveKey.split('/').pop() || effectiveKey,
+              headObj?.httpMetadata?.contentType || 'image/webp',
+              Number(headObj?.size) || 0,
+              sessionUser.email
+            ).run();
+          }
+        } catch {}
+
+        recoveredResults.push({
+          key: effectiveKey,
+          albumId: targetAlbumId,
+          targetType: item.targetType,
+          detail,
+        });
+      }
+
+      await logAudit(
+        'r2_media_recovered',
+        `Host ${sessionUser.email} recovered/relinked ${recoveredResults.length} R2 media file(s): ${recoveredResults.map((r) => `${r.key} -> ${r.albumId} (${r.targetType})`).join('; ')}`,
+        sessionUser.email
+      );
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          recoveredCount: recoveredResults.length,
+          results: recoveredResults,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 0i-2d. Host-Only Confirmed Permanent R2 Media Deletion (POST /api/admin/r2-media-delete)
+    if (path === '/api/admin/r2-media-delete' && request.method === 'POST') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser || sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        keys?: string[];
+        confirmPermanentDelete?: boolean;
+      };
+      if (!body.confirmPermanentDelete) {
+        return new Response(
+          JSON.stringify({ error: 'Explicit confirmation (confirmPermanentDelete: true) is required to permanently delete R2 files.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const keys = Array.isArray(body.keys) ? body.keys.map((k) => extractMediaKeyFromUrl(k)).filter(Boolean) : [];
+      if (keys.length === 0) {
+        return new Response(JSON.stringify({ error: 'No storage keys provided.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const deletedKeys: string[] = [];
+      const skippedProtectedKeys: Array<{ key: string; reason: string }> = [];
+
+      for (const key of keys) {
+        // deleteR2ObjectAndRecord enforces that nothing referenced by active content, soft-deleted albums within 30 days, or submissions within 7 days is deleted
+        const wasDeleted = await deleteR2ObjectAndRecord(key);
+        if (wasDeleted) {
+          deletedKeys.push(key);
+        } else {
+          skippedProtectedKeys.push({
+            key,
+            reason: 'Still referenced by an active record or a soft-deleted album/profile within its 30-day recovery window.',
+          });
+        }
+      }
+
+      if (deletedKeys.length > 0) {
+        await logAudit(
+          'r2_media_permanently_deleted',
+          `Host ${sessionUser.email} permanently deleted ${deletedKeys.length} unreferenced R2 object(s): ${deletedKeys.slice(0, 15).join(', ')}`,
+          sessionUser.email
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          deletedCount: deletedKeys.length,
+          deletedKeys,
+          skippedProtectedCount: skippedProtectedKeys.length,
+          skippedProtectedKeys,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 0i-3. Host-Only Non-Destructive Cohort Reconciliation & Merge
     if (path === '/api/admin/reconcile-cohort' && request.method === 'POST') {
       const sessionUser = await getSessionUser();
       if (!sessionUser) {
         return new Response(JSON.stringify({ error: 'Authentication required' }), {
           status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required for cohort reconciliation' }), {
+          status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
@@ -2792,13 +3786,6 @@ export default {
 
       const pOwner = String(primaryRow.admin_user_id || primaryData.classRepEmail || '').toLowerCase();
       const sOwner = String(secondaryRow.admin_user_id || secondaryData.classRepEmail || '').toLowerCase();
-      const actor = sessionUser.email.toLowerCase();
-      if (sessionUser.role !== 'master_host' && pOwner !== actor && sOwner !== actor) {
-        return new Response(JSON.stringify({ error: 'Forbidden' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
 
       // 1. Merge students non-destructively (matching by id or email or fullName)
       const mergedStudents: any[] = Array.isArray(primaryData.students) ? [...primaryData.students] : [];
@@ -2969,12 +3956,18 @@ export default {
       );
     }
 
-    // 0i-4. Repair Broken R2 Media Links & Recover Orphaned R2 Photos for an Album
+    // 0i-4. Host-Only Repair Broken R2 Media Links & Recover Orphaned R2 Photos for an Album
     if (path === '/api/admin/repair-media' && request.method === 'POST') {
       const sessionUser = await getSessionUser();
       if (!sessionUser) {
         return new Response(JSON.stringify({ error: 'Authentication required' }), {
           status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required for media repair' }), {
+          status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
@@ -3035,10 +4028,18 @@ export default {
       if (env.BUCKET && typeof env.BUCKET.list === 'function') {
         for (const sibId of siblingAlbumIds) {
           try {
-            const listed = await env.BUCKET.list({ prefix: `albums/${sibId}/`, limit: 500 });
-            for (const obj of listed?.objects || []) {
-              if (obj?.key) r2Keys.add(String(obj.key));
-            }
+            let cursor: string | undefined = undefined;
+            let pages = 0;
+            do {
+              const listed: any = await env.BUCKET.list(
+                cursor ? { prefix: `albums/${sibId}/`, limit: 1000, cursor } : { prefix: `albums/${sibId}/`, limit: 1000 }
+              );
+              for (const obj of listed?.objects || []) {
+                if (obj?.key) r2Keys.add(String(obj.key));
+              }
+              cursor = listed?.truncated && listed?.cursor ? String(listed.cursor) : undefined;
+              pages++;
+            } while (cursor && pages < 50);
           } catch {}
         }
       }
@@ -3164,74 +4165,122 @@ export default {
       );
     }
 
-    // 0i-5. D1 Full JSON Backup Export + R2 Media Manifest (Host Control Center)
+    // 0i-5. D1 Full JSON Backup Export + Paginated R2 Metadata Manifest (Host Control Center)
     if (path === '/api/admin/backup-export' && request.method === 'GET') {
       const sessionUser = await getSessionUser();
-      if (!sessionUser || sessionUser.role !== 'master_host') {
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
+      }
+      if (sessionUser.role !== 'master_host') {
         return new Response(JSON.stringify({ error: 'Host authorization required' }), {
           status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
       if (!env.DB) {
         return new Response(JSON.stringify({ error: 'D1 database not bound' }), {
           status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
 
+      const includeRawSecrets = url.searchParams.get('includeRawSecrets') === 'true';
+
       const tables = [
-        'class_sets',
-        'profile_submissions',
-        'media_assets',
-        'slot_ledger',
-        'transactions',
-        'programmes',
-        'cohort_allocations',
         'platform_settings',
-        'audit_logs',
-        'users',
         'institutions',
+        'users',
+        'programmes',
+        'class_sets',
+        'cohort_allocations',
+        'slot_allocations',
+        'registrations',
+        'profile_submissions',
+        'slot_ledger',
+        'media_assets',
+        'transactions',
         'testimonials',
         'site_content',
         'support_messages',
         'disputes',
-        'registrations',
-        'slot_allocations',
+        'audit_logs',
       ];
       const snapshot: Record<string, any[]> = {};
       for (const tbl of tables) {
         try {
           const res = await env.DB.prepare(`SELECT * FROM ${tbl}`).all();
-          snapshot[tbl] = res?.results || [];
+          const rawRows = res?.results || [];
+          snapshot[tbl] = rawRows.map((r: any) => {
+            if (includeRawSecrets) return r;
+            const copy = { ...r };
+            if (tbl === 'profile_submissions' && copy.status_token_hash) {
+              copy.status_token_hash = '[REDACTED]';
+            }
+            if (tbl === 'transactions' && copy.paystack_data_json) {
+              try {
+                const parsedPs = JSON.parse(copy.paystack_data_json);
+                if (parsedPs?.authorization?.authorization_code) {
+                  parsedPs.authorization.authorization_code = '[REDACTED]';
+                }
+                if (parsedPs?.data?.authorization?.authorization_code) {
+                  parsedPs.data.authorization.authorization_code = '[REDACTED]';
+                }
+                copy.paystack_data_json = JSON.stringify(parsedPs);
+              } catch {}
+            }
+            return copy;
+          });
         } catch {
           snapshot[tbl] = [];
         }
       }
 
       const r2Manifest: Array<{ key: string; size: number; uploaded?: string; downloadUrl: string }> = [];
+      let r2PaginationComplete = true;
       if (env.BUCKET && typeof env.BUCKET.list === 'function') {
         try {
-          const listed = await env.BUCKET.list({ limit: 1000 });
-          for (const obj of listed?.objects || []) {
-            if (obj?.key) {
-              r2Manifest.push({
-                key: String(obj.key),
-                size: Number(obj.size) || 0,
-                uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : undefined,
-                downloadUrl: `/media/${obj.key}`,
-              });
+          let cursor: string | undefined = undefined;
+          let safetyPages = 0;
+          do {
+            const listed: any = await env.BUCKET.list(cursor ? { limit: 1000, cursor } : { limit: 1000 });
+            for (const obj of listed?.objects || []) {
+              if (obj?.key) {
+                r2Manifest.push({
+                  key: String(obj.key),
+                  size: Number(obj.size) || 0,
+                  uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : undefined,
+                  downloadUrl: `/media/${obj.key}`,
+                });
+              }
             }
-          }
-        } catch {}
+            cursor = listed?.truncated && listed?.cursor ? String(listed.cursor) : undefined;
+            safetyPages++;
+          } while (cursor && safetyPages < 100);
+          if (cursor) r2PaginationComplete = false;
+        } catch {
+          r2PaginationComplete = false;
+        }
       }
 
-      await logAudit('database_backup_exported', `Full D1 + R2 manifest backup exported by ${sessionUser.email}`, sessionUser.email);
+      await logAudit(
+        'database_backup_exported',
+        `D1 database + R2 metadata manifest exported (${r2Manifest.length} R2 keys, redacted=${!includeRawSecrets}) by ${sessionUser.email}`,
+        sessionUser.email
+      );
 
       return new Response(
         JSON.stringify(
           {
-            schemaVersion: 2,
+            schemaVersion: 3,
+            backupScope: 'd1_database_and_r2_metadata_manifest_only',
+            r2BinaryIncluded: false,
+            r2PaginationComplete,
+            r2BackupNotice:
+              'This file contains a complete D1 database snapshot and an R2 object metadata manifest (keys, sizes, and URLs). Actual binary R2 media files are stored in Cloudflare R2 and must be replicated using POST /api/admin/r2-backup-sync or rclone/Cloudflare R2 replication into a secondary backup bucket.',
+            sensitiveFieldsRedacted: !includeRawSecrets,
             exportedAt: new Date().toISOString(),
             exportedBy: sessionUser.email,
             tables: snapshot,
@@ -3245,16 +4294,91 @@ export default {
           headers: {
             ...corsHeaders,
             'Content-Type': 'application/json',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+            'Pragma': 'no-cache',
+            'Expires': '0',
             'Content-Disposition': `attachment; filename="kohot-d1-backup-${new Date().toISOString().split('T')[0]}.json"`,
           },
         }
       );
     }
 
-    // 0i-6. Non-Destructive D1 JSON Backup Restore Endpoint (Host Control Center)
+    // 0i-5b. Host-Only Binary R2 Object Backup Sync to Secondary R2 Bucket (or Verification Status)
+    if (path === '/api/admin/r2-backup-sync' && request.method === 'POST') {
+      const sessionUser = await getSessionUser();
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (sessionUser.role !== 'master_host') {
+        return new Response(JSON.stringify({ error: 'Host authorization required' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const backupBucket = (env as any).BUCKET_BACKUP;
+      if (!env.BUCKET) {
+        return new Response(JSON.stringify({ error: 'Primary R2 BUCKET is not bound.' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!backupBucket || typeof backupBucket.put !== 'function') {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            r2BinaryBackupStatus: 'requires_bucket_backup_binding_or_rclone',
+            message:
+              'Secondary R2 bucket binding (BUCKET_BACKUP) is not configured in wrangler.toml. Bind a secondary R2 bucket as BUCKET_BACKUP or run rclone sync against the kohot-media bucket to complete binary media replication.',
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      let copiedCount = 0;
+      let cursor: string | undefined = undefined;
+      let pages = 0;
+      do {
+        const listed: any = await env.BUCKET.list(cursor ? { limit: 500, cursor } : { limit: 500 });
+        for (const obj of listed?.objects || []) {
+          if (!obj?.key) continue;
+          const fullObj = await env.BUCKET.get(String(obj.key));
+          if (fullObj) {
+            await backupBucket.put(String(obj.key), fullObj.body, {
+              httpMetadata: fullObj.httpMetadata,
+              customMetadata: fullObj.customMetadata,
+            });
+            copiedCount++;
+          }
+        }
+        cursor = listed?.truncated && listed?.cursor ? String(listed.cursor) : undefined;
+        pages++;
+      } while (cursor && pages < 50);
+
+      await logAudit('r2_binary_backup_synced', `Synced ${copiedCount} binary R2 object(s) to BUCKET_BACKUP by ${sessionUser.email}`, sessionUser.email);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          r2BinaryBackupStatus: 'completed',
+          copiedCount,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 0i-6. Safe D1 JSON Backup Restore Endpoint with Dry-Run Validation, Explicit Confirmation, Topological Order & FK Verification
     if (path === '/api/admin/backup-restore' && request.method === 'POST') {
       const sessionUser = await getSessionUser();
-      if (!sessionUser || sessionUser.role !== 'master_host') {
+      if (!sessionUser) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (sessionUser.role !== 'master_host') {
         return new Response(JSON.stringify({ error: 'Host authorization required' }), {
           status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -3269,61 +4393,265 @@ export default {
 
       const body = (await request.json().catch(() => ({}))) as {
         tables?: Record<string, any[]>;
+        dryRun?: boolean;
+        confirmPhrase?: string;
         overwriteExisting?: boolean;
       };
-      if (!body.tables || typeof body.tables !== 'object') {
+      if (!body.tables || typeof body.tables !== 'object' || Array.isArray(body.tables)) {
         return new Response(JSON.stringify({ error: 'Invalid backup payload: missing tables object' }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
-      const allowedTables = new Set([
-        'class_sets',
-        'profile_submissions',
-        'media_assets',
-        'slot_ledger',
-        'transactions',
-        'programmes',
-        'cohort_allocations',
+      const hostName = url.hostname.toLowerCase();
+      const explicitEnv = String((env as any).ENVIRONMENT || (env as any).ENV_MODE || '').trim().toLowerCase();
+      const environmentMode: 'development' | 'staging' | 'production' =
+        explicitEnv === 'production' || explicitEnv === 'staging' || explicitEnv === 'development'
+          ? (explicitEnv as 'development' | 'staging' | 'production')
+          : hostName.includes('localhost') || hostName.includes('127.0.0.1') || hostName.startsWith('ais-dev-')
+          ? 'development'
+          : hostName.startsWith('ais-pre-') || hostName.includes('staging') || hostName.includes('preview')
+          ? 'staging'
+          : 'production';
+
+      // Default to dryRun = true unless explicitly passed as dryRun: false
+      const isDryRun = body.dryRun !== false;
+
+      if (body.overwriteExisting) {
+        return new Response(
+          JSON.stringify({
+            error: 'overwrite_restore_disabled',
+            message: 'Destructive overwrite restoration (INSERT OR REPLACE) is disabled to protect existing records and foreign-key relationships. Use safe additive restoration (overwriteExisting: false).',
+          }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (!isDryRun && body.confirmPhrase !== 'CONFIRM_D1_RESTORE') {
+        return new Response(
+          JSON.stringify({
+            error: 'confirmation_required',
+            message: 'Executing a live D1 restore requires dryRun: false and confirmPhrase: "CONFIRM_D1_RESTORE". Run a dry-run preview first.',
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Parent-first topological table restoration order across all 17 tables
+      const orderedTables = [
         'platform_settings',
-        'users',
         'institutions',
+        'users',
+        'programmes',
+        'class_sets',
+        'cohort_allocations',
+        'slot_allocations',
+        'registrations',
+        'profile_submissions',
+        'slot_ledger',
+        'media_assets',
+        'transactions',
         'testimonials',
         'site_content',
-      ]);
-      const insertVerb = body.overwriteExisting ? 'INSERT OR REPLACE' : 'INSERT OR IGNORE';
-      const restoredCounts: Record<string, number> = {};
+        'support_messages',
+        'disputes',
+        'audit_logs',
+      ];
+      const primaryKeyColByTable: Record<string, string> = {
+        platform_settings: 'key',
+        site_content: 'key',
+      };
 
-      for (const [tableName, rows] of Object.entries(body.tables)) {
-        if (!allowedTables.has(tableName) || !Array.isArray(rows) || rows.length === 0) continue;
-        let count = 0;
-        for (const row of rows) {
-          if (!row || typeof row !== 'object') continue;
-          const cols = Object.keys(row).filter((c) => /^[a-zA-Z0-9_]+$/.test(c));
-          if (cols.length === 0) continue;
-          const placeholders = cols.map(() => '?').join(', ');
-          const values = cols.map((c) => row[c]);
-          try {
-            await env.DB.prepare(`${insertVerb} INTO ${tableName} (${cols.join(', ')}) VALUES (${placeholders})`)
-              .bind(...values)
-              .run();
-            count++;
-          } catch {}
+      // Pre-load existing primary keys and class_set IDs for conflict & FK validation
+      const existingClassSetIds = new Set<string>();
+      try {
+        const csRes = await env.DB.prepare(`SELECT id FROM class_sets`).all();
+        for (const r of csRes?.results || []) {
+          if (r?.id) existingClassSetIds.add(String(r.id));
         }
-        restoredCounts[tableName] = count;
+      } catch {}
+      const incomingClassSetIds = new Set<string>(existingClassSetIds);
+      if (Array.isArray(body.tables.class_sets)) {
+        for (const r of body.tables.class_sets) {
+          if (r && typeof r === 'object' && r.id) incomingClassSetIds.add(String(r.id));
+        }
+      }
+
+      const tableSummaries: Record<string, { incomingRows: number; newRowsToInsert: number; existingConflictsSkipped: number; invalidRows: number }> = {};
+      const foreignKeyErrors: Array<{ table: string; rowId: string; referencedAlbumId: string; message: string }> = [];
+      const invalidRows: Array<{ table: string; index: number; reason: string }> = [];
+      const statementsToExecute: any[] = [];
+
+      for (const tableName of orderedTables) {
+        const rows = body.tables[tableName];
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+
+        const pkCol = primaryKeyColByTable[tableName] || 'id';
+        const existingPks = new Set<string>();
+        try {
+          const pkRes = await env.DB.prepare(`SELECT ${pkCol} FROM ${tableName}`).all();
+          for (const er of pkRes?.results || []) {
+            if (er && er[pkCol] !== undefined && er[pkCol] !== null) {
+              existingPks.add(String(er[pkCol]));
+            }
+          }
+        } catch {}
+
+        let newRowsToInsert = 0;
+        let existingConflictsSkipped = 0;
+        let tableInvalidRows = 0;
+
+        for (let idx = 0; idx < rows.length; idx++) {
+          const row = rows[idx];
+          if (!row || typeof row !== 'object' || Array.isArray(row)) {
+            tableInvalidRows++;
+            invalidRows.push({ table: tableName, index: idx, reason: 'Row is not a valid object' });
+            continue;
+          }
+          const cols = Object.keys(row).filter((c) => /^[a-zA-Z0-9_]+$/.test(c));
+          if (cols.length === 0 || (row[pkCol] === undefined || row[pkCol] === null || String(row[pkCol]).trim() === '')) {
+            tableInvalidRows++;
+            invalidRows.push({ table: tableName, index: idx, reason: `Missing primary key column '${pkCol}'` });
+            continue;
+          }
+
+          // Foreign-key integrity check for child tables referencing class_sets(id)
+          if (tableName === 'profile_submissions' || tableName === 'slot_ledger') {
+            const refAlbumId = String(row.album_id || '').trim();
+            if (!refAlbumId || !incomingClassSetIds.has(refAlbumId)) {
+              foreignKeyErrors.push({
+                table: tableName,
+                rowId: String(row[pkCol]),
+                referencedAlbumId: refAlbumId,
+                message: `${tableName} row '${row[pkCol]}' references non-existent class_sets.id '${refAlbumId}'`,
+              });
+              continue;
+            }
+          }
+          if (tableName === 'media_assets') {
+            const refSetId = String(row.set_id || '').trim();
+            if (refSetId && refSetId !== 'site-hero' && !incomingClassSetIds.has(refSetId)) {
+              foreignKeyErrors.push({
+                table: tableName,
+                rowId: String(row[pkCol]),
+                referencedAlbumId: refSetId,
+                message: `media_assets row '${row[pkCol]}' references non-existent class_sets.id '${refSetId}'`,
+              });
+              continue;
+            }
+          }
+
+          const pkVal = String(row[pkCol]);
+          if (existingPks.has(pkVal)) {
+            existingConflictsSkipped++;
+            continue;
+          }
+
+          // Do not restore '[REDACTED]' placeholder over real tokens
+          const cleanRow: Record<string, any> = { ...row };
+          if (tableName === 'profile_submissions' && cleanRow.status_token_hash === '[REDACTED]') {
+            cleanRow.status_token_hash = null;
+          }
+
+          const cleanCols = Object.keys(cleanRow).filter((c) => /^[a-zA-Z0-9_]+$/.test(c));
+          const placeholders = cleanCols.map(() => '?').join(', ');
+          const values = cleanCols.map((c) => cleanRow[c]);
+
+          statementsToExecute.push(
+            env.DB.prepare(`INSERT OR IGNORE INTO ${tableName} (${cleanCols.join(', ')}) VALUES (${placeholders})`).bind(...values)
+          );
+          newRowsToInsert++;
+        }
+
+        tableSummaries[tableName] = {
+          incomingRows: rows.length,
+          newRowsToInsert,
+          existingConflictsSkipped,
+          invalidRows: tableInvalidRows,
+        };
+      }
+
+      const valid = foreignKeyErrors.length === 0 && invalidRows.length === 0;
+
+      if (isDryRun) {
+        await logAudit(
+          'database_backup_restore_dry_run',
+          `D1 backup restore dry-run validated (valid=${valid}, statements=${statementsToExecute.length}, fkErrors=${foreignKeyErrors.length}) by ${sessionUser.email}`,
+          sessionUser.email
+        );
+        return new Response(
+          JSON.stringify({
+            success: valid,
+            dryRun: true,
+            valid,
+            environment: environmentMode,
+            totalStatementsReady: statementsToExecute.length,
+            tableSummaries,
+            foreignKeyErrors,
+            invalidRows,
+            requiredConfirmPhrase: 'CONFIRM_D1_RESTORE',
+          }),
+          { status: valid ? 200 : 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (!valid) {
+        return new Response(
+          JSON.stringify({
+            error: 'backup_validation_failed',
+            message: 'Backup restoration aborted due to validation or foreign-key integrity errors. No database records were modified.',
+            valid: false,
+            tableSummaries,
+            foreignKeyErrors,
+            invalidRows,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      try {
+        if (statementsToExecute.length > 0) {
+          await env.DB.batch(statementsToExecute);
+        }
+      } catch (batchErr: any) {
+        await logAudit(
+          'database_backup_restore_failed',
+          `D1 backup batch restore failed for ${sessionUser.email}: ${batchErr?.message || 'Batch execution error'}`,
+          sessionUser.email
+        );
+        return new Response(
+          JSON.stringify({
+            error: 'restore_execution_failed',
+            message: `Transactional batch restore failed: ${batchErr?.message || 'Database error'}`,
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const restoredCounts: Record<string, number> = {};
+      for (const [tbl, sum] of Object.entries(tableSummaries)) {
+        restoredCounts[tbl] = sum.newRowsToInsert;
       }
 
       await logAudit(
         'database_backup_restored',
-        `D1 backup restored (overwrite=${Boolean(body.overwriteExisting)}) by ${sessionUser.email}: ${JSON.stringify(restoredCounts)}`,
+        `D1 backup restored safely (INSERT OR IGNORE, batch=${statementsToExecute.length}) by ${sessionUser.email}: ${JSON.stringify(restoredCounts)}`,
         sessionUser.email
       );
 
-      return new Response(JSON.stringify({ success: true, restoredCounts }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({
+          success: true,
+          dryRun: false,
+          restoredCounts,
+          tableSummaries,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
     }
 
     // 0j. Public Auth Status Endpoint (System Check: reports env vars as set ONLY if the env var truly exists, never because of a default)
@@ -3392,12 +4720,47 @@ export default {
               graduationYear: yearParam,
             })
           : null;
+
+      // Determine active Founding Class / Departmental Discount % from settings or active discount programme in D1
+      let foundingDiscountPercent = Number(settings.default_discount_percent);
+      if (!Number.isFinite(foundingDiscountPercent) || foundingDiscountPercent < 0 || foundingDiscountPercent > 99) {
+        foundingDiscountPercent = 20;
+      }
+      let foundingDiscountName =
+        (settings.founding_discount_name || '').trim() || 'Founding Class Departmental Discount';
+      let foundingDiscountDescription =
+        (settings.founding_discount_description || '').trim() ||
+        'Special rate for the founding graduating class of a department.';
+      if (env.DB) {
+        try {
+          const activeDiscProg = await env.DB.prepare(
+            `SELECT name, discount_percent FROM programmes WHERE kind = 'discount' AND status = 'active' ORDER BY updated_at DESC LIMIT 1`
+          ).first();
+          if (activeDiscProg && Number(activeDiscProg.discount_percent) > 0) {
+            if (!settings.default_discount_percent_explicit) {
+              foundingDiscountPercent = Number(activeDiscProg.discount_percent);
+            }
+            if (activeDiscProg.name && !settings.founding_discount_name) {
+              foundingDiscountName = String(activeDiscProg.name);
+            }
+          }
+        } catch {}
+      }
+
+      const studentFeeKobo = Number(settings.student_fee_kobo) || 100000;
+      const discountedFeeKobo = Math.max(0, Math.round((studentFeeKobo * (100 - foundingDiscountPercent)) / 100));
+
       return new Response(
         JSON.stringify({
           paystackPublicKey,
           mode,
           settings,
-          studentFeeKobo: Number(settings.student_fee_kobo) || 50000,
+          studentFeeKobo,
+          foundingDiscountPercent,
+          foundingDiscountName,
+          foundingDiscountDescription,
+          discountedFeeKobo,
+          compressionResolutionPx: Number(settings.compression_resolution_px) || 1440,
           resolvedPricing,
         }),
         {
@@ -3588,12 +4951,16 @@ export default {
         const activeAlbumObjects: any[] = [];
 
         if (d1Status.reachable && d1Status.tablesPresent) {
-          // Scan all class_sets so we match admin_user_id OR data_json.classRepEmail OR coAdmins OR adminHistory
+          // Purge any soft-deleted albums that have passed their 30-day recovery deadline before evaluating login
+          await cleanupExpiredSoftDeletedAlbums(env);
+
+          // Scan all class_sets (including soft-deleted albums still within their 30-day recovery window)
           try {
             const allSetsRes = await env.DB.prepare(
-              `SELECT * FROM class_sets WHERE status != 'deleted' ORDER BY created_at DESC`
+              `SELECT * FROM class_sets ORDER BY created_at DESC`
             ).all();
             const allRows = allSetsRes?.results || [];
+            const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
 
             // Also check transactions & registrations for any album_id linked to userEmail
             const ownedAlbumIdsFromTx = new Set<string>();
@@ -3611,6 +4978,15 @@ export default {
             for (const sRow of allRows) {
               let parsedSet: any = {};
               try { parsedSet = JSON.parse(sRow.data_json || '{}'); } catch {}
+              const isDeleted = sRow.status === 'deleted' || Boolean(parsedSet.deletedAt);
+              if (isDeleted) {
+                if (parsedSet.keepByHost || parsedSet.keptByHostOnly) continue;
+                const delMs = parsedSet.deletedAt ? new Date(parsedSet.deletedAt).getTime() : 0;
+                if (!delMs || Date.now() - delMs >= thirtyDaysMs) {
+                  continue;
+                }
+              }
+
               const rowAdmin = String(sRow.admin_user_id || '').trim().toLowerCase();
               const jsonEmail = String(parsedSet.classRepEmail || parsedSet.currentAdminEmail || '').trim().toLowerCase();
               const inHistory = Array.isArray(parsedSet.adminHistory) && parsedSet.adminHistory.some(
@@ -3642,6 +5018,8 @@ export default {
                   classRepEmail: userEmail,
                   classRepName: parsedSet.classRepName || userName,
                   inviteCode: String(sRow.invite_code || parsedSet.inviteCode || computeInviteCode(sRow.id)),
+                  deletedAt: parsedSet.deletedAt || (sRow.status === 'deleted' ? sRow.updated_at || new Date().toISOString() : undefined),
+                  lifecycleStatus: isDeleted ? 'deleted' : (sRow.status || parsedSet.lifecycleStatus || 'draft'),
                 };
                 activeAlbumObjects.push(hydrated);
                 activeAlbums.push({
@@ -3923,14 +5301,21 @@ export default {
 
       if (env.DB && user.email && user.role !== 'master_host') {
         try {
+          await cleanupExpiredSoftDeletedAlbums(env);
           const emailLower = user.email.trim().toLowerCase();
-          const allSetsRes = await env.DB.prepare(`SELECT * FROM class_sets WHERE status != 'deleted' ORDER BY created_at DESC`).all();
+          const allSetsRes = await env.DB.prepare(`SELECT * FROM class_sets ORDER BY created_at DESC`).all();
           const matchedRows: Array<{ row: any; parsed: any; score: number }> = [];
+          const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
 
           for (const sRow of allSetsRes?.results || []) {
             let parsedSet: any = {};
             try { parsedSet = JSON.parse(sRow.data_json || '{}'); } catch {}
-            if (parsedSet.deletedAt) continue;
+            const isDeleted = sRow.status === 'deleted' || Boolean(parsedSet.deletedAt);
+            if (isDeleted) {
+              if (parsedSet.keepByHost || parsedSet.keptByHostOnly) continue;
+              const delMs = parsedSet.deletedAt ? new Date(parsedSet.deletedAt).getTime() : 0;
+              if (!delMs || Date.now() - delMs >= thirtyDaysMs) continue;
+            }
             const rowAdmin = String(sRow.admin_user_id || '').trim().toLowerCase();
             const jsonEmail = String(parsedSet.classRepEmail || parsedSet.currentAdminEmail || '').trim().toLowerCase();
             const inCoAdmins = Array.isArray(parsedSet.coAdmins) && parsedSet.coAdmins.some(
@@ -3938,6 +5323,7 @@ export default {
             );
             if (rowAdmin === emailLower || jsonEmail === emailLower || inCoAdmins) {
               const score =
+                (isDeleted ? 0 : 1000) +
                 (Array.isArray(parsedSet.students) ? parsedSet.students.length * 10 : 0) +
                 (Array.isArray(parsedSet.memories) ? parsedSet.memories.length * 5 : 0) +
                 (Number(parsedSet.totalSlotsCredited) || 0);
@@ -3950,6 +5336,7 @@ export default {
             user.assignedSetId = String(matchedRows[0].row.id);
             for (const m of matchedRows) {
               const aid = String(m.row.id);
+              const isDeleted = m.row.status === 'deleted' || Boolean(m.parsed.deletedAt);
               if (!ownedAlbumIds.includes(aid)) ownedAlbumIds.push(aid);
               albumObjects.push({
                 ...m.parsed,
@@ -3960,6 +5347,8 @@ export default {
                 graduationYear: Number(m.row.graduation_year || m.parsed.graduationYear),
                 classRepEmail: emailLower,
                 inviteCode: String(m.row.invite_code || m.parsed.inviteCode || computeInviteCode(aid)),
+                deletedAt: m.parsed.deletedAt || (isDeleted ? m.row.updated_at || new Date().toISOString() : undefined),
+                lifecycleStatus: isDeleted ? 'deleted' : (m.row.status || m.parsed.lifecycleStatus || 'draft'),
               });
             }
           }
@@ -4066,6 +5455,7 @@ export default {
       const sessionUser = await getSessionUser();
       const isHost = Boolean(sessionUser && sessionUser.role === 'master_host');
       const isHeroVideoUpload = category === 'hero-video' || category === 'hero-poster' || rawSetId === 'site-hero';
+      const isAmbientAudioUpload = category === 'ambient-audio' || rawSetId === 'site-audio';
 
       // Parse data URL: data:<mime>;base64,<payload>
       const dataUrlMatch = dataUrl.match(/^data:([a-zA-Z0-9/+.-]+);base64,(.+)$/);
@@ -4089,6 +5479,18 @@ export default {
         'video/mp4': 'mp4',
         'video/webm': 'webm',
       };
+      const allowedAudioMimes: Record<string, string> = {
+        'audio/mpeg': 'mp3',
+        'audio/mp3': 'mp3',
+        'audio/wav': 'wav',
+        'audio/x-wav': 'wav',
+        'audio/ogg': 'ogg',
+        'audio/mp4': 'm4a',
+        'audio/x-m4a': 'm4a',
+        'audio/m4a': 'm4a',
+        'audio/aac': 'aac',
+        'audio/webm': 'webm',
+      };
 
       let ext = '';
       let maxBytes = 2 * 1024 * 1024; // 2 MB default for images
@@ -4108,6 +5510,21 @@ export default {
           );
         }
         maxBytes = 15 * 1024 * 1024; // 15 MB for hero video
+      } else if (isAmbientAudioUpload) {
+        if (!isHost) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Only the Master Host can upload ambient album audio.' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        ext = allowedAudioMimes[mimeType] || '';
+        if (!ext) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Ambient soundtrack must be MP3, WAV, OGG, M4A, or AAC audio.' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        maxBytes = 15 * 1024 * 1024; // 15 MB for ambient audio
       } else {
         ext = allowedImageMimes[mimeType] || '';
         if (!ext) {
@@ -4120,12 +5537,12 @@ export default {
       }
 
       // Authorization check:
-      // 1. Host can upload anything (including hero video/poster)
+      // 1. Host can upload anything (including hero video/poster/ambient audio)
       // 2. Valid inviteToken for this album (or demo album) allows invite/dashboard image uploads
       // 3. Authenticated Admin who owns setId
       let uploaderIdentifier = sessionUser?.email || '';
       if (!isHost) {
-        if (isHeroVideoUpload) {
+        if (isHeroVideoUpload || isAmbientAudioUpload) {
           return new Response(
             JSON.stringify({ success: false, error: 'Host authorization required.' }),
             { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -4202,12 +5619,14 @@ export default {
 
       const safeAlbumId = isHeroVideoUpload
         ? 'site-hero'
+        : isAmbientAudioUpload
+        ? 'site-audio'
         : rawSetId.replace(/[^a-zA-Z0-9_-]/g, '_');
       const uuid = crypto.randomUUID();
       const objectKey = `albums/${safeAlbumId}/${uuid}.${ext}`;
       const publicUrl = `/media/${objectKey}`;
       const mediaId = `med-${uuid}`;
-      const normalizedMime = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+      const normalizedMime = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType === 'audio/mp3' ? 'audio/mpeg' : mimeType;
 
       try {
         await env.BUCKET.put(objectKey, binaryBytes, {
@@ -4250,8 +5669,8 @@ export default {
           throw new Error('Database did not confirm media_assets record.');
         }
 
-        // If this is a Host hero video or poster upload, also save its key in website_content_overrides
-        if (isHost && (category === 'hero-video' || category === 'hero-poster')) {
+        // If this is a Host hero video, poster, or ambient audio upload, also save its key in website_content_overrides and clean up replaced R2 asset
+        if (isHost && (category === 'hero-video' || category === 'hero-poster' || isAmbientAudioUpload)) {
           try {
             const existingRow = await env.DB.prepare(`SELECT * FROM website_content_overrides WHERE id = 'default'`).first();
             let siteContent: any = {};
@@ -4260,6 +5679,8 @@ export default {
             }
             const oldKey = category === 'hero-video'
               ? (siteContent.heroVideoKey || extractMediaKeyFromUrl(siteContent.heroVideoUrl))
+              : isAmbientAudioUpload
+              ? (siteContent.albumBackgroundMusicKey || extractMediaKeyFromUrl(siteContent.albumBackgroundMusicUrl))
               : (siteContent.heroPosterKey || extractMediaKeyFromUrl(siteContent.heroPosterUrl));
             if (oldKey && oldKey !== objectKey) {
               await deleteR2ObjectAndRecord(oldKey);
@@ -4267,6 +5688,9 @@ export default {
             if (category === 'hero-video') {
               siteContent.heroVideoUrl = publicUrl;
               siteContent.heroVideoKey = objectKey;
+            } else if (isAmbientAudioUpload) {
+              siteContent.albumBackgroundMusicUrl = publicUrl;
+              siteContent.albumBackgroundMusicKey = objectKey;
             } else {
               siteContent.heroPosterUrl = publicUrl;
               siteContent.heroPosterKey = objectKey;
@@ -4276,6 +5700,9 @@ export default {
             )
               .bind(JSON.stringify(siteContent))
               .run();
+            if (oldKey && oldKey !== objectKey) {
+              await deleteR2ObjectAndRecord(oldKey);
+            }
           } catch {}
         }
 
@@ -4592,10 +6019,12 @@ export default {
       if (!env.DB) {
         return { applied: false, status: 'db_unavailable', error: 'Database unavailable' };
       }
+      await ensureCohortOffersSchema();
       const pskStatus = String(pskData?.status || '').toLowerCase();
       const pskCurrency = String(pskData?.currency || 'NGN').toUpperCase();
       const pskAmountKobo = Number(pskData?.amount) || 0;
       const pskRef = String(pskData?.reference || reference).trim();
+      const pskDomainRaw = String(pskData?.domain || '').trim().toLowerCase();
 
       if (pskStatus !== 'success' || pskCurrency !== 'NGN' || pskRef !== reference) {
         return { applied: false, status: 'verification_mismatch', error: 'Payment status, currency, or reference did not match.' };
@@ -4611,12 +6040,40 @@ export default {
         try { storedMeta = JSON.parse(txRow.raw_payload_json); } catch {}
       }
 
+      // Never overwrite a transaction that has been explicitly voided by a Host administrator
+      if (txRow && String(txRow.status || '').toLowerCase() === 'voided') {
+        return {
+          applied: false,
+          status: 'voided',
+          error: 'Transaction has been voided by a Host administrator and cannot be re-applied without explicit restoration.',
+        };
+      }
+
+      // Resolve authoritative payment environment from Paystack's verified domain ('test' or 'live')
+      const resolvedEnvironment: 'live' | 'test' | 'legacy' =
+        pskDomainRaw === 'live'
+          ? 'live'
+          : pskDomainRaw === 'test'
+          ? 'test'
+          : txRow?.environment === 'live' || storedMeta?.environment === 'live' || storedMeta?.paystackDomain === 'live'
+          ? 'live'
+          : txRow?.environment === 'test' || storedMeta?.environment === 'test' || storedMeta?.paystackDomain === 'test'
+          ? 'test'
+          : 'legacy';
+
       // If pending transaction exists, require exact amount match
       if (txRow && Number(txRow.amount_kobo) > 0 && Number(txRow.amount_kobo) !== pskAmountKobo) {
         return { applied: false, status: 'amount_mismatch', error: 'Verified amount does not match initialized payment amount.' };
       }
 
-      const meta = { ...safePskMeta, ...storedMeta };
+      const meta = {
+        ...safePskMeta,
+        ...storedMeta,
+        environment: resolvedEnvironment,
+        paystackDomain: pskDomainRaw || resolvedEnvironment,
+        verifiedByPaystack: true,
+        verifiedLiveByPaystack: pskDomainRaw === 'live' || Boolean(storedMeta?.verifiedLiveByPaystack),
+      };
       const paymentType: 'student' | 'slots' | 'unknown' =
         meta.type === 'student' || meta.submission_id
           ? 'student'
@@ -4632,6 +6089,75 @@ export default {
         .slice(0, 60);
       const payerEmail = String(pskData?.customer?.email || txRow?.payer_email || meta.payerEmail || '').trim().toLowerCase();
 
+      const upsertVerifiedTransactionRow = async (params: {
+        status: string;
+        payerName: string;
+        metaJson: string;
+      }): Promise<boolean> => {
+        if (txRow) {
+          const updRes = await env.DB.prepare(
+            `UPDATE transactions
+             SET set_id = ?,
+                 set_name = ?,
+                 institution = ?,
+                 amount = ?,
+                 amount_kobo = ?,
+                 currency = 'NGN',
+                 status = ?,
+                 environment = ?,
+                 payer_name = ?,
+                 payer_email = ?,
+                 programme_id = ?,
+                 list_price_kobo = ?,
+                 discount_kobo = ?,
+                 paystack_data_json = ?
+             WHERE reference = ? AND LOWER(TRIM(COALESCE(status, ''))) != 'voided'`
+          )
+            .bind(
+              albumId || null,
+              String(meta.department || txRow.set_name || ''),
+              String(meta.institution || txRow.institution || ''),
+              Math.round(pskAmountKobo / 100),
+              pskAmountKobo,
+              params.status,
+              resolvedEnvironment,
+              params.payerName,
+              payerEmail,
+              txRow.programme_id || meta.programme_id || null,
+              Number(txRow.list_price_kobo || meta.list_price_kobo) || pskAmountKobo,
+              Number(txRow.discount_kobo || meta.discount_kobo) || 0,
+              params.metaJson,
+              reference
+            )
+            .run();
+          return Number((updRes as any)?.meta?.changes ?? 1) > 0;
+        }
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, environment, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+        )
+          .bind(
+            `tx-${reference}`,
+            reference,
+            albumId || null,
+            String(meta.department || ''),
+            String(meta.institution || ''),
+            Math.round(pskAmountKobo / 100),
+            pskAmountKobo,
+            params.status,
+            resolvedEnvironment,
+            params.payerName,
+            payerEmail,
+            meta.programme_id || null,
+            Number(meta.list_price_kobo) || pskAmountKobo,
+            Number(meta.discount_kobo) || 0,
+            params.metaJson
+          )
+          .run();
+        const checkAfter = await env.DB.prepare(`SELECT status FROM transactions WHERE reference = ?`).bind(reference).first();
+        return String(checkAfter?.status || '').toLowerCase().trim() !== 'voided';
+      };
+
       // Apply student submission payment
       if (paymentType === 'student' && albumId && submissionId) {
         const subRow = await env.DB.prepare(
@@ -4642,29 +6168,58 @@ export default {
 
         if (!subRow) {
           // Paid but nothing created -> store as "paid, needs review"
-          const reviewMeta = JSON.stringify({ ...meta, paymentCategory: 'student_submission', albumId, payerEmail });
-          await env.DB.prepare(
-            `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'paid, needs review', ?, ?, ?, datetime('now'))`
-          )
-            .bind(
-              txRow?.id || `tx-${reference}`,
-              reference,
-              albumId,
-              String(meta.department || ''),
-              String(meta.institution || ''),
-              Math.round(pskAmountKobo / 100),
-              pskAmountKobo,
-              payerEmail,
-              payerEmail,
-              reviewMeta
-            )
-            .run();
-          return { applied: false, status: 'paid, needs review', paymentType: 'student', albumId, submissionId };
+          const reviewMeta = JSON.stringify({
+            ...meta,
+            paymentCategory: 'student_submission',
+            albumId,
+            payerEmail,
+            environment: resolvedEnvironment,
+            paystackDomain: pskDomainRaw || resolvedEnvironment,
+          });
+          const updatedOk = await upsertVerifiedTransactionRow({
+            status: 'paid, needs review',
+            payerName: payerEmail,
+            metaJson: reviewMeta,
+          });
+          if (!updatedOk) {
+            return {
+              applied: false,
+              status: 'voided',
+              error: 'Transaction has been voided by a Host administrator and cannot be re-applied without explicit restoration.',
+            };
+          }
+          return { applied: false, status: 'paid, needs review', paymentType: 'student', albumId, submissionId, environment: resolvedEnvironment };
         }
+
+        const completedMeta = JSON.stringify({
+          ...meta,
+          paymentCategory: 'student_submission',
+          albumId,
+          submissionId,
+          payerEmail,
+          universityName: meta.institution || '',
+          departmentName: meta.department || '',
+          graduationYear: meta.set_year || '',
+          environment: resolvedEnvironment,
+          paystackDomain: pskDomainRaw || resolvedEnvironment,
+        });
 
         let subPayload: any = {};
         try { subPayload = JSON.parse(subRow.payload_json || '{}'); } catch {}
+
+        const updatedOk = await upsertVerifiedTransactionRow({
+          status: 'Paid',
+          payerName: subPayload.fullName || payerEmail,
+          metaJson: completedMeta,
+        });
+        if (!updatedOk) {
+          return {
+            applied: false,
+            status: 'voided',
+            error: 'Transaction has been voided by a Host administrator and cannot be re-applied without explicit restoration.',
+          };
+        }
+
         subPayload.paymentStatus = 'paid';
         subPayload.paidReference = reference;
 
@@ -4697,87 +6252,88 @@ export default {
           } catch {}
         }
 
-        const completedMeta = JSON.stringify({
-          ...meta,
-          paymentCategory: 'student_submission',
-          albumId,
-          submissionId,
-          payerEmail,
-          universityName: meta.institution || '',
-          departmentName: meta.department || '',
-          graduationYear: meta.set_year || '',
-        });
-
-        await env.DB.prepare(
-          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, ?, ?, ?, datetime('now'))`
-        )
-          .bind(
-            txRow?.id || `tx-${reference}`,
-            reference,
-            albumId,
-            String(meta.department || ''),
-            String(meta.institution || ''),
-            Math.round(pskAmountKobo / 100),
-            pskAmountKobo,
-            subPayload.fullName || payerEmail,
-            payerEmail,
-            txRow?.programme_id || meta.programme_id || null,
-            Number(txRow?.list_price_kobo || meta.list_price_kobo) || pskAmountKobo,
-            Number(txRow?.discount_kobo || meta.discount_kobo) || 0,
-            completedMeta
-          )
-          .run();
-
-        return { applied: true, status: 'Paid', paymentType: 'student', albumId, submissionId };
+        return { applied: true, status: 'Paid', paymentType: 'student', albumId, submissionId, environment: resolvedEnvironment };
       }
 
       // Apply slot purchase payment
       if (paymentType === 'slots' && albumId && quantity >= 1) {
         const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
         if (!albumRow) {
-          const reviewMeta = JSON.stringify({ ...meta, paymentCategory: 'slot_purchase', albumId, slotsPurchased: quantity, sponsorName, payerEmail });
-          await env.DB.prepare(
-            `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'paid, needs review', ?, ?, ?, datetime('now'))`
-          )
-            .bind(
-              txRow?.id || `tx-${reference}`,
-              reference,
-              albumId,
-              String(meta.department || ''),
-              String(meta.institution || ''),
-              Math.round(pskAmountKobo / 100),
-              pskAmountKobo,
-              sponsorName || payerEmail,
-              payerEmail,
-              reviewMeta
-            )
-            .run();
-          return { applied: false, status: 'paid, needs review', paymentType: 'slots', albumId };
+          const reviewMeta = JSON.stringify({
+            ...meta,
+            paymentCategory: 'slot_purchase',
+            albumId,
+            slotsPurchased: quantity,
+            sponsorName,
+            payerEmail,
+            environment: resolvedEnvironment,
+            paystackDomain: pskDomainRaw || resolvedEnvironment,
+          });
+          const updatedOk = await upsertVerifiedTransactionRow({
+            status: 'paid, needs review',
+            payerName: sponsorName || payerEmail,
+            metaJson: reviewMeta,
+          });
+          if (!updatedOk) {
+            return {
+              applied: false,
+              status: 'voided',
+              error: 'Transaction has been voided by a Host administrator and cannot be re-applied without explicit restoration.',
+            };
+          }
+          return { applied: false, status: 'paid, needs review', paymentType: 'slots', albumId, environment: resolvedEnvironment };
         }
 
         const purchaseId = String(meta.purchase_id || `spurch-${reference}`);
         const unitFeeKobo = Math.round(pskAmountKobo / quantity);
 
+        const completedMeta = JSON.stringify({
+          ...meta,
+          paymentCategory: 'slot_purchase',
+          albumId,
+          slotsPurchased: quantity,
+          sponsorName,
+          payerEmail,
+          universityName: meta.institution || '',
+          departmentName: meta.department || '',
+          graduationYear: meta.set_year || '',
+          environment: resolvedEnvironment,
+          paystackDomain: pskDomainRaw || resolvedEnvironment,
+        });
+
+        const updatedOk = await upsertVerifiedTransactionRow({
+          status: 'Paid',
+          payerName: sponsorName || payerEmail,
+          metaJson: completedMeta,
+        });
+        if (!updatedOk) {
+          return {
+            applied: false,
+            status: 'voided',
+            error: 'Transaction has been voided by a Host administrator and cannot be re-applied without explicit restoration.',
+          };
+        }
+
         await env.DB.prepare(
-          `INSERT OR IGNORE INTO slot_purchases (id, album_id, quantity, amount_kobo, reference, sponsor_name, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'completed', datetime('now'))`
+          `INSERT OR IGNORE INTO slot_purchases (id, album_id, quantity, amount_kobo, reference, sponsor_name, status, environment, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, datetime('now'))`
         )
-          .bind(purchaseId, albumId, quantity, pskAmountKobo, reference, sponsorName)
+          .bind(purchaseId, albumId, quantity, pskAmountKobo, reference, sponsorName, resolvedEnvironment)
           .run();
 
         await env.DB.prepare(
-          `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, purchase_id, sponsor_name, unit_value_kobo, idempotency_key, created_by, created_at)
-           VALUES (?, ?, ?, 'purchase', ?, ?, ?, ?, ?, datetime('now'))`
+          `INSERT OR IGNORE INTO slot_ledger (id, album_id, delta, kind, purchase_id, reference, sponsor_name, unit_value_kobo, environment, idempotency_key, created_by, created_at)
+           VALUES (?, ?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
         )
           .bind(
             `sled-${reference}`,
             albumId,
             quantity,
             purchaseId,
+            reference,
             sponsorName,
             unitFeeKobo,
+            resolvedEnvironment,
             `purchase:${reference}`,
             payerEmail || sponsorName
           )
@@ -4795,6 +6351,7 @@ export default {
               quantity,
               amountPaid: Math.round(pskAmountKobo / 100),
               reference,
+              environment: resolvedEnvironment,
               date: new Date().toISOString().split('T')[0],
               showSponsorNameOnAlbum: Boolean(sponsorName && sponsorName !== 'Class Sponsor'),
               isKoHotCredit: false,
@@ -4806,63 +6363,30 @@ export default {
           }
         } catch {}
 
-        const completedMeta = JSON.stringify({
-          ...meta,
-          paymentCategory: 'slot_purchase',
-          albumId,
-          slotsPurchased: quantity,
-          sponsorName,
-          payerEmail,
-          universityName: meta.institution || '',
-          departmentName: meta.department || '',
-          graduationYear: meta.set_year || '',
-        });
-
-        await env.DB.prepare(
-          `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'Paid', ?, ?, ?, ?, ?, ?, datetime('now'))`
-        )
-          .bind(
-            txRow?.id || `tx-${reference}`,
-            reference,
-            albumId,
-            String(meta.department || ''),
-            String(meta.institution || ''),
-            Math.round(pskAmountKobo / 100),
-            pskAmountKobo,
-            sponsorName || payerEmail,
-            payerEmail,
-            txRow?.programme_id || meta.programme_id || null,
-            Number(txRow?.list_price_kobo || meta.list_price_kobo) || pskAmountKobo,
-            Number(txRow?.discount_kobo || meta.discount_kobo) || 0,
-            completedMeta
-          )
-          .run();
-
-        return { applied: true, status: 'Paid', paymentType: 'slots', albumId, quantity, purchaseId };
+        return { applied: true, status: 'Paid', paymentType: 'slots', albumId, quantity, purchaseId, environment: resolvedEnvironment };
       }
 
       // Fallback: Paid but nothing created / unknown target -> store as "paid, needs review"
-      const fallbackMeta = JSON.stringify({ ...meta, payerEmail });
-      await env.DB.prepare(
-        `INSERT OR REPLACE INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, paystack_data_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'paid, needs review', ?, ?, ?, datetime('now'))`
-      )
-        .bind(
-          txRow?.id || `tx-${reference}`,
-          reference,
-          albumId || null,
-          String(meta.department || ''),
-          String(meta.institution || ''),
-          Math.round(pskAmountKobo / 100),
-          pskAmountKobo,
-          payerEmail,
-          payerEmail,
-          fallbackMeta
-        )
-        .run();
+      const fallbackMeta = JSON.stringify({
+        ...meta,
+        payerEmail,
+        environment: resolvedEnvironment,
+        paystackDomain: pskDomainRaw || resolvedEnvironment,
+      });
+      const updatedOk = await upsertVerifiedTransactionRow({
+        status: 'paid, needs review',
+        payerName: payerEmail,
+        metaJson: fallbackMeta,
+      });
+      if (!updatedOk) {
+        return {
+          applied: false,
+          status: 'voided',
+          error: 'Transaction has been voided by a Host administrator and cannot be re-applied without explicit restoration.',
+        };
+      }
 
-      return { applied: false, status: 'paid, needs review', paymentType: 'unknown', albumId };
+      return { applied: false, status: 'paid, needs review', paymentType: 'unknown', albumId, environment: resolvedEnvironment };
     };
 
     // 4e-1. POST /api/payments/init
@@ -4873,13 +6397,19 @@ export default {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
+      await ensureCohortOffersSchema();
       const paystackPublicKey = (env.PAYSTACK_PUBLIC_KEY || '').trim();
-      if (!paystackPublicKey || !env.PAYSTACK_SECRET_KEY) {
+      const paystackSecretKey = (env.PAYSTACK_SECRET_KEY || '').trim();
+      if (!paystackPublicKey || !paystackSecretKey) {
         return new Response(
           JSON.stringify({ error: 'payments_not_available', message: 'Payments are not available yet' }),
           { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
+      const initEnvironment: 'live' | 'test' =
+        paystackPublicKey.startsWith('pk_live_') && paystackSecretKey.startsWith('sk_live_')
+          ? 'live'
+          : 'test';
 
       const body = (await request.json().catch(() => ({}))) as {
         type?: 'student' | 'slots';
@@ -5048,6 +6578,7 @@ export default {
           programme_id: programmeId,
           list_price_kobo: listPriceKobo,
           discount_kobo: discountKobo,
+          environment: initEnvironment,
         };
       } else {
         // type === 'slots': require admin session with ownership of albumId
@@ -5089,12 +6620,13 @@ export default {
           programme_id: programmeId,
           list_price_kobo: listPriceKobo,
           discount_kobo: discountKobo,
+          environment: initEnvironment,
         };
       }
 
       await env.DB.prepare(
-        `INSERT INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'pending', ?, ?, ?, ?, ?, ?, datetime('now'))`
+        `INSERT INTO transactions (id, reference, set_id, set_name, institution, amount, amount_kobo, currency, status, environment, payer_name, payer_email, programme_id, list_price_kobo, discount_kobo, paystack_data_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'NGN', 'pending', ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
       )
         .bind(
           `tx-${reference}`,
@@ -5104,6 +6636,7 @@ export default {
           institutionName,
           Math.round(amountKobo / 100),
           amountKobo,
+          initEnvironment,
           payerName,
           payerEmail,
           programmeId,
@@ -5124,6 +6657,7 @@ export default {
           pricing,
           email: payerEmail,
           publicKey: paystackPublicKey,
+          environment: initEnvironment,
           metadata,
         }),
         { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -5656,12 +7190,16 @@ ${message}
           } catch {}
         }
 
-        let totalCredited = ledgerRows.reduce((acc: number, r: any) => acc + (Number(r.delta) > 0 ? Number(r.delta) : 0), 0);
-        let totalUsed = ledgerRows.reduce((acc: number, r: any) => acc + (Number(r.delta) < 0 ? Math.abs(Number(r.delta)) : 0), 0);
+        let totalCredited = ledgerRows
+          .filter((r: any) => String(r.kind || '') !== 'use')
+          .reduce((acc: number, r: any) => acc + (Number(r.delta) || 0), 0);
+        let totalUsed = ledgerRows
+          .filter((r: any) => String(r.kind || '') === 'use')
+          .reduce((acc: number, r: any) => acc + Math.abs(Number(r.delta) || 0), 0);
         let balance = totalCredited - totalUsed;
 
-        // If album data_json has a higher credited slot balance than ledger (e.g. from earlier state), sync it
-        if (totalCredited === 0 && Number(parsed.profileSlotBalance) > 0) {
+        // If album data_json has a higher credited slot balance than ledger (e.g. from earlier state without ledger entries), sync it
+        if (ledgerRows.length === 0 && totalCredited === 0 && Number(parsed.profileSlotBalance) > 0) {
           totalCredited = Number(parsed.totalSlotsCredited) || Number(parsed.profileSlotBalance);
           balance = Number(parsed.profileSlotBalance);
         }
@@ -5706,13 +7244,49 @@ ${message}
 
           if (existingIdx >= 0) {
             const cur = students[existingIdx];
-            if (!cur.photoUrl && resolvedSubPhotoUrl) {
-              cur.photoUrl = resolvedSubPhotoUrl;
+            const isPendingProfileUpdate = sRow.status === 'pending' && Boolean(sPayload.isProfileUpdate || sPayload.submittedAt || sRow.updated_at);
+            if (isPendingProfileUpdate) {
+              if (sPayload.fullName) cur.fullName = sPayload.fullName;
+              if (sPayload.nickname !== undefined) cur.nickname = sPayload.nickname;
+              if (sPayload.position !== undefined) cur.position = sPayload.position;
+              if (sPayload.quote !== undefined) cur.quote = sPayload.quote;
+              if (sPayload.bio !== undefined) cur.bio = sPayload.bio;
+              if (sPayload.myStory !== undefined) cur.myStory = sPayload.myStory;
+              if (sPayload.favouriteCampusMemory !== undefined) cur.favouriteCampusMemory = sPayload.favouriteCampusMemory;
+              if (sPayload.funFact !== undefined) cur.funFact = sPayload.funFact;
+              if (sPayload.whatsNext !== undefined) cur.whatsNext = sPayload.whatsNext;
+              if (sPayload.messageToClassmates !== undefined) cur.messageToClassmates = sPayload.messageToClassmates;
+              if (sPayload.messageToFutureSet !== undefined) cur.messageToFutureSet = sPayload.messageToFutureSet;
+              if (sPayload.socials) cur.socials = sPayload.socials;
+              if (Array.isArray(sPayload.studentAwards)) cur.studentAwards = sPayload.studentAwards;
+              if (resolvedSubPhotoUrl) {
+                cur.photoUrl = resolvedSubPhotoUrl;
+                cur.rawPhotoUrl = resolvedSubPhotoUrl;
+              }
+              if (sPayload.secondaryPhotoUrl) {
+                cur.secondaryPhotoUrl = sPayload.secondaryPhotoUrl;
+                cur.rawSecondaryPhotoUrl = sPayload.secondaryPhotoUrl;
+              }
+              cur.approved = false;
+              cur.status = 'pending';
+              cur.submissionStatus = 'pending';
+              cur.isProfileUpdate = true;
               modified = true;
-            }
-            if (!cur.secondaryPhotoUrl && sPayload.secondaryPhotoUrl) {
-              cur.secondaryPhotoUrl = sPayload.secondaryPhotoUrl;
-              modified = true;
+            } else {
+              if (!cur.photoUrl && resolvedSubPhotoUrl) {
+                cur.photoUrl = resolvedSubPhotoUrl;
+                modified = true;
+              }
+              if (!cur.secondaryPhotoUrl && sPayload.secondaryPhotoUrl) {
+                cur.secondaryPhotoUrl = sPayload.secondaryPhotoUrl;
+                modified = true;
+              }
+              if (isApprovedSub && !cur.approved && sRow.status === 'approved') {
+                cur.approved = true;
+                cur.status = 'approved';
+                cur.submissionStatus = 'approved';
+                modified = true;
+              }
             }
             if (isPaidSub && cur.paymentStatus !== 'paid') {
               cur.paymentStatus = 'paid';
@@ -5724,10 +7298,6 @@ ${message}
               cur.slotConsumed = true;
               modified = true;
             }
-            if (isApprovedSub && !cur.approved && sRow.status === 'approved') {
-              cur.approved = true;
-              modified = true;
-            }
           } else if (sRow.status !== 'draft' && sRow.status !== 'declined') {
             students.push({
               ...sPayload,
@@ -5736,6 +7306,8 @@ ${message}
               personalEmail: sEmail || sPayload.personalEmail,
               email: sEmail || sPayload.email,
               approved: isApprovedSub,
+              status: isApprovedSub ? 'approved' : 'pending',
+              submissionStatus: isApprovedSub ? 'approved' : 'pending',
               paymentStatus: isPaidSub ? 'paid' : (sPayload.paymentStatus || 'unpaid'),
               paidReference: sRow.paid_reference || sPayload.paidReference,
               usedSlot: usedSlotSub,
@@ -6064,9 +7636,13 @@ ${message}
       }
 
       const canonicalDepartmentId = normalizeDepartmentCohortSlug(institutionId, rawDepartmentId, departmentName);
-      const canonicalAlbumId = getCanonicalAlbumId(institutionId, canonicalDepartmentId, graduationYear, departmentName);
+      const canonicalCohortKey = getCanonicalCohortKey(institutionId, canonicalDepartmentId, graduationYear, departmentName);
       const departmentId = canonicalDepartmentId || rawDepartmentId;
-      const newAlbumId = canonicalAlbumId;
+      // Separate permanent album ID from canonical cohort key while enforcing one-album-per-cohort uniqueness
+      const newAlbumId =
+        albumPayload.id && String(albumPayload.id).trim() && String(albumPayload.id).trim() !== canonicalCohortKey
+          ? String(albumPayload.id).trim()
+          : generatePermanentAlbumId(institutionId, canonicalDepartmentId, graduationYear, departmentName);
       const nowIso = new Date().toISOString();
       const classSetTitle = String(
         albumPayload.classSetName || albumPayload.CohortLabel || `Class of ${graduationYear}`
@@ -6181,9 +7757,14 @@ ${message}
           return rInst === institutionId.toLowerCase() && rDept === canonicalDepartmentId && rYear === graduationYear;
         });
 
-        const ownedSoftDeleted = deletedSameCohortRows.find(
-          (r: any) => String(r.admin_user_id || '').toLowerCase() === verifiedEmail.toLowerCase()
-        );
+        const ownedSoftDeleted = deletedSameCohortRows.find((r: any) => {
+          let rp: any = {};
+          try { rp = JSON.parse(r.data_json || '{}'); } catch {}
+          const isHostKept = Boolean(rp.keepByHost || rp.keptByHostOnly);
+          if (isHostKept) return false;
+          const rOwner = String(r.admin_user_id || rp.classRepEmail || '').toLowerCase();
+          return rOwner === verifiedEmail.toLowerCase();
+        });
         if (ownedSoftDeleted) {
           let restoredAlbum: any = {};
           try { restoredAlbum = JSON.parse(ownedSoftDeleted.data_json || '{}'); } catch {}
@@ -6229,6 +7810,29 @@ ${message}
                 'Content-Type': 'application/json',
                 'Set-Cookie': `kohot_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
               },
+            }
+          );
+        }
+
+        // If a soft-deleted cohort row exists for a DIFFERENT owner or is Host-retained, block false creation / duplicate with 409 and safe recovery/Host-intervention path
+        if (deletedSameCohortRows.length > 0) {
+          const conflictingDeletedRow = deletedSameCohortRows[0];
+          let conflictingData: any = {};
+          try { conflictingData = JSON.parse(conflictingDeletedRow.data_json || '{}'); } catch {}
+          const isHostRetained = Boolean(conflictingData.keepByHost || conflictingData.keptByHostOnly);
+          return new Response(
+            JSON.stringify({
+              error: 'soft_deleted_cohort_exists',
+              message: isHostRetained
+                ? `The ${departmentName || departmentId} Class of ${graduationYear} album is currently retained in the Host recovery vault. Please submit a claim or contact the Host to restore or transfer ownership.`
+                : `A recently deleted ${departmentName || departmentId} Class of ${graduationYear} album is still within its 30-day recovery window. Its original administrator can restore it from the Control Center, or you can request Host intervention to transfer or clear the cohort.`,
+              canDispute: true,
+              existingAlbumId: conflictingDeletedRow.id,
+              canonicalCohortKey,
+            }),
+            {
+              status: 409,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             }
           );
         }
@@ -6324,6 +7928,7 @@ ${message}
         const draftAlbum = {
           ...albumPayload,
           id: newAlbumId,
+          canonicalCohortKey,
           inviteCode,
           institutionId,
           universityId: institutionId,
@@ -6416,6 +8021,21 @@ ${message}
             ).run();
             inserted = true;
           } catch {}
+        }
+
+        if (!inserted) {
+          return new Response(
+            JSON.stringify({
+              error: 'album_creation_failed',
+              message: 'Could not persist the new class album in D1 due to a cohort uniqueness constraint conflict. Please verify if a cohort album already exists or contact Host support.',
+              canDispute: true,
+              canonicalCohortKey,
+            }),
+            {
+              status: 409,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            }
+          );
         }
 
         // Also seed admin's own profile in profile_submissions if present in students[0]
@@ -6738,9 +8358,9 @@ ${message}
 
       updatedAlbum = await reconcileAlbumSlotsAndSubmissions(existingRow, updatedAlbum);
 
-      // NOTE: R2 objects are NEVER automatically deleted on routine PUT /api/albums/:id saves.
-      // Exclusive R2 cleanup only happens on explicit item deletion (DELETE /api/albums/:id/profiles/:pid or /memories/:mid)
-      // or permanent album erasure (/delete-permanent or 30-day scheduled expiry).
+      // Collect media keys before and after update so replaced banner/moment/profile images are cleaned from R2 & media_assets
+      // while preserving any media belonging to 30-day soft-deleted albums or 7-day declined/deleted student profiles
+      const oldAlbumKeys = collectAlbumMediaKeys(existingData);
 
       await ensureInviteCodeColumn();
       const updatedTitle = String(
@@ -6783,6 +8403,69 @@ ${message}
           JSON.stringify(updatedAlbum),
           albumId
         ).run();
+      }
+
+      if (nextStatus !== 'deleted' && !updatedAlbum.deletedAt) {
+        try {
+          const newAlbumKeys = collectAlbumMediaKeys(updatedAlbum);
+          const settingsMap = await getPlatformSettingsMap(env);
+          const reinstateDaysMs = (Number(settingsMap.reinstate_days) || 7) * 24 * 60 * 60 * 1000;
+          const nowMs = Date.now();
+          const protectedDeclinedKeys = new Set<string>();
+
+          // Protect any student profile photos in the 7-day Declined/Deleted recovery window
+          const allStudentCandidates = [
+            ...(Array.isArray(existingData.students) ? existingData.students : []),
+            ...(Array.isArray(updatedAlbum.students) ? updatedAlbum.students : []),
+            ...(Array.isArray(updatedAlbum.declinedStudents) ? updatedAlbum.declinedStudents : []),
+            ...(Array.isArray(updatedAlbum.deletedStudents) ? updatedAlbum.deletedStudents : []),
+          ];
+          for (const st of allStudentCandidates) {
+            const isDeclinedOrDeleted =
+              st?.status === 'declined' ||
+              st?.status === 'deleted' ||
+              Boolean(st?.declined) ||
+              Boolean(st?.deletedAt) ||
+              Boolean(st?.declinedAt);
+            if (!isDeclinedOrDeleted) continue;
+            const tsRaw = st?.declinedAt || st?.deletedAt || st?.updatedAt || st?.submittedAt;
+            const tsMs = tsRaw ? new Date(String(tsRaw)).getTime() : nowMs;
+            if (!Number.isNaN(tsMs) && nowMs - tsMs <= reinstateDaysMs) {
+              for (const k of collectAlbumMediaKeys(st)) protectedDeclinedKeys.add(k);
+            }
+          }
+
+          const subRes = await env.DB.prepare(
+            `SELECT status, declined_at, updated_at, photo_key, payload_json FROM profile_submissions WHERE album_id = ? AND status != 'removed'`
+          ).bind(albumId).all();
+          for (const sRow of subRes?.results || []) {
+            if (sRow.status === 'declined') {
+              const decMs = sRow.declined_at
+                ? new Date(String(sRow.declined_at)).getTime()
+                : sRow.updated_at
+                ? new Date(String(sRow.updated_at)).getTime()
+                : nowMs;
+              if (!Number.isNaN(decMs) && nowMs - decMs > reinstateDaysMs) continue;
+            }
+            if (sRow.photo_key) {
+              const pk = extractMediaKeyFromUrl(sRow.photo_key);
+              if (pk) protectedDeclinedKeys.add(pk);
+            }
+            if (sRow.payload_json) {
+              try {
+                for (const k of collectAlbumMediaKeys(JSON.parse(String(sRow.payload_json)))) {
+                  protectedDeclinedKeys.add(k);
+                }
+              } catch {}
+            }
+          }
+
+          for (const oldKey of oldAlbumKeys) {
+            if (!newAlbumKeys.has(oldKey) && !protectedDeclinedKeys.has(oldKey)) {
+              await deleteR2ObjectAndRecord(oldKey, albumId);
+            }
+          }
+        } catch {}
       }
 
       return new Response(
@@ -6839,6 +8522,23 @@ ${message}
       const body = (await request.json().catch(() => ({}))) as any;
       const list = Array.isArray(body.institutions) ? body.institutions : [];
       if (env.DB) {
+        const oldInstKeys = new Set<string>();
+        try {
+          const prevRes = await env.DB.prepare(`SELECT logo_url, departments_json FROM institutions`).all();
+          for (const r of prevRes?.results || []) {
+            const lk = extractMediaKeyFromUrl(r.logo_url);
+            if (lk) oldInstKeys.add(lk);
+            if (r.departments_json) {
+              try {
+                for (const k of collectAlbumMediaKeys(JSON.parse(String(r.departments_json)))) {
+                  oldInstKeys.add(k);
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+
+        const newInstKeys = collectAlbumMediaKeys(list);
         for (const uni of list) {
           if (!uni || !uni.id) continue;
           await env.DB.prepare(
@@ -6853,6 +8553,12 @@ ${message}
             uni.logoUrl || '',
             JSON.stringify(uni)
           ).run();
+        }
+
+        for (const oldKey of oldInstKeys) {
+          if (!newInstKeys.has(oldKey)) {
+            await deleteR2ObjectAndRecord(oldKey);
+          }
         }
       }
       return new Response(JSON.stringify({ success: true, count: list.length }), {
@@ -6881,6 +8587,9 @@ ${message}
             rawStatus === 'Paid' || rawStatus === 'success'
               ? 'Completed'
               : rawStatus; // Preserves 'paid, needs review', 'pending', etc.
+          const rawEnv = String(r.environment || meta.environment || meta.paystackDomain || meta.domain || '').toLowerCase().trim();
+          const txEnvironment: 'live' | 'test' | 'legacy' =
+            rawEnv === 'live' ? 'live' : rawEnv === 'test' ? 'test' : 'legacy';
           const txItem = {
             id: r.id,
             reference: r.reference,
@@ -6893,6 +8602,11 @@ ${message}
             paymentMethod: r.channel || meta.paymentMethod || 'Paystack',
             status: normalizedStatus,
             rawStatus,
+            environment: txEnvironment,
+            voidedAt: r.voided_at || meta.voidedAt || null,
+            voidedBy: r.voided_by || meta.voidedBy || null,
+            voidReason: r.void_reason || meta.voidReason || null,
+            previousStatus: r.previous_status || meta.previousStatus || null,
             needsReview: rawStatus.toLowerCase().includes('needs review'),
             payerName: r.payer_name || meta.payerName || meta.sponsor_name || '',
             payerEmail: r.payer_email || meta.payerEmail || '',
@@ -7228,7 +8942,14 @@ ${message}
       if (request.method === 'DELETE') {
         if (env.DB) {
           await ensureTestimonialsColumnsAndSeed();
+          const existing = await env.DB.prepare(`SELECT * FROM testimonials WHERE id = ?`).bind(testId).first();
           await env.DB.prepare(`DELETE FROM testimonials WHERE id = ?`).bind(testId).run();
+          if (existing) {
+            const oldAvatarKey = extractMediaKeyFromUrl(existing.admin_avatar_url || existing.avatar_url);
+            const oldCoverKey = extractMediaKeyFromUrl(existing.album_cover_url);
+            if (oldAvatarKey) await deleteR2ObjectAndRecord(oldAvatarKey);
+            if (oldCoverKey) await deleteR2ObjectAndRecord(oldCoverKey);
+          }
         }
         return new Response(JSON.stringify({ success: true }), {
           status: 200,
@@ -7240,6 +8961,7 @@ ${message}
         await ensureTestimonialsColumnsAndSeed();
         const existing = await env.DB.prepare(`SELECT * FROM testimonials WHERE id = ?`).bind(testId).first();
         if (existing) {
+          const oldAvatarKey = extractMediaKeyFromUrl(existing.admin_avatar_url || existing.avatar_url);
           const nextReview = body.reviewStatus ?? existing.review_status;
           const nextFeatured = body.isFeatured !== undefined ? (body.isFeatured ? 1 : 0) : existing.is_featured;
           const nextVisible = body.isVisible !== undefined ? (body.isVisible ? 1 : 0) : (existing.is_visible ?? 1);
@@ -7250,6 +8972,7 @@ ${message}
           const nextDept = body.department ?? body.departmentName ?? existing.department_name ?? existing.department;
           const nextUni = body.university ?? body.universityName ?? existing.university_name ?? existing.university;
           const nextAvatar = body.avatarUrl ?? body.adminAvatarUrl ?? existing.admin_avatar_url ?? existing.avatar_url;
+          const newAvatarKey = extractMediaKeyFromUrl(nextAvatar);
 
           try {
             await env.DB.prepare(
@@ -7283,6 +9006,9 @@ ${message}
               nextAvatar,
               testId
             ).run();
+          }
+          if (oldAvatarKey && oldAvatarKey !== newAvatarKey) {
+            await deleteR2ObjectAndRecord(oldAvatarKey);
           }
         }
       }
@@ -7324,25 +9050,37 @@ ${message}
       const body = (await request.json().catch(() => ({}))) as any;
       const content = body.content || body;
       if (env.DB) {
+        const oldKeys = new Set<string>();
         const existingRow = await env.DB.prepare(`SELECT * FROM website_content_overrides WHERE id = 'default'`).first();
         if (existingRow) {
           try {
             const oldContent = JSON.parse(existingRow.data_json || existingRow.content_json || '{}');
+            for (const k of collectAlbumMediaKeys(oldContent)) oldKeys.add(k);
             const oldVideoKey = oldContent.heroVideoKey || extractMediaKeyFromUrl(oldContent.heroVideoUrl);
-            const newVideoKey = content.heroVideoKey || extractMediaKeyFromUrl(content.heroVideoUrl);
-            if (oldVideoKey && oldVideoKey !== newVideoKey) {
-              await deleteR2ObjectAndRecord(oldVideoKey);
-            }
             const oldPosterKey = oldContent.heroPosterKey || extractMediaKeyFromUrl(oldContent.heroPosterUrl);
-            const newPosterKey = content.heroPosterKey || extractMediaKeyFromUrl(content.heroPosterUrl);
-            if (oldPosterKey && oldPosterKey !== newPosterKey) {
-              await deleteR2ObjectAndRecord(oldPosterKey);
-            }
+            const oldAudioKey = oldContent.albumBackgroundMusicKey || extractMediaKeyFromUrl(oldContent.albumBackgroundMusicUrl);
+            if (oldVideoKey) oldKeys.add(oldVideoKey);
+            if (oldPosterKey) oldKeys.add(oldPosterKey);
+            if (oldAudioKey) oldKeys.add(oldAudioKey);
           } catch {}
         }
+        const newKeys = collectAlbumMediaKeys(content);
+        const newVideoKey = content.heroVideoKey || extractMediaKeyFromUrl(content.heroVideoUrl);
+        const newPosterKey = content.heroPosterKey || extractMediaKeyFromUrl(content.heroPosterUrl);
+        const newAudioKey = content.albumBackgroundMusicKey || extractMediaKeyFromUrl(content.albumBackgroundMusicUrl);
+        if (newVideoKey) newKeys.add(newVideoKey);
+        if (newPosterKey) newKeys.add(newPosterKey);
+        if (newAudioKey) newKeys.add(newAudioKey);
+
         await env.DB.prepare(
           `INSERT OR REPLACE INTO website_content_overrides (id, data_json, updated_at) VALUES ('default', ?, datetime('now'))`
         ).bind(JSON.stringify(content)).run();
+
+        for (const oldKey of oldKeys) {
+          if (!newKeys.has(oldKey)) {
+            await deleteR2ObjectAndRecord(oldKey);
+          }
+        }
       }
       return new Response(JSON.stringify({ success: true }), {
         status: 200,
@@ -7373,7 +9111,7 @@ ${message}
     };
 
     const getAlbumSlotSummary = async (albumId: string) => {
-      if (!env.DB) return { balance: 0, totalCredited: 0, totalUsed: 0, ledger: [], purchases: [] };
+      if (!env.DB) return { balance: 0, totalCredited: 0, totalUsed: 0, reversedSlots: 0, ledger: [], purchases: [] };
       const sumRow = await env.DB.prepare(
         `SELECT SUM(delta) as balance FROM slot_ledger WHERE album_id = ?`
       ).bind(albumId).first();
@@ -7384,15 +9122,27 @@ ${message}
         `SELECT * FROM slot_purchases WHERE album_id = ? ORDER BY created_at DESC`
       ).bind(albumId).all();
       const ledger = ledgerRes?.results || [];
-      const balance = sumRow && sumRow.balance !== undefined && sumRow.balance !== null
-        ? Number(sumRow.balance)
-        : ledger.reduce((acc: number, r: any) => acc + (Number(r.delta) || 0), 0);
-      const totalCredited = ledger.reduce((acc: number, r: any) => acc + (Number(r.delta) > 0 ? Number(r.delta) : 0), 0);
-      const totalUsed = ledger.reduce((acc: number, r: any) => acc + (Number(r.delta) < 0 ? Math.abs(Number(r.delta)) : 0), 0);
+      const totalCredited = ledger
+        .filter((r: any) => String(r.kind || '') !== 'use')
+        .reduce((acc: number, r: any) => acc + (Number(r.delta) || 0), 0);
+      const totalUsed = ledger
+        .filter((r: any) => String(r.kind || '') === 'use')
+        .reduce((acc: number, r: any) => acc + Math.abs(Number(r.delta) || 0), 0);
+      const reversedSlots = Math.max(
+        0,
+        ledger
+          .filter((r: any) => String(r.kind || '') === 'void_reversal' || String(r.kind || '') === 'void_restore')
+          .reduce((acc: number, r: any) => acc - (Number(r.delta) || 0), 0)
+      );
+      const balance =
+        sumRow && sumRow.balance !== undefined && sumRow.balance !== null
+          ? Number(sumRow.balance)
+          : totalCredited - totalUsed;
       return {
         balance,
         totalCredited,
         totalUsed,
+        reversedSlots,
         ledger,
         purchases: purchasesRes?.results || [],
       };
@@ -7529,7 +9279,7 @@ ${message}
       const albumId = decodeURIComponent(submitProfileMatch[1]);
       const body = (await request.json().catch(() => ({}))) as any;
       const profilePayload = body.profile || body.payload || body;
-      const email = String(profilePayload.personalEmail || body.email || '').trim().toLowerCase();
+      const email = String(profilePayload.personalEmail || profilePayload.email || body.email || '').trim().toLowerCase();
 
       if (!email) {
         return new Response(JSON.stringify({ error: 'A valid email address is required.' }), {
@@ -7593,6 +9343,7 @@ ${message}
       if (
         existingByEmail &&
         source === 'student' &&
+        !profilePayload.isProfileUpdate &&
         existingByEmail.status === 'approved' &&
         (existingByEmail.payment_status === 'paid' || existingByEmail.payment_status === 'waived')
       ) {
@@ -7628,11 +9379,22 @@ ${message}
           ? existingByEmail.paid_reference
           : null;
       const nextStatus = body.saveAsDraft ? 'draft' : 'pending';
-      const newPhotoKey = profilePayload.photoKey || extractMediaKeyFromUrl(profilePayload.image) || null;
+      const newPhotoKey =
+        profilePayload.photoKey ||
+        extractMediaKeyFromUrl(profilePayload.photoUrl || profilePayload.image) ||
+        null;
+      const newSecondaryPhotoKey =
+        extractMediaKeyFromUrl(profilePayload.secondaryPhotoUrl) || null;
+      const resolvedPhotoUrl = newPhotoKey
+        ? `/media/${newPhotoKey}`
+        : String(profilePayload.photoUrl || profilePayload.image || '');
+      const resolvedSecondaryPhotoUrl = newSecondaryPhotoKey
+        ? `/media/${newSecondaryPhotoKey}`
+        : String(profilePayload.secondaryPhotoUrl || '');
 
       // If replacing an existing submission's photo, delete the old R2 object
-      if (existingByEmail?.photo_key && existingByEmail.photo_key !== newPhotoKey) {
-        await deleteR2ObjectAndRecord(existingByEmail.photo_key);
+      if (existingByEmail?.photo_key && newPhotoKey && existingByEmail.photo_key !== newPhotoKey) {
+        await deleteR2ObjectAndRecord(existingByEmail.photo_key, albumId);
       }
 
       const isCoveredByFunding = cohortPricing.kind === 'funding' && cohortPricing.isCovered;
@@ -7640,14 +9402,26 @@ ${message}
       const enrichedPayload = {
         ...profilePayload,
         id: subId,
+        setId: albumId,
+        email,
         personalEmail: email,
+        photoUrl: resolvedPhotoUrl,
+        rawPhotoUrl: resolvedPhotoUrl || profilePayload.rawPhotoUrl || '',
+        ...(resolvedSecondaryPhotoUrl
+          ? {
+              secondaryPhotoUrl: resolvedSecondaryPhotoUrl,
+              rawSecondaryPhotoUrl: resolvedSecondaryPhotoUrl,
+            }
+          : {}),
         paymentStatus,
         paidReference: paidReference || undefined,
         claimsToBeCovered: Boolean(isCoveredByFunding || profilePayload.claimsToBeCovered || body.claimsToBeCovered),
         sponsoredBy: isCoveredByFunding ? cohortPricing.sponsorName : profilePayload.sponsoredBy,
         programmeId: cohortPricing.programmeId || undefined,
         source,
+        approved: false,
         status: nextStatus,
+        submissionStatus: nextStatus,
         submittedAt: existingByEmail?.created_at || new Date().toISOString(),
       };
 
@@ -7666,6 +9440,58 @@ ${message}
         nextStatus,
         tokenHash
       ).run();
+
+      // Immediately sync non-draft submissions & edits into class_sets.data_json.students so they show on the Album Admin Dashboard for approval
+      if (nextStatus === 'pending') {
+        try {
+          const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(albumId).first();
+          if (albumRow?.data_json) {
+            let albumData: any = {};
+            try { albumData = JSON.parse(albumRow.data_json || '{}'); } catch {}
+            const curStudents: any[] = Array.isArray(albumData.students) ? [...albumData.students] : [];
+            const matchIdx = curStudents.findIndex(
+              (st: any) =>
+                st.id === subId ||
+                (email && String(st.personalEmail || st.email || '').trim().toLowerCase() === email)
+            );
+            if (matchIdx >= 0) {
+              const existingSt = curStudents[matchIdx];
+              curStudents[matchIdx] = {
+                ...existingSt,
+                ...enrichedPayload,
+                id: existingSt.id || subId,
+                photoUrl: resolvedPhotoUrl || existingSt.photoUrl || '',
+                rawPhotoUrl: resolvedPhotoUrl || existingSt.rawPhotoUrl || '',
+                secondaryPhotoUrl: resolvedSecondaryPhotoUrl || existingSt.secondaryPhotoUrl || '',
+                approved: false,
+                status: 'pending',
+                submissionStatus: 'pending',
+                isProfileUpdate: true,
+                usedSlot: Boolean(existingSt.usedSlot || enrichedPayload.usedSlot),
+                slotConsumed: Boolean(existingSt.slotConsumed || enrichedPayload.slotConsumed),
+                paymentStatus:
+                  existingSt.paymentStatus === 'paid' || paymentStatus === 'paid'
+                    ? 'paid'
+                    : existingSt.paymentStatus === 'waived' || paymentStatus === 'waived'
+                    ? 'waived'
+                    : paymentStatus || existingSt.paymentStatus || 'unpaid',
+              };
+            } else {
+              curStudents.push({
+                ...enrichedPayload,
+                approved: false,
+                status: 'pending',
+                submissionStatus: 'pending',
+              });
+            }
+            albumData.students = curStudents;
+            albumData.version = (Number(albumData.version) || 1) + 1;
+            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+              .bind(JSON.stringify(albumData), albumId)
+              .run();
+          }
+        } catch {}
+      }
 
       return new Response(
         JSON.stringify({
@@ -7711,7 +9537,7 @@ ${message}
         return new Response(
           JSON.stringify({
             success: true,
-            studentFeeKobo: Number(settings.student_fee_kobo) || 50000,
+            studentFeeKobo: Number(settings.student_fee_kobo) || 100000,
             submission: {
               id: subRow.id,
               albumId: subRow.album_id,
@@ -7749,26 +9575,78 @@ ${message}
         );
       }
 
-      const oldPhotoKey = subRow.photo_key || extractMediaKeyFromUrl(payload.image);
-      const nextPhotoKey = incomingPayload.photoKey || extractMediaKeyFromUrl(incomingPayload.image) || oldPhotoKey || null;
+      const oldPhotoKey = subRow.photo_key || extractMediaKeyFromUrl(payload.photoUrl || payload.image);
+      const nextPhotoKey =
+        incomingPayload.photoKey ||
+        extractMediaKeyFromUrl(incomingPayload.photoUrl || incomingPayload.image) ||
+        oldPhotoKey ||
+        null;
+      const resolvedNextPhotoUrl = nextPhotoKey
+        ? `/media/${nextPhotoKey}`
+        : String(incomingPayload.photoUrl || incomingPayload.image || payload.photoUrl || payload.image || '');
       if (oldPhotoKey && nextPhotoKey && oldPhotoKey !== nextPhotoKey) {
-        await deleteR2ObjectAndRecord(oldPhotoKey);
+        await deleteR2ObjectAndRecord(oldPhotoKey, subRow.album_id);
       }
 
+      const nextStatus = body.saveAsDraft ? 'draft' : 'pending';
       // Never allow client edit to overwrite paymentStatus or paidReference
       const updatedPayload = {
         ...payload,
         ...incomingPayload,
         id: subRow.id,
         personalEmail: subRow.email,
+        photoUrl: resolvedNextPhotoUrl,
+        rawPhotoUrl: resolvedNextPhotoUrl || incomingPayload.rawPhotoUrl || payload.rawPhotoUrl || '',
         paymentStatus: subRow.payment_status,
         paidReference: subRow.paid_reference || undefined,
-        status: body.saveAsDraft ? 'draft' : 'pending',
+        approved: false,
+        status: nextStatus,
+        submissionStatus: nextStatus,
       };
-      const nextStatus = body.saveAsDraft ? 'draft' : 'pending';
       await env.DB.prepare(
         `UPDATE profile_submissions SET payload_json = ?, photo_key = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
       ).bind(JSON.stringify(updatedPayload), nextPhotoKey, nextStatus, subRow.id).run();
+
+      if (nextStatus === 'pending' && subRow.album_id) {
+        try {
+          const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(subRow.album_id).first();
+          if (albumRow?.data_json) {
+            let albumData: any = {};
+            try { albumData = JSON.parse(albumRow.data_json || '{}'); } catch {}
+            const curStudents: any[] = Array.isArray(albumData.students) ? [...albumData.students] : [];
+            const subEmail = String(subRow.email || '').trim().toLowerCase();
+            const matchIdx = curStudents.findIndex(
+              (st: any) =>
+                st.id === subRow.id ||
+                (subEmail && String(st.personalEmail || st.email || '').trim().toLowerCase() === subEmail)
+            );
+            if (matchIdx >= 0) {
+              curStudents[matchIdx] = {
+                ...curStudents[matchIdx],
+                ...updatedPayload,
+                id: curStudents[matchIdx].id || subRow.id,
+                approved: false,
+                status: 'pending',
+                submissionStatus: 'pending',
+                isProfileUpdate: true,
+              };
+            } else {
+              curStudents.push({
+                ...updatedPayload,
+                id: subRow.id,
+                approved: false,
+                status: 'pending',
+                submissionStatus: 'pending',
+              });
+            }
+            albumData.students = curStudents;
+            albumData.version = (Number(albumData.version) || 1) + 1;
+            await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+              .bind(JSON.stringify(albumData), subRow.album_id)
+              .run();
+          }
+        } catch {}
+      }
 
       return new Response(
         JSON.stringify({
@@ -7823,6 +9701,16 @@ ${message}
           const declinedMs = new Date(r.declined_at).getTime();
           const daysSinceDecline = (nowMs - declinedMs) / (1000 * 60 * 60 * 24);
           canReinstate = daysSinceDecline <= reinstateDays;
+          if (!canReinstate) {
+            await env.DB.prepare(`DELETE FROM profile_submissions WHERE id = ?`).bind(r.id).run();
+            if (r.photo_key) {
+              await deleteR2ObjectAndRecord(r.photo_key, albumId);
+            }
+            for (const k of collectAlbumMediaKeys(payload)) {
+              await deleteR2ObjectAndRecord(k, albumId);
+            }
+            continue;
+          }
         }
 
         submissions.push({
@@ -7941,16 +9829,30 @@ ${message}
             continue;
           }
           const cycle = Date.now();
+          const useLedgerId = `sled-use-${subRow.id}-${cycle}`;
           await env.DB.prepare(
             `INSERT INTO slot_ledger (id, album_id, delta, kind, idempotency_key, created_by, created_at)
              VALUES (?, ?, -1, 'use', ?, ?, datetime('now'))`
           ).bind(
-            `sled-use-${subRow.id}-${cycle}`,
+            useLedgerId,
             albumId,
             `use:${subRow.id}:${cycle}`,
             access.user.email
           ).run();
-          balance -= 1;
+
+          // Post-insert atomicity guard against concurrent void/slot consumption race
+          const postUseCheck = await env.DB.prepare(
+            `SELECT SUM(delta) as balance FROM slot_ledger WHERE album_id = ?`
+          ).bind(albumId).first();
+          const postUseBalance = Number(postUseCheck?.balance ?? 0);
+          if (postUseBalance < 0) {
+            await env.DB.prepare(`DELETE FROM slot_ledger WHERE id = ?`).bind(useLedgerId).run();
+            balance = Math.max(0, postUseBalance + 1);
+            skippedUnpaidIds.push(subRow.id);
+            continue;
+          }
+
+          balance = postUseBalance;
           slotsUsedCount += 1;
 
           let parsedPayload: any = {};
@@ -8321,7 +10223,7 @@ ${message}
       );
 
       const settings = await getPlatformSettingsMap(env);
-      const unitValueKobo = Number(settings.student_fee_kobo) || 50000;
+      const unitValueKobo = Number(settings.student_fee_kobo) || 100000;
 
       if (existingAlloc) {
         const oldQuantity = Number(existingAlloc.quantity) || 0;
@@ -8467,7 +10369,7 @@ ${message}
         });
       }
       const settings = await getPlatformSettingsMap(env);
-      const unitValueKobo = Number(settings.student_fee_kobo) || 50000;
+      const unitValueKobo = Number(settings.student_fee_kobo) || 100000;
       const ledgerId = `sled-grant-${albumId}-${Date.now()}`;
 
       await env.DB.prepare(
@@ -8617,12 +10519,19 @@ ${message}
           JSON.stringify({
             success: true,
             settings: {
-              student_fee_kobo: Number(raw.student_fee_kobo) || 50000,
+              student_fee_kobo: Number(raw.student_fee_kobo) || 100000,
+              default_discount_percent: Number(raw.default_discount_percent ?? 20),
+              founding_discount_name:
+                raw.founding_discount_name || 'Founding Class Departmental Discount',
+              founding_discount_description:
+                raw.founding_discount_description ||
+                'Special rate for the founding graduating class of a department.',
+              compression_resolution_px: Number(raw.compression_resolution_px) || 1440,
               min_funded_to_publish: Number(raw.min_funded_to_publish) || 10,
               profile_cap_default: Number(raw.profile_cap_default) || 200,
               reinstate_days: Number(raw.reinstate_days) || 7,
               draft_retention_days: Number(raw.draft_retention_days) || 30,
-              recovery_period_days: Number(raw.recovery_period_days) || 14,
+              recovery_period_days: Number(raw.recovery_period_days) || 30,
               default_kohot_slots_per_album: Number(raw.default_kohot_slots_per_album) || 0,
               public_directory_enabled: raw.public_directory_enabled === '1' || raw.public_directory_enabled === 'true',
               hidden_directory_institutions: hiddenInstitutions,
@@ -8653,12 +10562,14 @@ ${message}
 
       const validationErrors = [
         validateAndQueueInt('student_fee_kobo', 0, 100000000, 'Student fee (in kobo)'),
+        validateAndQueueInt('default_discount_percent', 0, 99, 'Founding Class / Departmental discount percentage'),
+        validateAndQueueInt('compression_resolution_px', 720, 4096, 'Album media compression resolution (px)'),
         validateAndQueueInt('min_funded_to_publish', 0, 1000, 'Minimum funded profiles to publish'),
         validateAndQueueInt('profile_cap_default', 1, 5000, 'Default profile cap'),
         validateAndQueueInt('reinstate_days', 1, 365, 'Reinstate days'),
         validateAndQueueInt('draft_retention_days', 1, 365, 'Draft retention days'),
         validateAndQueueInt('recovery_period_days', 1, 365, 'Recovery period days'),
-        validateAndQueueInt('default_kohot_slots_per_album', 0, 1000, 'Default KoHot slots per album'),
+        validateAndQueueInt('default_kohot_slots_per_album', 0, 1000, 'Default KOHOT slots per album'),
       ].filter(Boolean);
 
       if (validationErrors.length > 0) {
@@ -8666,6 +10577,25 @@ ${message}
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+      }
+      if (body.default_discount_percent !== undefined) {
+        updates.push({ key: 'default_discount_percent_explicit', oldVal: current.default_discount_percent_explicit || '0', newVal: '1' });
+      }
+      if (typeof body.founding_discount_name === 'string') {
+        const cleanName = body.founding_discount_name.trim().slice(0, 120);
+        if (cleanName && current.founding_discount_name !== cleanName) {
+          updates.push({ key: 'founding_discount_name', oldVal: current.founding_discount_name || '', newVal: cleanName });
+        }
+      }
+      if (typeof body.founding_discount_description === 'string') {
+        const cleanDesc = body.founding_discount_description.trim().slice(0, 280);
+        if (cleanDesc && current.founding_discount_description !== cleanDesc) {
+          updates.push({
+            key: 'founding_discount_description',
+            oldVal: current.founding_discount_description || '',
+            newVal: cleanDesc,
+          });
+        }
       }
 
       if (body.public_directory_enabled !== undefined) {
@@ -8714,7 +10644,7 @@ ${message}
         JSON.stringify({
           success: true,
           settings: {
-            student_fee_kobo: Number(updatedRaw.student_fee_kobo) || 50000,
+            student_fee_kobo: Number(updatedRaw.student_fee_kobo) || 100000,
             min_funded_to_publish: Number(updatedRaw.min_funded_to_publish) || 10,
             profile_cap_default: Number(updatedRaw.profile_cap_default) || 200,
             reinstate_days: Number(updatedRaw.reinstate_days) || 7,
@@ -8731,7 +10661,7 @@ ${message}
       );
     }
 
-    // 13p. Host Finances Summary & Ledger & Mark Refunded (/api/admin/finances/*)
+    // 13p. Host Finances Summary & Ledger & Void/Restore/Classify/Refund (/api/admin/finances/*)
     if (path.startsWith('/api/admin/finances/')) {
       const sessionUser = await getSessionUser();
       if (!sessionUser || sessionUser.role !== 'master_host') {
@@ -8747,23 +10677,57 @@ ${message}
         });
       }
 
+      await ensureCohortOffersSchema();
       const settings = await getPlatformSettingsMap(env);
-      const unitFeeKobo = Number(settings.student_fee_kobo) || 50000;
+      const unitFeeKobo = Number(settings.student_fee_kobo) || 100000;
       let instCurrencies: Record<string, string> = {};
       try { instCurrencies = JSON.parse(settings.institution_currencies || '{}'); } catch {}
+
+      const resolveTransactionEnvironment = (r: any, meta: any): 'live' | 'test' | 'legacy' => {
+        const colEnv = String(r?.environment || '').toLowerCase().trim();
+        const metaDomain = String(meta?.paystackDomain || meta?.domain || '').toLowerCase().trim();
+        const metaEnv = String(meta?.classifiedEnvironment || meta?.environment || '').toLowerCase().trim();
+        const rawStatus = String(r?.status || 'pending').toLowerCase().trim();
+        const isPaidStatus = rawStatus === 'paid' || rawStatus === 'completed' || rawStatus === 'success';
+
+        // Any explicit test signal always resolves to 'test'
+        if (colEnv === 'test' || metaEnv === 'test' || metaDomain === 'test') {
+          return 'test';
+        }
+        // Explicit legacy classification
+        if (colEnv === 'legacy' || meta?.classifiedEnvironment === 'legacy') {
+          return 'legacy';
+        }
+        // Paid commercial transactions can ONLY be 'live' if independently verified against Paystack's live domain
+        const hasVerifiedLiveProof = metaDomain === 'live' || meta?.verifiedLiveByPaystack === true;
+        if (isPaidStatus) {
+          return hasVerifiedLiveProof ? 'live' : 'legacy';
+        }
+        if (colEnv === 'live' || metaEnv === 'live' || hasVerifiedLiveProof) {
+          return 'live';
+        }
+        return 'legacy';
+      };
 
       const buildLedgerRows = async () => {
         const txRes = await env.DB.prepare(`SELECT * FROM transactions ORDER BY created_at DESC LIMIT 1000`).all();
         const setsRes = await env.DB.prepare(`SELECT id, institution_id, department_id, graduation_year, class_set_name, data_json FROM class_sets`).all();
+        const purchasesRes = await env.DB.prepare(`SELECT * FROM slot_purchases`).all();
+        const slotLedgerRes = await env.DB.prepare(`SELECT * FROM slot_ledger ORDER BY created_at ASC`).all();
+
         const setMap = new Map<string, any>();
         for (const s of setsRes?.results || []) {
           setMap.set(String(s.id), s);
         }
 
+        const allPurchases = purchasesRes?.results || [];
+        const allSlotLedger = slotLedgerRes?.results || [];
+
         const rows: any[] = [];
         for (const r of txRes?.results || []) {
           let meta: any = {};
-          try { meta = JSON.parse(r.paystack_data_json || '{}'); } catch {}
+          try { meta = JSON.parse(r.paystack_data_json || r.raw_payload_json || '{}'); } catch {}
+          const ref = String(r.reference || '').trim();
           const albumId = String(meta.albumId || meta.album_id || r.set_id || r.registration_id || '');
           const matchedSet = setMap.get(albumId);
           let setJson: any = {};
@@ -8772,18 +10736,57 @@ ${message}
           }
 
           const rawStatus = String(r.status || 'pending').toLowerCase().trim();
-          let status: 'paid' | 'pending' | 'failed' | 'refunded' | 'refund_due' | 'needs_review' = 'pending';
-          if (rawStatus === 'refunded') status = 'refunded';
+          let status: 'paid' | 'pending' | 'failed' | 'voided' | 'refunded' | 'refund_due' | 'needs_review' = 'pending';
+          if (rawStatus === 'voided') status = 'voided';
+          else if (rawStatus === 'refunded') status = 'refunded';
           else if (rawStatus === 'refund_due' || rawStatus === 'refund due') status = 'refund_due';
           else if (rawStatus.includes('needs review') || rawStatus === 'needs_review') status = 'needs_review';
           else if (rawStatus === 'paid' || rawStatus === 'completed' || rawStatus === 'success') status = 'paid';
           else if (rawStatus === 'failed' || rawStatus === 'abandoned') status = 'failed';
 
+          const environment = resolveTransactionEnvironment(r, meta);
+
           const rawType = String(meta.paymentCategory || meta.type || '').toLowerCase();
           const type: 'student_payment' | 'slot_purchase' =
-            rawType.includes('slot') || String(r.reference || '').includes('-SLT-')
+            rawType.includes('slot') || ref.includes('-SLT-')
               ? 'slot_purchase'
               : 'student_payment';
+
+          // Match slot_purchases and slot_ledger entries for this reference
+          const purchaseIdCandidate = String(meta.purchase_id || `spurch-${ref}`);
+          const matchedPurchase = allPurchases.find(
+            (sp: any) =>
+              (ref && String(sp.reference || '').trim() === ref) ||
+              (purchaseIdCandidate && String(sp.id || '') === purchaseIdCandidate)
+          );
+          const matchedLedgerEntries = allSlotLedger.filter((sl: any) => {
+            const slRef = String(sl.reference || '').trim();
+            const slPid = String(sl.purchase_id || '').trim();
+            const slId = String(sl.id || '').trim();
+            const slIdem = String(sl.idempotency_key || '').trim();
+            if (ref && (slRef === ref || slId === `sled-${ref}` || slIdem === `purchase:${ref}` || slIdem.startsWith(`void_reversal:${ref}`) || slIdem.startsWith(`void_restore:${ref}`))) {
+              return true;
+            }
+            if (matchedPurchase && slPid === String(matchedPurchase.id)) {
+              return true;
+            }
+            if (purchaseIdCandidate && slPid === purchaseIdCandidate) {
+              return true;
+            }
+            return false;
+          });
+
+          const creditedSlots = matchedLedgerEntries
+            .filter((sl: any) => String(sl.kind || '') === 'purchase' && Number(sl.delta) > 0)
+            .reduce((acc: number, sl: any) => acc + (Number(sl.delta) || 0), 0);
+          const reversedSlots = Math.max(
+            0,
+            matchedLedgerEntries
+              .filter((sl: any) => String(sl.kind || '') === 'void_reversal' || String(sl.kind || '') === 'void_restore')
+              .reduce((acc: number, sl: any) => acc - (Number(sl.delta) || 0), 0)
+          );
+          const netActiveSlots = Math.max(0, creditedSlots - reversedSlots);
+          const didCreditSlots = creditedSlots > 0;
 
           const institutionId = String(matchedSet?.institution_id || setJson.institutionId || meta.institutionId || '');
           const institutionName = String(
@@ -8795,12 +10798,18 @@ ${message}
           );
           const classYear = Number(matchedSet?.graduation_year || setJson.graduationYear || meta.graduationYear || meta.set_year) || new Date().getFullYear();
           const amountKobo = Number(r.amount_kobo) || (Number(r.amount) || 0) * 100;
-          const quantity = type === 'slot_purchase' ? Math.max(1, Number(meta.slotsPurchased || meta.quantity) || Math.round(amountKobo / unitFeeKobo) || 1) : 1;
-          const sponsor = type === 'slot_purchase' ? String(meta.sponsorName || meta.sponsor_name || r.payer_name || '') : '';
+          const quantity =
+            type === 'slot_purchase'
+              ? creditedSlots > 0
+                ? creditedSlots
+                : Math.max(1, Number(matchedPurchase?.quantity || meta.slotsPurchased || meta.quantity) || Math.round(amountKobo / unitFeeKobo) || 1)
+              : 1;
+          const sponsor = type === 'slot_purchase' ? String(matchedPurchase?.sponsor_name || meta.sponsorName || meta.sponsor_name || r.payer_name || '') : '';
           const currency = instCurrencies[institutionId] || String(r.currency || 'NGN').toUpperCase();
+          const isHistorical25kCandidate = amountKobo === 2500000 && environment !== 'live';
 
           rows.push({
-            id: r.id || `tx-${r.reference}`,
+            id: r.id || `tx-${ref}`,
             type,
             date: r.paid_at || r.created_at || new Date().toISOString(),
             institutionId,
@@ -8816,13 +10825,28 @@ ${message}
             programmeId: r.programme_id || meta.programme_id || null,
             currency,
             status,
-            reference: r.reference || '',
+            rawStatus: String(r.status || 'pending'),
+            environment,
+            reference: ref,
             quantity,
+            didCreditSlots,
+            creditedSlots,
+            reversedSlots,
+            netActiveSlots,
+            slotPurchaseStatus: matchedPurchase ? String(matchedPurchase.status || 'completed') : null,
+            isHistorical25kCandidate,
             sponsor,
             payerName: r.payer_name || meta.payerName || '',
             payerEmail: r.payer_email || meta.payerEmail || '',
             refundNote: meta.refundNote || '',
             refundedAt: meta.refundedAt || '',
+            voidedAt: r.voided_at || meta.voidedAt || null,
+            voidedBy: r.voided_by || meta.voidedBy || null,
+            voidReason: r.void_reason || meta.voidReason || null,
+            previousStatus: r.previous_status || meta.previousStatus || null,
+            restoredAt: r.restored_at || meta.restoredAt || null,
+            restoredBy: r.restored_by || meta.restoredBy || null,
+            restoreReason: r.restore_reason || meta.restoreReason || null,
           });
         }
         return rows;
@@ -8834,6 +10858,7 @@ ${message}
         const lagosNow = new Date(Date.now() + 60 * 60 * 1000);
         const lagosYearMonth = lagosNow.toISOString().slice(0, 7); // YYYY-MM
 
+        // Commercial revenue metrics include ONLY verified LIVE payments (status === 'paid' && environment === 'live')
         let confirmedRevenueMonthKobo = 0;
         let confirmedRevenueAllTimeKobo = 0;
         let studentPaymentsKobo = 0;
@@ -8846,31 +10871,77 @@ ${message}
         let pendingPaymentsCount = 0;
         let paidNeedsReviewCount = 0;
 
+        // Distinct non-live & reconciliation metrics
+        let testRevenueKobo = 0;
+        let testPaymentsCount = 0;
+        let legacyRevenueKobo = 0;
+        let legacyPaymentsCount = 0;
+        let voidedTransactionsKobo = 0;
+        let voidedTransactionsCount = 0;
+        let historical25kTestCount = 0;
+        let unclassifiedLegacyCount = 0;
+
         for (const row of rows) {
           const rowDateLagos = new Date(new Date(row.date).getTime() + 60 * 60 * 1000).toISOString().slice(0, 7);
+          if (row.isHistorical25kCandidate && row.status !== 'voided') {
+            historical25kTestCount += 1;
+          }
+          if (row.status === 'voided') {
+            voidedTransactionsKobo += row.amountKobo;
+            voidedTransactionsCount += 1;
+            continue;
+          }
           if (row.status === 'paid') {
-            confirmedRevenueAllTimeKobo += row.amountKobo;
-            if (rowDateLagos === lagosYearMonth) {
-              confirmedRevenueMonthKobo += row.amountKobo;
-            }
-            if (row.type === 'student_payment') {
-              studentPaymentsKobo += row.amountKobo;
-              studentPaymentsCount += 1;
+            if (row.environment === 'live') {
+              confirmedRevenueAllTimeKobo += row.amountKobo;
+              if (rowDateLagos === lagosYearMonth) {
+                confirmedRevenueMonthKobo += row.amountKobo;
+              }
+              if (row.type === 'student_payment') {
+                studentPaymentsKobo += row.amountKobo;
+                studentPaymentsCount += 1;
+              } else {
+                slotPurchasesKobo += row.amountKobo;
+                slotPurchasesCount += 1;
+              }
+            } else if (row.environment === 'test') {
+              testRevenueKobo += row.amountKobo;
+              testPaymentsCount += 1;
             } else {
-              slotPurchasesKobo += row.amountKobo;
-              slotPurchasesCount += 1;
+              legacyRevenueKobo += row.amountKobo;
+              legacyPaymentsCount += 1;
+              unclassifiedLegacyCount += 1;
             }
           } else if (row.status === 'refund_due') {
-            refundsDueKobo += row.amountKobo;
+            if (row.environment === 'live') {
+              refundsDueKobo += row.amountKobo;
+            }
             refundsDueCount += 1;
           } else if (row.status === 'refunded') {
-            refundedKobo += row.amountKobo;
+            if (row.environment === 'live') {
+              refundedKobo += row.amountKobo;
+            }
           } else if (row.status === 'pending') {
             pendingPaymentsCount += 1;
           } else if (row.status === 'needs_review') {
             paidNeedsReviewCount += 1;
           }
         }
+
+        // Reversed slot credits across all albums
+        const reversedLedgerRes = await env.DB.prepare(
+          `SELECT delta, unit_value_kobo, kind FROM slot_ledger WHERE kind IN ('void_reversal', 'void_restore')`
+        ).all();
+        let reversedSlotsCount = 0;
+        let reversedSlotsValueKobo = 0;
+        for (const rl of reversedLedgerRes?.results || []) {
+          const d = Number(rl.delta) || 0;
+          const u = Number(rl.unit_value_kobo) || unitFeeKobo;
+          reversedSlotsCount -= d; // void_reversal has negative delta, so subtracting adds to reversed count
+          reversedSlotsValueKobo -= d * u;
+        }
+        reversedSlotsCount = Math.max(0, reversedSlotsCount);
+        reversedSlotsValueKobo = Math.max(0, reversedSlotsValueKobo);
 
         // KoHot-sponsored value: granted slots x unit value (programme benefit, never revenue)
         const grantedLedgerRes = await env.DB.prepare(
@@ -8891,6 +10962,15 @@ ${message}
         const kohotSponsoredValueKobo = kohotSponsoredSlotsCount * unitFeeKobo;
         const netCollectedKobo = Math.max(0, confirmedRevenueAllTimeKobo - refundsDueKobo);
 
+        const activePublicKey = (env.PAYSTACK_PUBLIC_KEY || '').trim();
+        const activeSecretKey = (env.PAYSTACK_SECRET_KEY || '').trim();
+        const activePaystackKeyMode: 'live' | 'test' | 'unconfigured' =
+          activePublicKey.startsWith('pk_live_') && activeSecretKey.startsWith('sk_live_')
+            ? 'live'
+            : activePublicKey.startsWith('pk_test_') || activeSecretKey.startsWith('sk_test_')
+            ? 'test'
+            : 'unconfigured';
+
         return new Response(
           JSON.stringify({
             success: true,
@@ -8905,13 +10985,24 @@ ${message}
               refundsDueCount,
               refundedKobo,
               netCollectedKobo,
+              testRevenueKobo,
+              testPaymentsCount,
+              legacyRevenueKobo,
+              legacyPaymentsCount,
+              voidedTransactionsKobo,
+              voidedTransactionsCount,
+              reversedSlotsCount,
+              reversedSlotsValueKobo,
               kohotSponsoredValueKobo,
               kohotSponsoredSlotsCount,
               unitFeeKobo,
+              activePaystackKeyMode,
               needsAttention: {
                 pendingPaymentsCount,
                 paidNeedsReviewCount,
                 refundsDueCount,
+                historical25kTestCount,
+                unclassifiedLegacyCount,
               },
               timezone: 'Africa/Lagos',
             },
@@ -8926,6 +11017,866 @@ ${message}
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+      }
+
+      // GET /api/admin/finances/historical-audit — Inspect historical/test/legacy transactions (including the two ₦25,000 test transactions)
+      if (path === '/api/admin/finances/historical-audit' && request.method === 'GET') {
+        const rows = await buildLedgerRows();
+        const purchasesRes = await env.DB.prepare(`SELECT * FROM slot_purchases ORDER BY created_at DESC`).all();
+        const slotLedgerRes = await env.DB.prepare(`SELECT * FROM slot_ledger ORDER BY created_at ASC`).all();
+        const allPurchases = purchasesRes?.results || [];
+        const allSlotLedger = slotLedgerRes?.results || [];
+
+        const auditItems: any[] = [];
+        for (const row of rows) {
+          if (row.environment === 'live' && !row.isHistorical25kCandidate) continue;
+          const ref = row.reference;
+          const purchaseIdCandidate = `spurch-${ref}`;
+          const matchedPurchase = allPurchases.find(
+            (sp: any) =>
+              (ref && String(sp.reference || '').trim() === ref) ||
+              String(sp.id || '') === purchaseIdCandidate
+          ) || null;
+          const matchedLedgerEntries = allSlotLedger.filter((sl: any) => {
+            const slRef = String(sl.reference || '').trim();
+            const slPid = String(sl.purchase_id || '').trim();
+            const slId = String(sl.id || '').trim();
+            const slIdem = String(sl.idempotency_key || '').trim();
+            if (ref && (slRef === ref || slId === `sled-${ref}` || slIdem === `purchase:${ref}` || slIdem.startsWith(`void_reversal:${ref}`) || slIdem.startsWith(`void_restore:${ref}`))) {
+              return true;
+            }
+            if (matchedPurchase && slPid === String(matchedPurchase.id)) {
+              return true;
+            }
+            return false;
+          });
+
+          let albumSlotSummary = { balance: 0, totalCredited: 0, totalUsed: 0, reversedSlots: 0 };
+          if (row.albumId) {
+            const s = await getAlbumSlotSummary(row.albumId);
+            albumSlotSummary = {
+              balance: s.balance,
+              totalCredited: s.totalCredited,
+              totalUsed: s.totalUsed,
+              reversedSlots: s.reversedSlots,
+            };
+          }
+
+          const canSafelyVoid =
+            row.status !== 'voided' &&
+            (row.netActiveSlots === 0 || albumSlotSummary.balance >= row.netActiveSlots);
+          const voidBlockReason =
+            row.status === 'voided'
+              ? 'Transaction is already voided.'
+              : row.netActiveSlots > albumSlotSummary.balance
+              ? `Reversing ${row.netActiveSlots} credited slot(s) would reduce album available balance (${albumSlotSummary.balance}) below zero (${albumSlotSummary.totalUsed} slot(s) are currently consumed).`
+              : null;
+
+          auditItems.push({
+            ...row,
+            slotPurchaseRecord: matchedPurchase,
+            slotLedgerEntries: matchedLedgerEntries,
+            albumCurrentSlotBalance: albumSlotSummary.balance,
+            albumTotalCreditedSlots: albumSlotSummary.totalCredited,
+            albumTotalUsedSlots: albumSlotSummary.totalUsed,
+            canSafelyVoid,
+            voidBlockReason,
+          });
+        }
+
+        const historical25kCandidates = auditItems.filter((item) => item.amountKobo === 2500000);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            historical25kCandidates,
+            auditItems,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // POST /api/admin/finances/classify-environment — Classify historical/legacy transactions as 'test', 'legacy', or (only if verified against Paystack live API) 'live'
+      if (path === '/api/admin/finances/classify-environment' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const reference = String(body.reference || '').trim();
+        const targetEnv = String(body.environment || '').toLowerCase().trim() as 'test' | 'live' | 'legacy';
+        const reason = String(body.reason || '').trim();
+        const confirm = Boolean(body.confirm);
+
+        if (!reference || !['test', 'live', 'legacy'].includes(targetEnv) || reason.length < 3 || !confirm) {
+          return new Response(
+            JSON.stringify({
+              error: 'invalid_classification_request',
+              message: 'Transaction reference, valid target environment (test, live, or legacy), mandatory reason, and explicit confirmation are required.',
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const txRow = await env.DB.prepare(`SELECT * FROM transactions WHERE reference = ?`).bind(reference).first();
+        if (!txRow) {
+          return new Response(JSON.stringify({ error: 'Transaction not found.' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        let meta: any = {};
+        try { meta = JSON.parse(txRow.paystack_data_json || txRow.raw_payload_json || '{}'); } catch {}
+        const previousEnvironment = resolveTransactionEnvironment(txRow, meta);
+        const nowIso = new Date().toISOString();
+
+        // AUDIT RULE 1: Prevent manual classification of unverified or test transactions as 'live'
+        // unless independently verified against the live Paystack API.
+        if (targetEnv === 'live') {
+          const existingPaystackDomain = String(meta?.paystackDomain || meta?.domain || '').toLowerCase().trim();
+          if (existingPaystackDomain === 'test' || reference.startsWith('PSK-') || reference.startsWith('demo_')) {
+            return new Response(
+              JSON.stringify({
+                error: 'cannot_classify_test_as_live',
+                message: `Cannot classify transaction ${reference} as LIVE: this reference originated in Paystack TEST mode and cannot be counted as commercial live revenue.`,
+              }),
+              { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+
+          const alreadyVerifiedLive = existingPaystackDomain === 'live' && meta?.verifiedLiveByPaystack === true;
+          if (!alreadyVerifiedLive) {
+            const secretKey = (env.PAYSTACK_SECRET_KEY || '').trim();
+            if (!secretKey.startsWith('sk_live_')) {
+              return new Response(
+                JSON.stringify({
+                  error: 'live_verification_required',
+                  message: `Cannot classify transaction ${reference} as LIVE without independent verification against the live Paystack API (requires an active live Paystack secret key sk_live_...). Manual classification alone cannot create commercial live revenue.`,
+                }),
+                { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+
+            let verifiedLiveOk = false;
+            try {
+              const pskRes = await fetch(
+                `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${secretKey}`,
+                  },
+                }
+              );
+              const pskJson = (await pskRes.json().catch(() => ({}))) as any;
+              const pskData = pskJson?.data;
+              const expectedKobo = Number(txRow.amount_kobo) || (Number(txRow.amount) || 0) * 100;
+              if (
+                pskRes.ok &&
+                pskJson?.status === true &&
+                pskData &&
+                String(pskData.status || '').toLowerCase() === 'success' &&
+                String(pskData.domain || '').toLowerCase() === 'live' &&
+                String(pskData.currency || 'NGN').toUpperCase() === 'NGN' &&
+                String(pskData.reference || '').trim() === reference &&
+                (expectedKobo <= 0 || Number(pskData.amount) === expectedKobo)
+              ) {
+                verifiedLiveOk = true;
+                meta.paystackDomain = 'live';
+                meta.verifiedByPaystack = true;
+                meta.verifiedLiveByPaystack = true;
+              }
+            } catch {}
+
+            if (!verifiedLiveOk) {
+              return new Response(
+                JSON.stringify({
+                  error: 'live_verification_failed',
+                  message: `Cannot classify transaction ${reference} as LIVE: independent verification against the live Paystack API failed or did not confirm a matching live NGN payment. Manual classification alone cannot create commercial live revenue.`,
+                }),
+                { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+          }
+        } else if (targetEnv === 'test') {
+          meta.paystackDomain = meta.paystackDomain === 'live' ? 'live' : 'test';
+        }
+
+        meta.environment = targetEnv;
+        meta.classifiedEnvironment = targetEnv;
+        meta.classifiedBy = sessionUser.email;
+        meta.classifiedAt = nowIso;
+        meta.classificationReason = reason;
+        meta.previousEnvironment = previousEnvironment;
+
+        await env.DB.prepare(
+          `UPDATE transactions SET environment = ?, paystack_data_json = ? WHERE reference = ?`
+        )
+          .bind(targetEnv, JSON.stringify(meta), reference)
+          .run();
+
+        await env.DB.prepare(
+          `UPDATE slot_purchases SET environment = ? WHERE reference = ? OR id = ?`
+        )
+          .bind(targetEnv, reference, `spurch-${reference}`)
+          .run();
+
+        await env.DB.prepare(
+          `UPDATE slot_ledger SET environment = ? WHERE reference = ? OR id = ? OR purchase_id = ? OR idempotency_key LIKE ?`
+        )
+          .bind(targetEnv, reference, `sled-${reference}`, `spurch-${reference}`, `%${reference}%`)
+          .run();
+
+        await logAudit(
+          'transaction_environment_classified',
+          `Transaction ${reference} environment classified from "${previousEnvironment}" to "${targetEnv}" by ${sessionUser.email}. Reason: ${reason}`,
+          sessionUser.email
+        );
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            reference,
+            previousEnvironment,
+            environment: targetEnv,
+            classifiedBy: sessionUser.email,
+            classifiedAt: nowIso,
+            reason,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // POST /api/admin/finances/void — Void transaction with mandatory reason, confirmation, and compensating slot reversal
+      if (path === '/api/admin/finances/void' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const reference = String(body.reference || '').trim();
+        const reason = String(body.reason || '').trim();
+        const confirm = Boolean(body.confirm);
+        const classifyAsTest = Boolean(body.classifyAsTest);
+
+        if (!reference || reason.length < 3 || !confirm) {
+          return new Response(
+            JSON.stringify({
+              error: 'confirmation_and_reason_required',
+              message: 'Transaction reference, explicit confirmation, and a mandatory void reason (minimum 3 characters) are required.',
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const txRow = await env.DB.prepare(`SELECT * FROM transactions WHERE reference = ?`).bind(reference).first();
+        if (!txRow) {
+          return new Response(JSON.stringify({ error: 'Transaction not found.' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        const previousStatus = String(txRow.status || 'pending');
+        if (previousStatus.toLowerCase().trim() === 'voided') {
+          return new Response(
+            JSON.stringify({
+              error: 'already_voided',
+              message: `Transaction ${reference} has already been voided and cannot be voided again.`,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        let meta: any = {};
+        try { meta = JSON.parse(txRow.paystack_data_json || txRow.raw_payload_json || '{}'); } catch {}
+        const currentEnvironment = resolveTransactionEnvironment(txRow, meta);
+        const finalEnvironment: 'live' | 'test' | 'legacy' = classifyAsTest ? 'test' : currentEnvironment;
+        const albumId = String(meta.albumId || meta.album_id || txRow.set_id || txRow.registration_id || '').trim();
+        const submissionId = String(meta.submissionId || meta.submission_id || '').trim();
+        const purchaseIdCandidate = String(meta.purchase_id || `spurch-${reference}`);
+
+        // Inspect slot_purchases and slot_ledger for this reference
+        const purchaseRow = await env.DB.prepare(
+          `SELECT * FROM slot_purchases WHERE reference = ? OR id = ? LIMIT 1`
+        )
+          .bind(reference, purchaseIdCandidate)
+          .first();
+
+        const ledgerEntriesRes = await env.DB.prepare(
+          `SELECT * FROM slot_ledger WHERE reference = ? OR id = ? OR purchase_id = ? OR idempotency_key LIKE ? ORDER BY created_at ASC`
+        )
+          .bind(
+            reference,
+            `sled-${reference}`,
+            purchaseRow?.id || purchaseIdCandidate,
+            `%${reference}%`
+          )
+          .all();
+        const matchedLedgerEntries = ledgerEntriesRes?.results || [];
+
+        const origPurchaseLedger = matchedLedgerEntries.find(
+          (sl: any) => String(sl.kind || '') === 'purchase' && Number(sl.delta) > 0
+        );
+        const creditedSlotsGross = matchedLedgerEntries
+          .filter((sl: any) => String(sl.kind || '') === 'purchase' && Number(sl.delta) > 0)
+          .reduce((acc: number, sl: any) => acc + (Number(sl.delta) || 0), 0);
+        const alreadyReversedSlots = Math.max(
+          0,
+          matchedLedgerEntries
+            .filter((sl: any) => String(sl.kind || '') === 'void_reversal' || String(sl.kind || '') === 'void_restore')
+            .reduce((acc: number, sl: any) => acc - (Number(sl.delta) || 0), 0)
+        );
+        const netActiveSlotsToReverse = Math.max(0, creditedSlotsGross - alreadyReversedSlots);
+        const restoreCycleCount = matchedLedgerEntries.filter(
+          (sl: any) => String(sl.kind || '') === 'void_restore'
+        ).length;
+        const effectiveAlbumId = String(
+          albumId || purchaseRow?.album_id || origPurchaseLedger?.album_id || ''
+        ).trim();
+
+        // Guard: If this transaction credited slots, verify reversing them will not drop available album slots below 0
+        if (netActiveSlotsToReverse > 0 && effectiveAlbumId) {
+          const albumSummary = await getAlbumSlotSummary(effectiveAlbumId);
+          if (albumSummary.balance < netActiveSlotsToReverse) {
+            return new Response(
+              JSON.stringify({
+                error: 'insufficient_available_slots_for_reversal',
+                message: `Cannot void transaction ${reference}: reversing ${netActiveSlotsToReverse} credited slot(s) would reduce album "${effectiveAlbumId}" available slot balance (${albumSummary.balance}) below zero because ${albumSummary.totalUsed} slot(s) are currently consumed by approved student profiles. Unapprove/free consumed slots or allocate replacement slots first.`,
+                creditedSlots: netActiveSlotsToReverse,
+                availableSlotBalance: albumSummary.balance,
+                totalUsedSlots: albumSummary.totalUsed,
+              }),
+              { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+
+        const voidedAt = new Date().toISOString();
+        const reversalLedgerId: string | null =
+          netActiveSlotsToReverse > 0 && effectiveAlbumId
+            ? `sled-rev-${reference}-c${restoreCycleCount}`
+            : null;
+        const reversalIdempotencyKey = `void_reversal:${reference}:cycle:${restoreCycleCount}`;
+        const slotsReversed = reversalLedgerId ? netActiveSlotsToReverse : 0;
+
+        // Prepare updated metadata & perform atomic conditional state transition on transactions FIRST
+        const prevMetaJson = txRow.paystack_data_json || null;
+        const voidHistory = Array.isArray(meta.voidHistory) ? [...meta.voidHistory] : [];
+        voidHistory.push({
+          voidedAt,
+          voidedBy: sessionUser.email,
+          reason,
+          previousStatus,
+          previousEnvironment: currentEnvironment,
+          environment: finalEnvironment,
+          slotsReversed,
+          reversalLedgerId,
+        });
+        meta.voidedAt = voidedAt;
+        meta.voidedBy = sessionUser.email;
+        meta.voidReason = reason;
+        meta.previousStatus = previousStatus;
+        meta.environment = finalEnvironment;
+        if (classifyAsTest) {
+          meta.classifiedEnvironment = 'test';
+        }
+        meta.voidHistory = voidHistory;
+
+        const txVoidUpdateRes = await env.DB.prepare(
+          `UPDATE transactions
+           SET status = 'voided',
+               previous_status = ?,
+               voided_at = ?,
+               voided_by = ?,
+               void_reason = ?,
+               environment = ?,
+               paystack_data_json = ?
+           WHERE reference = ? AND LOWER(TRIM(COALESCE(status, ''))) != 'voided'`
+        )
+          .bind(
+            previousStatus,
+            voidedAt,
+            sessionUser.email,
+            reason,
+            finalEnvironment,
+            JSON.stringify(meta),
+            reference
+          )
+          .run();
+
+        if (Number((txVoidUpdateRes as any)?.meta?.changes ?? 1) === 0) {
+          return new Response(
+            JSON.stringify({
+              error: 'already_voided',
+              message: `Transaction ${reference} has already been voided and cannot be voided again.`,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        // 1. Insert compensating slot_ledger entry if slots were credited (deterministic ID & UNIQUE idempotency_key)
+        if (netActiveSlotsToReverse > 0 && effectiveAlbumId && reversalLedgerId) {
+          const reversalUnitValue = Number(origPurchaseLedger?.unit_value_kobo) || unitFeeKobo;
+          const reversalSponsorName = String(
+            origPurchaseLedger?.sponsor_name || purchaseRow?.sponsor_name || meta.sponsorName || meta.sponsor_name || 'Voided Purchase'
+          );
+
+          try {
+            await env.DB.prepare(
+              `INSERT INTO slot_ledger (id, album_id, delta, kind, purchase_id, reference, reversal_of_ledger_id, sponsor_name, unit_value_kobo, environment, idempotency_key, note, created_by, created_at)
+               VALUES (?, ?, ?, 'void_reversal', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+              .bind(
+                reversalLedgerId,
+                effectiveAlbumId,
+                -netActiveSlotsToReverse,
+                purchaseRow?.id || origPurchaseLedger?.purchase_id || purchaseIdCandidate,
+                reference,
+                origPurchaseLedger?.id || `sled-${reference}`,
+                reversalSponsorName,
+                reversalUnitValue,
+                finalEnvironment,
+                reversalIdempotencyKey,
+                `Void reversal for ${reference}: ${reason}`,
+                sessionUser.email,
+                voidedAt
+              )
+              .run();
+          } catch {
+            // Duplicate reversal blocked by UNIQUE idempotency_key / PRIMARY KEY constraint
+            return new Response(
+              JSON.stringify({
+                error: 'already_voided',
+                message: `Compensating slot reversal for ${reference} already exists.`,
+              }),
+              { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+
+          // Post-insert atomicity check: if concurrent slot consumption reduced album balance below 0, roll back immediately
+          const postVoidSummary = await getAlbumSlotSummary(effectiveAlbumId);
+          if (postVoidSummary.balance < 0) {
+            await env.DB.prepare(`DELETE FROM slot_ledger WHERE id = ?`).bind(reversalLedgerId).run();
+            await env.DB.prepare(
+              `UPDATE transactions
+               SET status = ?,
+                   voided_at = NULL,
+                   voided_by = NULL,
+                   void_reason = NULL,
+                   environment = ?,
+                   paystack_data_json = ?
+               WHERE reference = ?`
+            )
+              .bind(previousStatus, currentEnvironment, prevMetaJson, reference)
+              .run();
+
+            const restoredSummary = await getAlbumSlotSummary(effectiveAlbumId);
+            return new Response(
+              JSON.stringify({
+                error: 'insufficient_available_slots_for_reversal',
+                message: `Cannot void transaction ${reference}: concurrent slot consumption reduced album "${effectiveAlbumId}" available slot balance (${restoredSummary.balance}) below the ${netActiveSlotsToReverse} slot(s) required for reversal.`,
+                creditedSlots: netActiveSlotsToReverse,
+                availableSlotBalance: restoredSummary.balance,
+                totalUsedSlots: restoredSummary.totalUsed,
+              }),
+              { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+
+        // Ensure all ledger rows associated with this reference share consistent environment
+        if (classifyAsTest) {
+          await env.DB.prepare(
+            `UPDATE slot_ledger SET environment = 'test' WHERE reference = ? OR id = ? OR purchase_id = ? OR idempotency_key LIKE ?`
+          )
+            .bind(
+              reference,
+              `sled-${reference}`,
+              purchaseRow?.id || purchaseIdCandidate,
+              `%${reference}%`
+            )
+            .run();
+        }
+
+        // 2. Mark slot_purchases row as voided (preserving record)
+        if (purchaseRow) {
+          await env.DB.prepare(
+            `UPDATE slot_purchases SET status = 'voided', voided_at = ?, voided_by = ?, void_reason = ?, environment = ? WHERE id = ?`
+          )
+            .bind(voidedAt, sessionUser.email, reason, finalEnvironment, purchaseRow.id)
+            .run();
+        }
+
+        // 3. If student submission payment, revert payment_status to unpaid
+        let studentPaymentReverted = false;
+        const paidSubRow = await env.DB.prepare(
+          `SELECT * FROM profile_submissions WHERE paid_reference = ? OR (id = ? AND album_id = ? AND paid_reference = ?) LIMIT 1`
+        )
+          .bind(reference, submissionId, effectiveAlbumId, reference)
+          .first();
+        if (paidSubRow) {
+          let subPayload: any = {};
+          try { subPayload = JSON.parse(paidSubRow.payload_json || '{}'); } catch {}
+          subPayload.paymentStatus = 'unpaid';
+          subPayload.voidedReference = reference;
+          delete subPayload.paidReference;
+          await env.DB.prepare(
+            `UPDATE profile_submissions SET payment_status = 'unpaid', paid_reference = NULL, payload_json = ?, updated_at = datetime('now') WHERE id = ?`
+          )
+            .bind(JSON.stringify(subPayload), paidSubRow.id)
+            .run();
+          studentPaymentReverted = true;
+        }
+
+        // 4. Sync class_sets.data_json (sponsor status, student paymentStatus, and updated slot balance)
+        if (effectiveAlbumId) {
+          const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(effectiveAlbumId).first();
+          if (albumRow?.data_json) {
+            try {
+              const albumData = JSON.parse(albumRow.data_json);
+              const updatedSlotSummary = await getAlbumSlotSummary(effectiveAlbumId);
+              albumData.profileSlotBalance = updatedSlotSummary.balance;
+              albumData.totalSlotsCredited = updatedSlotSummary.totalCredited;
+              albumData.totalSlotsUsed = updatedSlotSummary.totalUsed;
+              if (Array.isArray(albumData.sponsors)) {
+                albumData.sponsors = albumData.sponsors.map((sp: any) => {
+                  if (sp.reference === reference || (purchaseRow && sp.id === purchaseRow.id)) {
+                    return {
+                      ...sp,
+                      status: 'voided',
+                      voidedAt,
+                      voidedBy: sessionUser.email,
+                      voidReason: reason,
+                      environment: finalEnvironment,
+                      showSponsorNameOnAlbum: false,
+                    };
+                  }
+                  return sp;
+                });
+              }
+              if (Array.isArray(albumData.students) && (paidSubRow || submissionId)) {
+                const targetSubId = paidSubRow?.id || submissionId;
+                albumData.students = albumData.students.map((st: any) => {
+                  if (st.id === targetSubId || st.paidReference === reference) {
+                    return { ...st, paymentStatus: 'unpaid', paidReference: undefined };
+                  }
+                  return st;
+                });
+              }
+              await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+                .bind(JSON.stringify(albumData), effectiveAlbumId)
+                .run();
+            } catch {}
+          }
+        }
+
+        await logAudit(
+          'transaction_voided',
+          `Transaction ${reference} (₦${Math.round((Number(txRow.amount_kobo) || (Number(txRow.amount) || 0) * 100) / 100).toLocaleString()}, env=${finalEnvironment}, prevStatus=${previousStatus}) voided by ${sessionUser.email}. Reason: ${reason}. Slots reversed: ${slotsReversed}${reversalLedgerId ? ` (ledger entry ${reversalLedgerId})` : ' (0 slots credited)'}.`,
+          sessionUser.email
+        );
+
+        const updatedAlbumSlots = effectiveAlbumId ? await getAlbumSlotSummary(effectiveAlbumId) : null;
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            reference,
+            previousStatus,
+            status: 'voided',
+            environment: finalEnvironment,
+            voidedAt,
+            voidedBy: sessionUser.email,
+            voidReason: reason,
+            slotsReversed,
+            reversalLedgerId,
+            studentPaymentReverted,
+            albumSlotBalance: updatedAlbumSlots ? updatedAlbumSlots.balance : null,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // POST /api/admin/finances/restore — Controlled restoration for accidentally voided transactions
+      if (path === '/api/admin/finances/restore' && request.method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const reference = String(body.reference || '').trim();
+        const reason = String(body.reason || '').trim();
+        const confirm = Boolean(body.confirm);
+
+        if (!reference || reason.length < 3 || !confirm) {
+          return new Response(
+            JSON.stringify({
+              error: 'confirmation_and_reason_required',
+              message: 'Transaction reference, explicit confirmation, and a mandatory restoration reason (minimum 3 characters) are required.',
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const txRow = await env.DB.prepare(`SELECT * FROM transactions WHERE reference = ?`).bind(reference).first();
+        if (!txRow) {
+          return new Response(JSON.stringify({ error: 'Transaction not found.' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (String(txRow.status || '').toLowerCase().trim() !== 'voided') {
+          return new Response(
+            JSON.stringify({
+              error: 'transaction_not_voided',
+              message: `Transaction ${reference} is not currently voided (status: ${txRow.status}) and is not eligible for restoration.`,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        let meta: any = {};
+        try { meta = JSON.parse(txRow.paystack_data_json || txRow.raw_payload_json || '{}'); } catch {}
+        const environment = resolveTransactionEnvironment(txRow, meta);
+        const restoredStatus = String(txRow.previous_status || meta.previousStatus || 'Paid');
+        const restoredStatusNorm = restoredStatus.toLowerCase().trim();
+
+        // Block restoration if previous status is not a valid active/restorable status
+        if (['failed', 'abandoned', 'voided', 'cancelled'].includes(restoredStatusNorm)) {
+          return new Response(
+            JSON.stringify({
+              error: 'restore_not_eligible',
+              message: `Transaction ${reference} had previous status "${restoredStatus}" and is not eligible for restoration.`,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const restoredAt = new Date().toISOString();
+        const albumId = String(meta.albumId || meta.album_id || txRow.set_id || txRow.registration_id || '').trim();
+        const submissionId = String(meta.submissionId || meta.submission_id || '').trim();
+        const purchaseIdCandidate = String(meta.purchase_id || `spurch-${reference}`);
+
+        const purchaseRow = await env.DB.prepare(
+          `SELECT * FROM slot_purchases WHERE reference = ? OR id = ? LIMIT 1`
+        )
+          .bind(reference, purchaseIdCandidate)
+          .first();
+
+        const ledgerEntriesRes = await env.DB.prepare(
+          `SELECT * FROM slot_ledger WHERE reference = ? OR id = ? OR purchase_id = ? OR idempotency_key LIKE ? ORDER BY created_at ASC`
+        )
+          .bind(
+            reference,
+            `sled-${reference}`,
+            purchaseRow?.id || purchaseIdCandidate,
+            `%${reference}%`
+          )
+          .all();
+        const matchedLedgerEntries = ledgerEntriesRes?.results || [];
+
+        const reversedSlotsNet = Math.max(
+          0,
+          matchedLedgerEntries
+            .filter((sl: any) => String(sl.kind || '') === 'void_reversal' || String(sl.kind || '') === 'void_restore')
+            .reduce((acc: number, sl: any) => acc - (Number(sl.delta) || 0), 0)
+        );
+        const lastReversalRow = [...matchedLedgerEntries]
+          .reverse()
+          .find((sl: any) => String(sl.kind || '') === 'void_reversal');
+        const origPurchaseLedger = matchedLedgerEntries.find(
+          (sl: any) => String(sl.kind || '') === 'purchase' && Number(sl.delta) > 0
+        );
+        const effectiveAlbumId = String(
+          albumId || purchaseRow?.album_id || origPurchaseLedger?.album_id || ''
+        ).trim();
+
+        // If this transaction originally credited slots, ensure its reversal has not already been restored
+        if (origPurchaseLedger && (reversedSlotsNet <= 0 || !lastReversalRow)) {
+          return new Response(
+            JSON.stringify({
+              error: 'already_restored',
+              message: `Slot credits for ${reference} have already been restored or no active void reversal exists.`,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const restoreLedgerId: string | null =
+          reversedSlotsNet > 0 && effectiveAlbumId && lastReversalRow
+            ? `sled-rst-${lastReversalRow.id}`
+            : null;
+        const restoreIdempotencyKey: string | null = lastReversalRow
+          ? `void_restore:${reference}:of:${lastReversalRow.id}`
+          : null;
+        const slotsRestored = restoreLedgerId ? reversedSlotsNet : 0;
+
+        // Perform atomic conditional status transition on transactions FIRST
+        const restoreHistory = Array.isArray(meta.restoreHistory) ? [...meta.restoreHistory] : [];
+        restoreHistory.push({
+          restoredAt,
+          restoredBy: sessionUser.email,
+          reason,
+          restoredStatus,
+          slotsRestored,
+          restoreLedgerId,
+        });
+        meta.restoredAt = restoredAt;
+        meta.restoredBy = sessionUser.email;
+        meta.restoreReason = reason;
+        meta.restoreHistory = restoreHistory;
+
+        const txRestoreUpdateRes = await env.DB.prepare(
+          `UPDATE transactions
+           SET status = ?,
+               restored_at = ?,
+               restored_by = ?,
+               restore_reason = ?,
+               paystack_data_json = ?
+           WHERE reference = ? AND LOWER(TRIM(COALESCE(status, ''))) = 'voided'`
+        )
+          .bind(
+            restoredStatus,
+            restoredAt,
+            sessionUser.email,
+            reason,
+            JSON.stringify(meta),
+            reference
+          )
+          .run();
+
+        if (Number((txRestoreUpdateRes as any)?.meta?.changes ?? 1) === 0) {
+          return new Response(
+            JSON.stringify({
+              error: 'transaction_not_voided',
+              message: `Transaction ${reference} is no longer voided or was already restored.`,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        // 1. Insert compensating void_restore entry if slots were previously reversed (deterministic ID & UNIQUE idempotency_key)
+        if (reversedSlotsNet > 0 && effectiveAlbumId && restoreLedgerId && restoreIdempotencyKey && lastReversalRow) {
+          const restoreUnitValue = Number(lastReversalRow?.unit_value_kobo || origPurchaseLedger?.unit_value_kobo) || unitFeeKobo;
+          const restoreSponsorName = String(
+            origPurchaseLedger?.sponsor_name || purchaseRow?.sponsor_name || meta.sponsorName || meta.sponsor_name || 'Restored Purchase'
+          );
+
+          try {
+            await env.DB.prepare(
+              `INSERT INTO slot_ledger (id, album_id, delta, kind, purchase_id, reference, reversal_of_ledger_id, sponsor_name, unit_value_kobo, environment, idempotency_key, note, created_by, created_at)
+               VALUES (?, ?, ?, 'void_restore', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+              .bind(
+                restoreLedgerId,
+                effectiveAlbumId,
+                reversedSlotsNet,
+                purchaseRow?.id || origPurchaseLedger?.purchase_id || purchaseIdCandidate,
+                reference,
+                lastReversalRow.id,
+                restoreSponsorName,
+                restoreUnitValue,
+                environment,
+                restoreIdempotencyKey,
+                `Void restoration for ${reference}: ${reason}`,
+                sessionUser.email,
+                restoredAt
+              )
+              .run();
+          } catch {
+            return new Response(
+              JSON.stringify({
+                error: 'already_restored',
+                message: `Compensating slot restoration entry (${restoreLedgerId}) already exists for ${reference}.`,
+              }),
+              { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+
+        // 2. Restore slot_purchases status
+        if (purchaseRow) {
+          await env.DB.prepare(
+            `UPDATE slot_purchases SET status = 'completed', voided_at = NULL, voided_by = NULL, void_reason = NULL, environment = ? WHERE id = ?`
+          )
+            .bind(environment, purchaseRow.id)
+            .run();
+        }
+
+        // 3. Restore student submission payment_status if applicable
+        if (submissionId && effectiveAlbumId && restoredStatusNorm === 'paid') {
+          const subRow = await env.DB.prepare(
+            `SELECT * FROM profile_submissions WHERE id = ? AND album_id = ? LIMIT 1`
+          )
+            .bind(submissionId, effectiveAlbumId)
+            .first();
+          if (subRow && subRow.payment_status === 'unpaid') {
+            let subPayload: any = {};
+            try { subPayload = JSON.parse(subRow.payload_json || '{}'); } catch {}
+            subPayload.paymentStatus = 'paid';
+            subPayload.paidReference = reference;
+            await env.DB.prepare(
+              `UPDATE profile_submissions SET payment_status = 'paid', paid_reference = ?, payload_json = ?, updated_at = datetime('now') WHERE id = ?`
+            )
+              .bind(reference, JSON.stringify(subPayload), subRow.id)
+              .run();
+          }
+        }
+
+        // 4. Sync class_sets.data_json
+        if (effectiveAlbumId) {
+          const albumRow = await env.DB.prepare(`SELECT * FROM class_sets WHERE id = ?`).bind(effectiveAlbumId).first();
+          if (albumRow?.data_json) {
+            try {
+              const albumData = JSON.parse(albumRow.data_json);
+              const updatedSlotSummary = await getAlbumSlotSummary(effectiveAlbumId);
+              albumData.profileSlotBalance = updatedSlotSummary.balance;
+              albumData.totalSlotsCredited = updatedSlotSummary.totalCredited;
+              albumData.totalSlotsUsed = updatedSlotSummary.totalUsed;
+              if (Array.isArray(albumData.sponsors)) {
+                albumData.sponsors = albumData.sponsors.map((sp: any) => {
+                  if (sp.reference === reference || (purchaseRow && sp.id === purchaseRow.id)) {
+                    const sponsorName = sp.sponsorName || purchaseRow?.sponsor_name || '';
+                    return {
+                      ...sp,
+                      status: 'completed',
+                      voidedAt: undefined,
+                      voidedBy: undefined,
+                      voidReason: undefined,
+                      environment,
+                      showSponsorNameOnAlbum: Boolean(sponsorName && sponsorName !== 'Class Sponsor'),
+                    };
+                  }
+                  return sp;
+                });
+              }
+              if (Array.isArray(albumData.students) && submissionId && restoredStatusNorm === 'paid') {
+                albumData.students = albumData.students.map((st: any) => {
+                  if (st.id === submissionId) {
+                    return { ...st, paymentStatus: 'paid', paidReference: reference };
+                  }
+                  return st;
+                });
+              }
+              await env.DB.prepare(`UPDATE class_sets SET data_json = ?, updated_at = datetime('now') WHERE id = ?`)
+                .bind(JSON.stringify(albumData), effectiveAlbumId)
+                .run();
+            } catch {}
+          }
+        }
+
+        await logAudit(
+          'transaction_restored',
+          `Voided transaction ${reference} restored to status "${restoredStatus}" by ${sessionUser.email}. Reason: ${reason}. Slots restored: ${slotsRestored}${restoreLedgerId ? ` (ledger entry ${restoreLedgerId})` : ''}.`,
+          sessionUser.email
+        );
+
+        const updatedAlbumSlots = effectiveAlbumId ? await getAlbumSlotSummary(effectiveAlbumId) : null;
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            reference,
+            status: restoredStatus,
+            environment,
+            restoredAt,
+            restoredBy: sessionUser.email,
+            restoreReason: reason,
+            slotsRestored,
+            restoreLedgerId,
+            albumSlotBalance: updatedAlbumSlots ? updatedAlbumSlots.balance : null,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
 
       if (path === '/api/admin/finances/refund' && request.method === 'POST') {
@@ -8989,7 +11940,7 @@ ${message}
 
       await ensureCohortOffersSchema();
       const settings = await getPlatformSettingsMap(env);
-      const standardPriceKobo = Number(settings.student_fee_kobo) || 50000;
+      const standardPriceKobo = Number(settings.student_fee_kobo) || 100000;
       const defaultCap = Number(settings.profile_cap_default) || 200;
 
       const formatProgrammeRow = (row: any, allCohortAllocations: any[]) => {

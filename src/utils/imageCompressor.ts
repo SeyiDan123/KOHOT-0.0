@@ -91,13 +91,27 @@ export async function fileToUniversalDataUrl(file: File): Promise<string> {
   });
 }
 
+export function getConfiguredCompressionResolution(fallback = 1440): number {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = Number(window.localStorage.getItem('kohot_compression_resolution_px'));
+      if (saved === 1280 || saved === 1440 || saved === 1920) {
+        return saved;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
+
 /**
  * Compresses any photo (from File, Blob, or DataUrl) to maxDimension and quality.
  * Never throws or rejects, ensuring flawless gallery uploads.
  */
 export async function compressImageToWebP(
   fileOrDataUrl: File | Blob | string,
-  maxDimension = 720,
+  maxDimension = getConfiguredCompressionResolution(1440),
   quality = 0.85
 ): Promise<CompressionResult> {
   return new Promise(async (resolve) => {

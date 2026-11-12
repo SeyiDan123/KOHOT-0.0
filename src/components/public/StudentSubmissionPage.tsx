@@ -114,8 +114,8 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
   const [secondaryPhotoDataUrl, setSecondaryPhotoDataUrl] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [inviteToken, setInviteToken] = useState('');
-  const [studentFeeNgn, setStudentFeeNgn] = useState<number>(500);
-  const [standardFeeNgn, setStandardFeeNgn] = useState<number>(500);
+  const [studentFeeNgn, setStudentFeeNgn] = useState<number>(1000);
+  const [standardFeeNgn, setStandardFeeNgn] = useState<number>(1000);
   const [resolvedPricing, setResolvedPricing] = useState<ResolvedCohortPricing | null>(null);
   const [compressionInfo, setCompressionInfo] = useState<CompressionResult | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -318,8 +318,8 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       }
       if (cfg.resolvedPricing) {
         setResolvedPricing(cfg.resolvedPricing);
-        setStandardFeeNgn(Math.round((cfg.resolvedPricing.standardPriceKobo || cfg.resolvedPricing.listPriceKobo || cfg.studentFeeKobo || 50000) / 100));
-        setStudentFeeNgn(Math.round((cfg.resolvedPricing.effectivePriceKobo ?? cfg.studentFeeKobo ?? 50000) / 100));
+        setStandardFeeNgn(Math.round((cfg.resolvedPricing.standardPriceKobo || cfg.resolvedPricing.listPriceKobo || cfg.studentFeeKobo || 100000) / 100));
+        setStudentFeeNgn(Math.round((cfg.resolvedPricing.effectivePriceKobo ?? cfg.studentFeeKobo ?? 100000) / 100));
       }
     });
 
@@ -336,7 +336,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
     setUploadError(null);
     setCropTarget(target);
     try {
-      const result = await compressImageToWebP(file, 1200, 0.90);
+      const result = await compressImageToWebP(file, undefined, 0.90);
       if (target === 'secondary') {
         setRawSecondaryPhotoUrl(result.dataUrl);
         setSecondaryCropSettings(undefined);
@@ -370,7 +370,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
         const fetchRes = await fetch(croppedDataUrl);
         const blob = await fetchRes.blob();
         const file = new File([blob], 'student-secondary-portrait.webp', { type: 'image/webp' });
-        const result = await compressImageToWebP(file, 800, 0.88);
+        const result = await compressImageToWebP(file, undefined, 0.88);
         let tokenToUse = inviteToken;
         if (!tokenToUse) {
           tokenToUse = await fetchInviteUploadTokenFromServer(currentSet.id);
@@ -405,7 +405,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       const blob = await fetchRes.blob();
       const file = new File([blob], 'student-portrait.webp', { type: 'image/webp' });
 
-      const result = await compressImageToWebP(file, 800, 0.88);
+      const result = await compressImageToWebP(file, undefined, 0.88);
       setCompressionInfo(result);
 
       let tokenToUse = inviteToken;
@@ -556,16 +556,51 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       submissionStatus: 'pending',
       isProfileUpdate: isEditingExisting ? true : undefined,
       previousApproved: isEditingExisting ? true : undefined,
-      usedSlot: isEditingExisting ? true : selectedEditStudent?.usedSlot,
-      slotConsumed: isEditingExisting ? true : selectedEditStudent?.slotConsumed,
-      paymentStatus: isEditingExisting
-        ? selectedEditStudent?.paymentStatus || 'waived'
-        : undefined,
+      usedSlot:
+        isEditingExisting &&
+        selectedEditStudent &&
+        (selectedEditStudent.usedSlot ||
+          selectedEditStudent.slotConsumed ||
+          selectedEditStudent.paymentStatus === 'paid' ||
+          selectedEditStudent.paymentStatus === 'waived' ||
+          (selectedEditStudent as any).isAdminProfile)
+          ? true
+          : selectedEditStudent?.usedSlot,
+      slotConsumed:
+        isEditingExisting &&
+        selectedEditStudent &&
+        (selectedEditStudent.usedSlot ||
+          selectedEditStudent.slotConsumed ||
+          selectedEditStudent.paymentStatus === 'paid' ||
+          selectedEditStudent.paymentStatus === 'waived' ||
+          (selectedEditStudent as any).isAdminProfile)
+          ? true
+          : selectedEditStudent?.slotConsumed,
+      paymentStatus:
+        isEditingExisting &&
+        selectedEditStudent &&
+        (selectedEditStudent.usedSlot ||
+          selectedEditStudent.slotConsumed ||
+          selectedEditStudent.paymentStatus === 'paid' ||
+          selectedEditStudent.paymentStatus === 'waived' ||
+          (selectedEditStudent as any).isAdminProfile)
+          ? selectedEditStudent?.paymentStatus || 'waived'
+          : undefined,
       submittedAt: selectedEditStudent?.submittedAt || new Date().toISOString().split('T')[0],
       leaderOrder: hasLeaderTitle
         ? selectedEditStudent?.leaderOrder ?? calculateIntuitiveHierarchyRank(trimmedPos)
         : undefined,
     };
+
+    const isEditedProfileAlreadyCovered = Boolean(
+      isEditingExisting &&
+        selectedEditStudent &&
+        (selectedEditStudent.usedSlot ||
+          selectedEditStudent.slotConsumed ||
+          selectedEditStudent.paymentStatus === 'paid' ||
+          selectedEditStudent.paymentStatus === 'waived' ||
+          (selectedEditStudent as any).isAdminProfile)
+    );
 
     try {
       const serverRes = await submitStudentProfileOnServer(currentSet.id, newStudent, {
@@ -580,7 +615,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       if (serverRes.statusToken) {
         setActiveStatusToken(serverRes.statusToken);
       }
-      if (isEditingExisting) {
+      if (isEditedProfileAlreadyCovered) {
         setSubmissionPaymentStatus('paid');
       } else if (serverRes.paymentStatus) {
         setSubmissionPaymentStatus(serverRes.paymentStatus);
@@ -594,7 +629,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
       setSubmittedStudent(finalStudent);
       setIsSubmittingServer(false);
 
-      if (openCheckoutAfterSubmit && !isEditingExisting) {
+      if (openCheckoutAfterSubmit && !isEditedProfileAlreadyCovered) {
         setIsPaystackOpen(true);
       } else {
         setIsSuccess(true);
@@ -618,7 +653,7 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                 id="back-to-home-btn"
                 onClick={onBackToHome}
                 className="p-2 rounded-xl bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-700 dark:text-slate-300 hover:text-black dark:hover:text-white transition-colors cursor-pointer"
-                title="Return to KoHot"
+                title="Return to KOHOT"
               >
                 <ArrowLeft className="w-4 h-4" />
               </button>
@@ -627,9 +662,9 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
               type="button"
               onClick={onBackToHome}
               className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-              title="Return to KoHot Website"
+              title="Return to KOHOT Website"
             >
-              <span className="font-syne font-extrabold text-base tracking-tight text-slate-900 dark:text-white">KoHot</span>
+              <span className="font-syne font-extrabold text-base tracking-tight uppercase text-slate-900 dark:text-white">KOHOT</span>
               <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 text-[10px] font-mono-tech uppercase tracking-wider text-slate-600 dark:text-zinc-400 font-bold">
                 Graduate Entry
               </span>
@@ -666,29 +701,45 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
         </div>
       </header>
 
-      {/* Compressed Compact Header (Ultra Clean) */}
+      {/* Compressed Compact Header (Matches Legacy Wall Arrangement: University Name Above, Department Name Below) */}
       <section className="border-b border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 py-4 sm:py-5 px-4 sm:px-8">
         <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl overflow-hidden border border-slate-200 dark:border-neutral-700 bg-white p-1 shadow-xs shrink-0">
+            <div className="w-11 h-11 rounded-2xl overflow-hidden border border-slate-200 dark:border-neutral-700 bg-white p-1 shadow-xs shrink-0">
               <img
-                src={currentSet.institutionLogoUrl}
+                src={currentSet.departmentLogoUrl || currentSet.institutionLogoUrl}
                 alt={currentSet.institutionName}
                 className="w-full h-full object-cover rounded-xl"
               />
             </div>
-            <div>
+            <div className="space-y-0.5">
+              <p className="font-syne font-semibold text-[11px] sm:text-xs text-slate-500 dark:text-zinc-400 tracking-wider uppercase">
+                {currentSet.institutionName}
+              </p>
               <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="font-syne font-extrabold text-base sm:text-lg text-slate-900 dark:text-white">
-                  {currentSet.departmentName}
+                <h1 className="font-syne font-extrabold text-base sm:text-lg text-slate-900 dark:text-white uppercase tracking-tight">
+                  {currentSet.departmentName?.toLowerCase().startsWith('department of') ||
+                  currentSet.departmentName?.toLowerCase().startsWith('department ')
+                    ? currentSet.departmentName
+                    : `Department of ${currentSet.departmentName}`}
                 </h1>
-                <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 text-slate-700 dark:text-zinc-300 font-mono-tech text-[10px] font-bold">
+              </div>
+              <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                <span className="font-mono-tech text-[11px] font-extrabold uppercase tracking-wider text-slate-800 dark:text-zinc-200">
                   Class of {currentSet.graduationYear}
                 </span>
+                {currentSet.classSetName && (
+                  <>
+                    <span className="text-slate-300 dark:text-zinc-600">•</span>
+                    <span className="font-syne font-bold text-[11px] uppercase tracking-wider text-amber-600 dark:text-[#d4af37]">
+                      {currentSet.classSetName
+                        .replace(/\s*[-–—•]\s*class\s+of\s+\d{2,4}\b/gi, '')
+                        .replace(/\bclass\s+of\s+\d{2,4}\s*[-–—•]\s*/gi, '')
+                        .trim()}
+                    </span>
+                  </>
+                )}
               </div>
-              <p className="font-mono-tech text-[11px] text-slate-500 dark:text-slate-400">
-                {currentSet.institutionName} {currentSet.classSetName ? `• ${currentSet.classSetName}` : ''}
-              </p>
             </div>
           </div>
 
@@ -2222,7 +2273,13 @@ export const StudentSubmissionPage: React.FC<StudentSubmissionPageProps> = ({
                   </div>
                 </div>
 
-                {entryMode === 'edit' && selectedEditStudent ? (
+                {entryMode === 'edit' &&
+                selectedEditStudent &&
+                (selectedEditStudent.usedSlot ||
+                  selectedEditStudent.slotConsumed ||
+                  selectedEditStudent.paymentStatus === 'paid' ||
+                  selectedEditStudent.paymentStatus === 'waived' ||
+                  (selectedEditStudent as any).isAdminProfile) ? (
                   <div className="space-y-3 pt-2">
                     <button
                       id="step2-submit-profile-update-btn"

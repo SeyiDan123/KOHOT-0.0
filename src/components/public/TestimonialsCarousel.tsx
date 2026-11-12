@@ -127,17 +127,9 @@ export const TestimonialsCarousel: React.FC<TestimonialsCarouselProps> = ({
     if (testimonials.length <= 1 || isHovered) return;
     const timer = setInterval(() => {
       scrollToIndex(activeIndex + 1);
-    }, 6500);
+    }, 4800);
     return () => clearInterval(timer);
   }, [testimonials.length, isHovered, activeIndex]);
-
-  const handlePrev = () => {
-    scrollToIndex(activeIndex - 1);
-  };
-
-  const handleNext = () => {
-    scrollToIndex(activeIndex + 1);
-  };
 
   if (testimonials.length === 0) {
     return null;
@@ -151,7 +143,7 @@ export const TestimonialsCarousel: React.FC<TestimonialsCarouselProps> = ({
     'What Graduating Classes Say';
   const subtitle =
     contentOverride?.testimonialsSubtitle ||
-    'Real experiences from class representatives and album admins who preserved their graduating class on KoHot.';
+    'Real experiences from class representatives and album admins who preserved their graduating class on KOHOT.';
 
   return (
     <section
@@ -184,34 +176,14 @@ export const TestimonialsCarousel: React.FC<TestimonialsCarouselProps> = ({
               </p>
             </ScrollReveal>
           </div>
-
-          {/* Carousel Controls */}
-          {testimonials.length > 1 && (
-            <div className="flex items-center gap-2.5 self-start md:self-end shrink-0">
-              <button
-                type="button"
-                onClick={handlePrev}
-                className="w-11 h-11 rounded-full bg-white dark:bg-[#121215] border border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-zinc-700 dark:text-zinc-200 hover:border-[#d4af37] hover:text-[#d4af37] transition-all cursor-pointer shadow-xs active:scale-95"
-                aria-label="Previous testimonial"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <button
-                type="button"
-                onClick={handleNext}
-                className="w-11 h-11 rounded-full bg-white dark:bg-[#121215] border border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-zinc-700 dark:text-zinc-200 hover:border-[#d4af37] hover:text-[#d4af37] transition-all cursor-pointer shadow-xs active:scale-95"
-                aria-label="Next testimonial"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-          )}
         </div>
 
         {/* Horizontal Snap Carousel of Luxury Testimonial Cards */}
         <div
           ref={trackRef}
-          className="flex lg:grid lg:grid-cols-3 gap-6 overflow-x-auto lg:overflow-visible no-scrollbar snap-x snap-mandatory pb-4"
+          onTouchStart={() => setIsHovered(true)}
+          onTouchEnd={() => setIsHovered(false)}
+          className="flex gap-6 overflow-x-auto no-scrollbar snap-x snap-mandatory pb-4"
         >
           {testimonials.map((t, idx) => {
             const author =
@@ -228,18 +200,10 @@ export const TestimonialsCarousel: React.FC<TestimonialsCarouselProps> = ({
               t.testimonialText || t.quote || t.shortQuote || '';
             const portrait = t.avatarUrl || t.photoUrl || '';
 
-            const isDesktopVisible =
-              testimonials.length <= 3 ||
-              idx === activeIndex % testimonials.length ||
-              idx === (activeIndex + 1) % testimonials.length ||
-              idx === (activeIndex + 2) % testimonials.length;
-
             return (
               <div
                 key={t.id}
-                className={`w-[86vw] sm:w-[390px] lg:w-auto shrink-0 snap-start rounded-[28px] sm:rounded-[32px] bg-white dark:bg-[#121215] border border-zinc-200 dark:border-zinc-800 p-6 sm:p-8 flex flex-col justify-between transition-all duration-500 shadow-sm hover:shadow-xl hover:border-[#d4af37]/50 relative group ${
-                  isDesktopVisible ? 'lg:flex' : 'lg:hidden'
-                }`}
+                className="w-[86vw] sm:w-[390px] lg:w-[395px] shrink-0 snap-start rounded-[28px] sm:rounded-[32px] bg-white dark:bg-[#121215] border border-zinc-200 dark:border-zinc-800 p-6 sm:p-8 flex flex-col justify-between transition-all duration-500 shadow-sm hover:shadow-xl hover:border-[#d4af37]/50 relative group"
               >
                 {/* Decorative Quote Watermark */}
                 <Quote className="w-10 h-10 text-zinc-900/[0.04] dark:text-white/[0.04] absolute top-6 right-6 pointer-events-none" />

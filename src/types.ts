@@ -390,6 +390,7 @@ export interface ClassSet {
   awards: AwardItem[];
   voices: VoiceItem[];
   socials?: DepartmentSocials;
+  departmentAssociationName?: string; // Department association short name (e.g. NAPAS, NACOSS, LAWSAN) inherited across years
   videos?: DepartmentVideoItem[];
   convocationDate?: string; // Formatted convocation date, e.g. "18 October 2024" or "October 2024"
   academicYears?: number; // Number of academic years together, e.g. 4, 5
@@ -858,6 +859,12 @@ export interface WebsiteContentOverride {
   hiddenDirectoryInstitutions?: string[];
   hiddenDirectoryAlbums?: string[];
   institutionCurrencies?: Record<string, string>;
+
+  // 7. Host KOHOT Footer Socials & Corridor Plaque 3-Image Carousel & Founding Class Discount Copy
+  kohotSocials?: DepartmentSocials;
+  corridorPlaqueImages?: string[];
+  foundingDiscountName?: string;
+  foundingDiscountDescription?: string;
 }
 
 export interface PlatformSettingsConfig {
@@ -868,6 +875,8 @@ export interface PlatformSettingsConfig {
   draft_retention_days: number;
   recovery_period_days: number;
   default_kohot_slots_per_album: number;
+  founding_discount_name?: string;
+  founding_discount_description?: string;
   public_directory_enabled: boolean;
   hidden_directory_institutions: string[];
   hidden_directory_albums: string[];
@@ -875,10 +884,12 @@ export interface PlatformSettingsConfig {
 }
 
 export type FinanceLedgerRowType = 'student_payment' | 'slot_purchase';
+export type TransactionEnvironment = 'live' | 'test' | 'legacy';
 export type FinanceLedgerRowStatus =
   | 'paid'
   | 'pending'
   | 'failed'
+  | 'voided'
   | 'refunded'
   | 'refund_due'
   | 'needs_review';
@@ -897,13 +908,28 @@ export interface FinanceLedgerRow {
   amountKobo: number;
   currency: string;
   status: FinanceLedgerRowStatus;
+  rawStatus?: string;
+  environment?: TransactionEnvironment;
   reference: string;
   quantity: number;
+  didCreditSlots?: boolean;
+  creditedSlots?: number;
+  reversedSlots?: number;
+  netActiveSlots?: number;
+  slotPurchaseStatus?: string | null;
+  isHistorical25kCandidate?: boolean;
   sponsor?: string;
   payerName?: string;
   payerEmail?: string;
   refundNote?: string;
   refundedAt?: string;
+  voidedAt?: string | null;
+  voidedBy?: string | null;
+  voidReason?: string | null;
+  previousStatus?: string | null;
+  restoredAt?: string | null;
+  restoredBy?: string | null;
+  restoreReason?: string | null;
 }
 
 export interface FinanceSummaryData {
@@ -917,13 +943,24 @@ export interface FinanceSummaryData {
   refundsDueCount: number;
   refundedKobo: number;
   netCollectedKobo: number;
+  testRevenueKobo?: number;
+  testPaymentsCount?: number;
+  legacyRevenueKobo?: number;
+  legacyPaymentsCount?: number;
+  voidedTransactionsKobo?: number;
+  voidedTransactionsCount?: number;
+  reversedSlotsCount?: number;
+  reversedSlotsValueKobo?: number;
   kohotSponsoredValueKobo: number;
   kohotSponsoredSlotsCount: number;
   unitFeeKobo: number;
+  activePaystackKeyMode?: 'live' | 'test' | 'unconfigured';
   needsAttention: {
     pendingPaymentsCount: number;
     paidNeedsReviewCount: number;
     refundsDueCount: number;
+    historical25kTestCount?: number;
+    unclassifiedLegacyCount?: number;
   };
   timezone: string;
 }

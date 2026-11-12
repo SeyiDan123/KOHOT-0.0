@@ -49,6 +49,13 @@ const SUPPORT_TOPICS: SupportTopic[] = [
     title: 'What if our exact class size is not yet confirmed?',
     answer: 'Provide your best estimate during request submission. Your class album can accommodate all classmates regardless of small variations, and additional students can be added or invited at any time before final publishing.',
   },
+  {
+    id: 'graduate-profile-pricing',
+    category: 'Getting Started',
+    title: 'How much does a graduate profile or class album cost?',
+    popular: true,
+    answer: 'Creating a Class Album workspace is free (₦0 upfront). Each graduate profile is a one-time ₦1,000 archival fee—either paid individually by the student during submission or funded in bulk slots by the class committee or alumni sponsor. There are no recurring subscriptions, and your profiles and memories remain preserved in your department’s official archive forever.',
+  },
 
   // 2. Managing Your Album
   {

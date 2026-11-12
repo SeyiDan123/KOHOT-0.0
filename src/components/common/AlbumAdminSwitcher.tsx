@@ -1,6 +1,5 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft } from 'lucide-react';
 
 interface AlbumAdminSwitcherProps {
   activeMode: 'main' | 'manage' | 'preview';
@@ -55,24 +54,6 @@ export const AlbumAdminSwitcher: React.FC<AlbumAdminSwitcherProps> = ({
           paddingBottom: 'env(safe-area-inset-bottom, 0px)',
         }}
       >
-        {/* Minimalist left arrow button on the left side (Google AI Studio style) to return to Main Host Dashboard */}
-        {hasMain && (
-          <button
-            id="toggle-btn-main-dashboard"
-            type="button"
-            onClick={() => {
-              if (onMainDashboard) {
-                onMainDashboard();
-              }
-            }}
-            className="absolute left-4 sm:left-6 w-9 h-9 rounded-lg flex items-center justify-center text-[#9aa0a6] hover:text-[#f1f3f4] hover:bg-white/[0.06] border border-transparent hover:border-white/10 transition-all duration-200 cursor-pointer"
-            title="Back to Main Host Dashboard"
-            aria-label="Back to Main Host Dashboard"
-          >
-            <ArrowLeft className="w-4 h-4 shrink-0" />
-          </button>
-        )}
-
         {/* Recessed Dark Pill Track (Manage | Preview only) */}
         <div
           id="album-admin-toggle-track"

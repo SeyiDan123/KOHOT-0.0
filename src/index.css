@@ -722,53 +722,79 @@ html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) [class*="bor
   color: #6d28d9 !important;
 }
 
-/* 6. Active Tabs & Clips: Sleek Charcoal/Black with Pure White Text */
-.dashboard-light button[class*="bg-zinc-950"],
-.dashboard-light button[class*="bg-black"],
-.dashboard-light a[class*="bg-zinc-950"],
-.dashboard-light a[class*="bg-black"],
+/* 6. Active Sub-Clips & Tabs: Gold Highlight Pod with Crisp Black Text */
 .dashboard-light [aria-selected="true"],
 .dashboard-light .active-clip,
-html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-zinc-950"],
-html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-black"],
-html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-zinc-950"],
-html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-black"],
 html:not(.dark) [data-dashboard-theme="light"] [aria-selected="true"],
 html:not(.dark) [data-dashboard-theme="light"] .active-clip {
+  background-color: #d4af37 !important;
+  color: #09090b !important;
+  border-color: #d4af37 !important;
+  box-shadow: 0 2px 6px -1px rgb(212 175 55 / 0.35) !important;
+}
+
+.dashboard-light [aria-selected="true"] *,
+.dashboard-light .active-clip *,
+html:not(.dark) [data-dashboard-theme="light"] [aria-selected="true"] *,
+html:not(.dark) [data-dashboard-theme="light"] .active-clip * {
+  color: #09090b !important;
+}
+
+.dashboard-light button[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip),
+.dashboard-light button[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip),
+.dashboard-light a[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip),
+.dashboard-light a[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip),
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip),
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip),
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip),
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip) {
   background-color: #0f172a !important;
   color: #ffffff !important;
   box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.15) !important;
 }
 
-.dashboard-light button[class*="bg-zinc-950"] *,
-.dashboard-light button[class*="bg-black"] *,
-.dashboard-light a[class*="bg-zinc-950"] *,
-.dashboard-light a[class*="bg-black"] *,
-.dashboard-light [aria-selected="true"] *,
-.dashboard-light .active-clip *,
-html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-zinc-950"] *,
-html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-black"] *,
-html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-zinc-950"] *,
-html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-black"] *,
-html:not(.dark) [data-dashboard-theme="light"] [aria-selected="true"] *,
-html:not(.dark) [data-dashboard-theme="light"] .active-clip * {
+.dashboard-light button[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip) *,
+.dashboard-light button[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip) *,
+.dashboard-light a[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip) *,
+.dashboard-light a[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip) *,
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip) *,
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip) *,
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-zinc-950"]:not([aria-selected="true"]):not(.active-clip) *,
+html:not(.dark) [data-dashboard-theme="light"] a[class*="bg-black"]:not([aria-selected="true"]):not(.active-clip) * {
   color: #ffffff !important;
 }
 
-/* Inactive navigation clips/tabs in light mode: Pure white card background with slate text */
-.dashboard-light button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]),
-html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]) {
+/* Inactive navigation clips/tabs in light mode: Pure white card background with slate text (excludes bg-white/ translucent utilities and active clips) */
+.dashboard-light button.bg-white:not([aria-selected="true"]):not(.active-clip):not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]),
+html:not(.dark) [data-dashboard-theme="light"] button.bg-white:not([aria-selected="true"]):not(.active-clip):not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]) {
   background-color: #ffffff !important;
   color: #475569 !important;
   border-color: #e2e8f0 !important;
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
 }
 
-.dashboard-light button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):hover,
-html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white"]:not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):hover {
+.dashboard-light button.bg-white:not([aria-selected="true"]):not(.active-clip):not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):hover,
+html:not(.dark) [data-dashboard-theme="light"] button.bg-white:not([aria-selected="true"]):not(.active-clip):not([class*="bg-zinc-950"]):not([class*="bg-black"]):not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):hover {
   background-color: #f8fafc !important;
   color: #0f172a !important;
   border-color: #cbd5e1 !important;
+}
+
+/* Subtle secondary / cancel buttons using bg-white/5 or bg-white/10 in light mode */
+.dashboard-light button[class*="bg-white/"]:not([aria-selected="true"]):not(.active-clip),
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white/"]:not([aria-selected="true"]):not(.active-clip),
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) button[class*="bg-white/"]:not([aria-selected="true"]):not(.active-clip) {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
+.dashboard-light button[class*="bg-white/"]:not([aria-selected="true"]):not(.active-clip):hover,
+html:not(.dark) [data-dashboard-theme="light"] button[class*="bg-white/"]:not([aria-selected="true"]):not(.active-clip):hover,
+html:not(.dark) div.fixed.inset-0:not(.kohot-dark-branded-backdrop) button[class*="bg-white/"]:not([aria-selected="true"]):not(.active-clip):hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  border-color: #94a3b8 !important;
 }
 
 html:not(.dark) .kohot-modal-header,

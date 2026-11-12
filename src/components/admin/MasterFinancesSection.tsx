@@ -33,6 +33,7 @@ import {
   FinanceLedgerRow,
   FinanceLedgerRowStatus,
   FinanceLedgerRowType,
+  TransactionEnvironment,
   SlotAllocationRecord,
 } from '../../types';
 import {
@@ -50,6 +51,10 @@ import {
   fetchFinancesLedgerFromServer,
   fetchFinancesSummaryFromServer,
   markTransactionRefundedOnServer,
+  fetchHistoricalTransactionsAuditFromServer,
+  voidTransactionOnServer,
+  restoreTransactionOnServer,
+  classifyTransactionEnvironmentOnServer,
   verifyPaystackPaymentOnServer,
   OfferProgramme,
   CohortAllocationItem,
@@ -90,12 +95,19 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   const [, setIsLoading] = useState(false);
 
   // Platform settings state
-  const [studentFeeNairaInput, setStudentFeeNairaInput] = useState('500');
+  const [studentFeeNairaInput, setStudentFeeNairaInput] = useState('1000');
+  const [defaultDiscountPercentInput, setDefaultDiscountPercentInput] = useState('20');
+  const [foundingDiscountNameInput, setFoundingDiscountNameInput] = useState(
+    'Founding Class Departmental Discount'
+  );
+  const [foundingDiscountDescInput, setFoundingDiscountDescInput] = useState(
+    'Special rate for the founding graduating class of a department.'
+  );
   const [minFundedInput, setMinFundedInput] = useState('10');
   const [profileCapInput, setProfileCapInput] = useState('200');
   const [reinstateDaysInput, setReinstateDaysInput] = useState('7');
   const [draftRetentionInput, setDraftRetentionInput] = useState('30');
-  const [recoveryPeriodInput, setRecoveryPeriodInput] = useState('14');
+  const [recoveryPeriodInput, setRecoveryPeriodInput] = useState('30');
   const [defaultKohotSlotsInput, setDefaultKohotSlotsInput] = useState('0');
   const [instCurrencies, setInstCurrencies] = useState<Record<string, string>>({});
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -103,11 +115,16 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   // Ledger & Summary state
   const [serverLedgerRows, setServerLedgerRows] = useState<FinanceLedgerRow[]>([]);
   const [serverSummary, setServerSummary] = useState<any | null>(null);
+  const [historicalAuditData, setHistoricalAuditData] = useState<{
+    historical25kCandidates: any[];
+    auditItems: any[];
+  } | null>(null);
 
   // Filters for Transactions sub-tab
   const [txSearch, setTxSearch] = useState('');
   const [txTypeFilter, setTxTypeFilter] = useState<'all' | FinanceLedgerRowType>('all');
   const [txStatusFilter, setTxStatusFilter] = useState<'all' | FinanceLedgerRowStatus>('all');
+  const [txEnvFilter, setTxEnvFilter] = useState<'all' | TransactionEnvironment>('all');
   const [txInstFilter, setTxInstFilter] = useState<string>('all');
   const [txDateFrom, setTxDateFrom] = useState<string>('');
   const [txDateTo, setTxDateTo] = useState<string>('');
@@ -117,6 +134,26 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   const [refundTargetRow, setRefundTargetRow] = useState<FinanceLedgerRow | null>(null);
   const [refundNote, setRefundNote] = useState('');
   const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
+
+  // Void Transaction Modal state
+  const [voidTargetRow, setVoidTargetRow] = useState<FinanceLedgerRow | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [voidClassifyAsTest, setVoidClassifyAsTest] = useState(true);
+  const [voidConfirmedCheck, setVoidConfirmedCheck] = useState(false);
+  const [isSubmittingVoid, setIsSubmittingVoid] = useState(false);
+
+  // Restore Voided Transaction Modal state
+  const [restoreTargetRow, setRestoreTargetRow] = useState<FinanceLedgerRow | null>(null);
+  const [restoreReason, setRestoreReason] = useState('');
+  const [restoreConfirmedCheck, setRestoreConfirmedCheck] = useState(false);
+  const [isSubmittingRestore, setIsSubmittingRestore] = useState(false);
+
+  // Classify Environment Modal state
+  const [classifyTargetRow, setClassifyTargetRow] = useState<FinanceLedgerRow | null>(null);
+  const [classifyEnv, setClassifyEnv] = useState<TransactionEnvironment>('test');
+  const [classifyReason, setClassifyReason] = useState('');
+  const [classifyConfirmedCheck, setClassifyConfirmedCheck] = useState(false);
+  const [isSubmittingClassify, setIsSubmittingClassify] = useState(false);
 
   // Legacy KoHot Slot Allocations state (merged into programmes/cohorts, used for overview metric fallback)
   const [allocations, setAllocations] = useState<SlotAllocationRecord[]>([]);
@@ -204,21 +241,29 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   const loadFinancesData = async () => {
     setIsLoading(true);
     try {
-      const [settingsRes, allocRes, ledgerRes, summaryRes] = await Promise.all([
+      const [settingsRes, allocRes, ledgerRes, summaryRes, histAuditRes] = await Promise.all([
         fetchAdminSettingsFromServer(),
         fetchSlotAllocationsFromServer(),
         fetchFinancesLedgerFromServer(),
         fetchFinancesSummaryFromServer(),
+        fetchHistoricalTransactionsAuditFromServer(),
       ]);
 
       if (settingsRes.settings) {
         const s = settingsRes.settings;
-        setStudentFeeNairaInput(String(Math.round((Number(s.student_fee_kobo) || 50000) / 100)));
+        setStudentFeeNairaInput(String(Math.round((Number(s.student_fee_kobo) || 100000) / 100)));
+        setDefaultDiscountPercentInput(String(s.default_discount_percent ?? 20));
+        if (s.founding_discount_name) {
+          setFoundingDiscountNameInput(String(s.founding_discount_name));
+        }
+        if (s.founding_discount_description) {
+          setFoundingDiscountDescInput(String(s.founding_discount_description));
+        }
         setMinFundedInput(String(s.min_funded_to_publish ?? 10));
         setProfileCapInput(String(s.profile_cap_default ?? 200));
         setReinstateDaysInput(String(s.reinstate_days ?? 7));
         setDraftRetentionInput(String(s.draft_retention_days ?? 30));
-        setRecoveryPeriodInput(String(s.recovery_period_days ?? 14));
+        setRecoveryPeriodInput(String(s.recovery_period_days ?? 30));
         setDefaultKohotSlotsInput(String(s.default_kohot_slots_per_album ?? 0));
         if (s.institution_currencies && typeof s.institution_currencies === 'object') {
           setInstCurrencies(s.institution_currencies);
@@ -236,6 +281,12 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       }
       if (summaryRes.summary) {
         setServerSummary(summaryRes.summary);
+      }
+      if (histAuditRes.success) {
+        setHistoricalAuditData({
+          historical25kCandidates: histAuditRes.historical25kCandidates,
+          auditItems: histAuditRes.auditItems,
+        });
       }
       await loadOffersData(cohortInstId, cohortYear);
     } finally {
@@ -256,7 +307,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
 
   const unitFeeKobo = useMemo(() => {
     const parsedNaira = Number(studentFeeNairaInput);
-    return Number.isFinite(parsedNaira) && parsedNaira >= 0 ? Math.round(parsedNaira * 100) : 50000;
+    return Number.isFinite(parsedNaira) && parsedNaira >= 0 ? Math.round(parsedNaira * 100) : 100000;
   }, [studentFeeNairaInput]);
 
   // Combine server ledger rows with any prop-supplied transactions (deduped by reference)
@@ -273,16 +324,23 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       const instId = matchedSet?.institutionId || '';
       const rawStatus = String(tx.status || 'Pending').toLowerCase();
       let status: FinanceLedgerRowStatus = 'pending';
-      if (rawStatus === 'refunded') status = 'refunded';
+      if (rawStatus === 'voided') status = 'voided';
+      else if (rawStatus === 'refunded') status = 'refunded';
       else if (rawStatus === 'refund_due' || rawStatus === 'refund due') status = 'refund_due';
       else if (rawStatus.includes('needs review')) status = 'needs_review';
-      else if (rawStatus === 'paid') status = 'paid';
+      else if (rawStatus === 'paid' || rawStatus === 'completed') status = 'paid';
       else if (rawStatus === 'failed') status = 'failed';
 
       const isSlot =
         String(tx.category || '').toLowerCase().includes('slot') ||
         tx.reference.includes('-SLT-');
       const amountKobo = Math.round((Number(tx.amount) || 0) * 100);
+      const txEnv: TransactionEnvironment =
+        (tx as any).environment === 'live'
+          ? 'live'
+          : (tx as any).environment === 'test'
+          ? 'test'
+          : 'legacy';
       map.set(tx.reference, {
         id: tx.id || `tx-${tx.reference}`,
         type: isSlot ? 'slot_purchase' : 'student_payment',
@@ -297,8 +355,10 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
         amountKobo,
         currency: getInstitutionCurrency(instId, tx.currency || instCurrencies[instId] || 'NGN'),
         status,
+        environment: txEnv,
         reference: tx.reference,
-        quantity: isSlot ? Math.max(1, Math.round(amountKobo / (unitFeeKobo || 50000))) : 1,
+        quantity: isSlot ? Math.max(1, Math.round(amountKobo / (unitFeeKobo || 100000))) : 1,
+        isHistorical25kCandidate: amountKobo === 2500000 && txEnv !== 'live',
         sponsor: isSlot ? tx.payerName : '',
         payerName: tx.payerName,
         payerEmail: tx.payerEmail,
@@ -347,7 +407,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     });
   }, [allocations, liveSets, universities]);
 
-  // Compute Overview Summary (Africa/Lagos time UTC+1)
+  // Compute Overview Summary (Africa/Lagos time UTC+1) — Commercial revenue counts ONLY verified LIVE payments
   const overviewMetrics = useMemo(() => {
     const lagosNow = new Date(Date.now() + 60 * 60 * 1000);
     const currentLagosYearMonth = lagosNow.toISOString().slice(0, 7);
@@ -364,27 +424,60 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     let pendingPaymentsCount = 0;
     let paidNeedsReviewCount = 0;
 
+    let testRevenueKobo = 0;
+    let testPaymentsCount = 0;
+    let legacyRevenueKobo = 0;
+    let legacyPaymentsCount = 0;
+    let voidedTransactionsKobo = 0;
+    let voidedTransactionsCount = 0;
+    let reversedSlotsCount = 0;
+    let historical25kTestCount = 0;
+
     for (const r of combinedLedgerRows) {
       const rowLagosMonth = new Date(new Date(r.date).getTime() + 60 * 60 * 1000)
         .toISOString()
         .slice(0, 7);
+      const env = r.environment || 'legacy';
+      if (r.reversedSlots && r.reversedSlots > 0) {
+        reversedSlotsCount += r.reversedSlots;
+      }
+      if ((r.isHistorical25kCandidate || (r.amountKobo === 2500000 && env !== 'live')) && r.status !== 'voided') {
+        historical25kTestCount += 1;
+      }
+      if (r.status === 'voided') {
+        voidedTransactionsKobo += r.amountKobo;
+        voidedTransactionsCount += 1;
+        continue;
+      }
       if (r.status === 'paid') {
-        confirmedRevenueAllTimeKobo += r.amountKobo;
-        if (rowLagosMonth === currentLagosYearMonth) {
-          confirmedRevenueMonthKobo += r.amountKobo;
-        }
-        if (r.type === 'student_payment') {
-          studentPaymentsKobo += r.amountKobo;
-          studentPaymentsCount += 1;
+        if (env === 'live') {
+          confirmedRevenueAllTimeKobo += r.amountKobo;
+          if (rowLagosMonth === currentLagosYearMonth) {
+            confirmedRevenueMonthKobo += r.amountKobo;
+          }
+          if (r.type === 'student_payment') {
+            studentPaymentsKobo += r.amountKobo;
+            studentPaymentsCount += 1;
+          } else {
+            slotPurchasesKobo += r.amountKobo;
+            slotPurchasesCount += 1;
+          }
+        } else if (env === 'test') {
+          testRevenueKobo += r.amountKobo;
+          testPaymentsCount += 1;
         } else {
-          slotPurchasesKobo += r.amountKobo;
-          slotPurchasesCount += 1;
+          legacyRevenueKobo += r.amountKobo;
+          legacyPaymentsCount += 1;
         }
       } else if (r.status === 'refund_due') {
-        refundsDueKobo += r.amountKobo;
+        if (env === 'live') {
+          refundsDueKobo += r.amountKobo;
+        }
         refundsDueCount += 1;
       } else if (r.status === 'refunded') {
-        refundedKobo += r.amountKobo;
+        if (env === 'live') {
+          refundedKobo += r.amountKobo;
+        }
       } else if (r.status === 'pending') {
         pendingPaymentsCount += 1;
       } else if (r.status === 'needs_review') {
@@ -427,6 +520,15 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       refundsDueCount,
       refundedKobo,
       netCollectedKobo,
+      testRevenueKobo: serverSummary?.testRevenueKobo ?? testRevenueKobo,
+      testPaymentsCount: serverSummary?.testPaymentsCount ?? testPaymentsCount,
+      legacyRevenueKobo: serverSummary?.legacyRevenueKobo ?? legacyRevenueKobo,
+      legacyPaymentsCount: serverSummary?.legacyPaymentsCount ?? legacyPaymentsCount,
+      voidedTransactionsKobo: serverSummary?.voidedTransactionsKobo ?? voidedTransactionsKobo,
+      voidedTransactionsCount: serverSummary?.voidedTransactionsCount ?? voidedTransactionsCount,
+      reversedSlotsCount: Math.max(serverSummary?.reversedSlotsCount || 0, reversedSlotsCount),
+      activePaystackKeyMode: serverSummary?.activePaystackKeyMode || 'test',
+      historical25kTestCount: serverSummary?.needsAttention?.historical25kTestCount ?? historical25kTestCount,
       kohotSponsoredValueKobo,
       kohotSponsoredSlotsCount: grantedSlotsCount,
       pendingPaymentsCount,
@@ -440,6 +542,8 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     return combinedLedgerRows.filter((row) => {
       if (txTypeFilter !== 'all' && row.type !== txTypeFilter) return false;
       if (txStatusFilter !== 'all' && row.status !== txStatusFilter) return false;
+      const rowEnv = row.environment || 'legacy';
+      if (txEnvFilter !== 'all' && rowEnv !== txEnvFilter) return false;
       if (
         txInstFilter !== 'all' &&
         row.institutionId.toLowerCase() !== txInstFilter.toLowerCase() &&
@@ -456,12 +560,12 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
         if (rowDate > txDateTo) return false;
       }
       if (q) {
-        const hay = `${row.reference} ${row.institutionName} ${row.departmentName} ${row.classYear} ${row.sponsor || ''} ${row.payerName || ''} ${row.payerEmail || ''}`.toLowerCase();
+        const hay = `${row.reference} ${row.institutionName} ${row.departmentName} ${row.classYear} ${row.sponsor || ''} ${row.payerName || ''} ${row.payerEmail || ''} ${row.voidReason || ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [combinedLedgerRows, txSearch, txTypeFilter, txStatusFilter, txInstFilter, txDateFrom, txDateTo]);
+  }, [combinedLedgerRows, txSearch, txTypeFilter, txStatusFilter, txEnvFilter, txInstFilter, txDateFrom, txDateTo]);
 
   // Export CSV with formula-injection protection
   const handleExportCsv = () => {
@@ -565,6 +669,152 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       setRefundNote('');
     } finally {
       setIsSubmittingRefund(false);
+    }
+  };
+
+  const handleConfirmVoidTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!voidTargetRow) return;
+    const cleanReason = voidReason.trim();
+    if (cleanReason.length < 3) {
+      showError('Reason required', 'Please enter a mandatory reason (minimum 3 characters) for voiding this transaction.');
+      return;
+    }
+    if (!voidConfirmedCheck) {
+      showError('Confirmation required', 'Please check the confirmation box before voiding.');
+      return;
+    }
+
+    setIsSubmittingVoid(true);
+    try {
+      const res = await voidTransactionOnServer({
+        reference: voidTargetRow.reference,
+        reason: cleanReason,
+        confirm: true,
+        classifyAsTest: voidClassifyAsTest,
+      });
+      if (!res.success) {
+        showError('Void blocked', res.message || res.error || 'Could not void transaction.');
+        return;
+      }
+
+      onAddAuditLog?.({
+        id: `aud-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'settings_updated',
+        actorUserId: currentUserEmail,
+        actorRole: 'master_host',
+        targetId: voidTargetRow.reference,
+        details: `Voided transaction ${voidTargetRow.reference} (${formatMoneyFromKobo(voidTargetRow.amountKobo)}). Slots reversed: ${res.slotsReversed || 0}. Reason: ${cleanReason}`,
+      });
+
+      showSuccess(
+        'Transaction voided',
+        `Reference ${voidTargetRow.reference} voided${res.slotsReversed ? ` and ${res.slotsReversed} credited slot(s) reversed via compensating ledger entry` : ''}.`
+      );
+      setVoidTargetRow(null);
+      setVoidReason('');
+      setVoidConfirmedCheck(false);
+      await loadFinancesData();
+    } finally {
+      setIsSubmittingVoid(false);
+    }
+  };
+
+  const handleConfirmRestoreTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!restoreTargetRow) return;
+    const cleanReason = restoreReason.trim();
+    if (cleanReason.length < 3) {
+      showError('Reason required', 'Please enter a mandatory reason for restoring this voided transaction.');
+      return;
+    }
+    if (!restoreConfirmedCheck) {
+      showError('Confirmation required', 'Please check the confirmation box before restoring.');
+      return;
+    }
+
+    setIsSubmittingRestore(true);
+    try {
+      const res = await restoreTransactionOnServer({
+        reference: restoreTargetRow.reference,
+        reason: cleanReason,
+        confirm: true,
+      });
+      if (!res.success) {
+        showError('Restore failed', res.message || res.error || 'Could not restore voided transaction.');
+        return;
+      }
+
+      onAddAuditLog?.({
+        id: `aud-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'settings_updated',
+        actorUserId: currentUserEmail,
+        actorRole: 'master_host',
+        targetId: restoreTargetRow.reference,
+        details: `Restored voided transaction ${restoreTargetRow.reference} to status "${res.status}". Slots restored: ${res.slotsRestored || 0}. Reason: ${cleanReason}`,
+      });
+
+      showSuccess(
+        'Transaction restored',
+        `Reference ${restoreTargetRow.reference} restored to ${res.status}${res.slotsRestored ? ` (+${res.slotsRestored} slot(s) restored)` : ''}.`
+      );
+      setRestoreTargetRow(null);
+      setRestoreReason('');
+      setRestoreConfirmedCheck(false);
+      await loadFinancesData();
+    } finally {
+      setIsSubmittingRestore(false);
+    }
+  };
+
+  const handleConfirmClassifyEnvironment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!classifyTargetRow) return;
+    const cleanReason = classifyReason.trim();
+    if (cleanReason.length < 3) {
+      showError('Reason required', 'Please enter a mandatory reason for classifying this transaction environment.');
+      return;
+    }
+    if (!classifyConfirmedCheck) {
+      showError('Confirmation required', 'Please check the confirmation box before classifying.');
+      return;
+    }
+
+    setIsSubmittingClassify(true);
+    try {
+      const res = await classifyTransactionEnvironmentOnServer({
+        reference: classifyTargetRow.reference,
+        environment: classifyEnv,
+        reason: cleanReason,
+        confirm: true,
+      });
+      if (!res.success) {
+        showError('Classification failed', res.message || res.error || 'Could not classify transaction environment.');
+        return;
+      }
+
+      onAddAuditLog?.({
+        id: `aud-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'settings_updated',
+        actorUserId: currentUserEmail,
+        actorRole: 'master_host',
+        targetId: classifyTargetRow.reference,
+        details: `Classified transaction ${classifyTargetRow.reference} environment as "${classifyEnv}". Reason: ${cleanReason}`,
+      });
+
+      showSuccess(
+        'Environment classified',
+        `Reference ${classifyTargetRow.reference} marked as ${classifyEnv.toUpperCase()}.`
+      );
+      setClassifyTargetRow(null);
+      setClassifyReason('');
+      setClassifyConfirmedCheck(false);
+      await loadFinancesData();
+    } finally {
+      setIsSubmittingClassify(false);
     }
   };
 
@@ -1043,6 +1293,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
   const handleSavePlatformSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     const feeNaira = Number(studentFeeNairaInput);
+    const defaultDiscountPercent = Number(defaultDiscountPercentInput);
     const minFunded = Number(minFundedInput);
     const profileCap = Number(profileCapInput);
     const reinstateDays = Number(reinstateDaysInput);
@@ -1052,6 +1303,10 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
 
     if (!Number.isFinite(feeNaira) || feeNaira < 0 || feeNaira > 1000000) {
       showError('Invalid student fee', 'Student fee must be between ₦0 and ₦1,000,000.');
+      return;
+    }
+    if (!Number.isFinite(defaultDiscountPercent) || defaultDiscountPercent < 0 || defaultDiscountPercent > 100) {
+      showError('Invalid Founding Class discount', 'Discount percentage must be between 0% and 100%.');
       return;
     }
     if (!Number.isInteger(minFunded) || minFunded < 0 || minFunded > 1000) {
@@ -1080,10 +1335,19 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
     }
 
     const studentFeeKobo = Math.round(feeNaira * 100);
+    const cleanDiscName =
+      foundingDiscountNameInput.trim() || 'Founding Class Departmental Discount';
+    const cleanDiscDesc =
+      foundingDiscountDescInput.trim() ||
+      'Special rate for the founding graduating class of a department.';
+
     setIsSavingSettings(true);
     try {
       const res = await saveAdminSettingsToServer({
         student_fee_kobo: studentFeeKobo,
+        default_discount_percent: Math.round(defaultDiscountPercent),
+        founding_discount_name: cleanDiscName,
+        founding_discount_description: cleanDiscDesc,
         min_funded_to_publish: minFunded,
         profile_cap_default: profileCap,
         reinstate_days: reinstateDays,
@@ -1098,6 +1362,12 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
         return;
       }
 
+      try {
+        window.dispatchEvent(new CustomEvent('kohot_pricing_updated'));
+      } catch {
+        // ignore
+      }
+
       Object.entries(instCurrencies).forEach(([instId, curr]) => {
         setInstitutionCurrency(instId, curr);
       });
@@ -1109,10 +1379,10 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
         actorUserId: currentUserEmail,
         actorRole: 'master_host',
         targetId: 'platform_settings',
-        details: `Updated platform financial settings: fee=${studentFeeKobo} kobo, min_funded=${minFunded}, cap=${profileCap}, reinstate=${reinstateDays}d, draft_retention=${draftRetention}d, recovery=${recoveryPeriod}d, default_kohot_slots=${defaultKohotSlots}`,
+        details: `Updated platform financial settings: fee=${studentFeeKobo} kobo, founding_discount=${Math.round(defaultDiscountPercent)}%, min_funded=${minFunded}, cap=${profileCap}, reinstate=${reinstateDays}d, draft_retention=${draftRetention}d, recovery=${recoveryPeriod}d, default_kohot_slots=${defaultKohotSlots}`,
       });
 
-      showSuccess('Settings saved & logged', 'All platform financial settings have been updated.');
+      showSuccess('Settings saved & logged', 'All platform financial settings and public website pricing have been updated.');
     } finally {
       setIsSavingSettings(false);
     }
@@ -1145,7 +1415,10 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
           </div>
         </div>
 
-        <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-black/50 border border-white/10 overflow-x-auto no-scrollbar shrink-0">
+        <div
+          role="tablist"
+          className="inline-flex items-center gap-1 p-1.5 rounded-full bg-white dark:bg-[#12151e] border border-slate-200/90 dark:border-white/10 shadow-xs overflow-x-auto no-scrollbar shrink-0"
+        >
           {(
             [
               { id: 'overview', label: 'Overview', icon: TrendingUp },
@@ -1159,12 +1432,14 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
             return (
               <button
                 key={tab.id}
+                role="tab"
+                aria-selected={isActive}
                 type="button"
                 onClick={() => setSubTab(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-mono-tech uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   isActive
-                    ? 'bg-white text-black font-bold shadow'
-                    : 'text-zinc-400 hover:text-white'
+                    ? 'active-clip bg-[#d4af37] text-black font-bold shadow-xs'
+                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white font-medium'
                 }`}
               >
                 <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-black' : 'text-[#d4af37]'}`} />
@@ -1180,21 +1455,74 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
          ===================================================================== */}
       {subTab === 'overview' && (
         <div className="space-y-5">
+          {/* Live vs Test Environment Banner */}
+          <div className="p-3.5 rounded-xl bg-[#08090e] border border-white/10 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span
+                className={`px-2.5 py-1 rounded-lg font-mono-tech text-[10px] uppercase font-bold border ${
+                  overviewMetrics.activePaystackKeyMode === 'live'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                    : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                }`}
+              >
+                Active Keys: {overviewMetrics.activePaystackKeyMode === 'live' ? 'LIVE MODE' : 'TEST MODE'}
+              </span>
+              <p className="text-xs text-zinc-300">
+                Commercial revenue metrics below count <strong className="text-white">verified LIVE payments only</strong>. Test, Voided, and Unclassified Historical records are strictly separated.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-[11px] font-mono-tech">
+              <button
+                type="button"
+                onClick={() => {
+                  setTxEnvFilter('test');
+                  setTxStatusFilter('all');
+                  setSubTab('transactions');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 cursor-pointer"
+              >
+                Test: {formatMoneyFromKobo(overviewMetrics.testRevenueKobo)} ({overviewMetrics.testPaymentsCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTxEnvFilter('legacy');
+                  setTxStatusFilter('all');
+                  setSubTab('transactions');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-zinc-500/15 hover:bg-zinc-500/25 border border-zinc-500/30 text-zinc-300 cursor-pointer"
+              >
+                Historical/Legacy: {formatMoneyFromKobo(overviewMetrics.legacyRevenueKobo)} ({overviewMetrics.legacyPaymentsCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTxEnvFilter('all');
+                  setTxStatusFilter('voided');
+                  setSubTab('transactions');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 cursor-pointer"
+              >
+                Voided: {overviewMetrics.voidedTransactionsCount} ({overviewMetrics.reversedSlotsCount} slots reversed)
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400">
-                  Confirmed Revenue (This Month)
+                  Confirmed Live Revenue (This Month)
                 </span>
                 <span className="text-[9px] font-mono-tech text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-                  Africa/Lagos
+                  LIVE ONLY • Africa/Lagos
                 </span>
               </div>
               <p className="font-syne font-bold text-lg sm:text-xl text-white">
                 {formatMoneyFromKobo(overviewMetrics.confirmedRevenueMonthKobo)}
               </p>
               <p className="font-mono-tech text-[11px] text-zinc-400">
-                All time:{' '}
+                All time live:{' '}
                 <span className="text-zinc-200 font-semibold">
                   {formatMoneyFromKobo(overviewMetrics.confirmedRevenueAllTimeKobo)}
                 </span>
@@ -1203,25 +1531,25 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
 
             <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-1.5">
               <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 block">
-                Student Payments
+                Live Student Payments
               </span>
               <p className="font-syne font-bold text-lg sm:text-xl text-white">
                 {formatMoneyFromKobo(overviewMetrics.studentPaymentsKobo)}
               </p>
               <p className="font-mono-tech text-[11px] text-zinc-400">
-                {overviewMetrics.studentPaymentsCount} verified student{overviewMetrics.studentPaymentsCount === 1 ? '' : 's'}
+                {overviewMetrics.studentPaymentsCount} verified live student{overviewMetrics.studentPaymentsCount === 1 ? '' : 's'}
               </p>
             </div>
 
             <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-1.5">
               <span className="font-mono-tech text-[10px] uppercase tracking-wider text-zinc-400 block">
-                Slot Purchases
+                Live Slot Purchases
               </span>
               <p className="font-syne font-bold text-lg sm:text-xl text-white">
                 {formatMoneyFromKobo(overviewMetrics.slotPurchasesKobo)}
               </p>
               <p className="font-mono-tech text-[11px] text-zinc-400">
-                {overviewMetrics.slotPurchasesCount} batch purchase{overviewMetrics.slotPurchasesCount === 1 ? '' : 's'}
+                {overviewMetrics.slotPurchasesCount} live batch purchase{overviewMetrics.slotPurchasesCount === 1 ? '' : 's'}
               </p>
             </div>
 
@@ -1239,13 +1567,13 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
 
             <div className="p-4 rounded-xl bg-[#08090e] border border-emerald-500/25 space-y-1.5">
               <span className="font-mono-tech text-[10px] uppercase tracking-wider text-emerald-400 block">
-                Net Collected
+                Net Live Collected
               </span>
               <p className="font-syne font-bold text-lg sm:text-xl text-emerald-400">
                 {formatMoneyFromKobo(overviewMetrics.netCollectedKobo)}
               </p>
               <p className="font-mono-tech text-[11px] text-zinc-400">
-                Confirmed revenue minus refunds due
+                Verified live revenue minus live refunds due
               </p>
             </div>
 
@@ -1266,6 +1594,105 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               </p>
             </div>
           </div>
+
+          {/* Historical Test Transactions (₦25,000) & Slot Reconciliation Panel */}
+          {historicalAuditData && historicalAuditData.historical25kCandidates.length > 0 && (
+            <div className="p-4 rounded-xl bg-amber-500/[0.06] border border-amber-500/30 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-syne font-bold text-sm text-amber-300 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400" />
+                    <span>Historical ₦25,000 Test Transaction Audit ({historicalAuditData.historical25kCandidates.length} Found)</span>
+                  </h3>
+                  <p className="font-body text-xs text-zinc-300 mt-0.5">
+                    Inspect whether each ₦25,000 test transaction actually credited album slots in <code className="text-amber-200">slot_purchases</code> / <code className="text-amber-200">slot_ledger</code> before classifying or voiding. Records are never auto-deleted.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {historicalAuditData.historical25kCandidates.map((cand: any) => (
+                  <div
+                    key={cand.reference}
+                    className="p-3.5 rounded-xl bg-black/50 border border-white/10 space-y-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono-tech font-bold text-white">{cand.reference}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono-tech text-[10px] uppercase">
+                          Env: {cand.environment || 'legacy'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-white/10 text-zinc-200 font-mono-tech text-[10px] uppercase">
+                          Status: {cand.status}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-zinc-300">
+                      <strong>{formatMoneyFromKobo(cand.amountKobo)}</strong> • {cand.institutionName} — {cand.departmentName} ({cand.classYear})
+                    </p>
+                    <div className="p-2 rounded-lg bg-white/[0.03] border border-white/10 font-mono-tech text-[11px] space-y-1">
+                      <p className="text-zinc-300">
+                        Did Credit Slots:{' '}
+                        <strong className={cand.didCreditSlots ? 'text-amber-300' : 'text-zinc-400'}>
+                          {cand.didCreditSlots ? `YES (+${cand.creditedSlots} slots credited)` : 'NO (0 slots credited in slot_ledger)'}
+                        </strong>
+                      </p>
+                      <p className="text-zinc-400">
+                        Reversed Slots: <strong className="text-white">{cand.reversedSlots || 0}</strong> • Net Active Slots from Ref:{' '}
+                        <strong className="text-white">{cand.netActiveSlots || 0}</strong> • Album Available Balance:{' '}
+                        <strong className="text-emerald-300">{cand.albumCurrentSlotBalance ?? 0}</strong> (Used: {cand.albumTotalUsedSlots ?? 0})
+                      </p>
+                      {cand.voidBlockReason && cand.status !== 'voided' && (
+                        <p className="text-rose-400 text-[10px]">{cand.voidBlockReason}</p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {cand.environment !== 'test' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setClassifyTargetRow(cand);
+                            setClassifyEnv('test');
+                            setClassifyReason('Historical ₦25,000 test payment executed with Paystack test keys');
+                            setClassifyConfirmedCheck(false);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 font-mono-tech text-[10px] uppercase cursor-pointer"
+                        >
+                          Classify as Test
+                        </button>
+                      )}
+                      {cand.status !== 'voided' ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setVoidTargetRow(cand);
+                            setVoidReason('Erroneous ₦25,000 Paystack test-mode transaction');
+                            setVoidClassifyAsTest(true);
+                            setVoidConfirmedCheck(false);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 font-mono-tech text-[10px] uppercase cursor-pointer"
+                        >
+                          Void Transaction{cand.netActiveSlots > 0 ? ` & Reverse ${cand.netActiveSlots} Slots` : ''}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRestoreTargetRow(cand);
+                            setRestoreReason('');
+                            setRestoreConfirmedCheck(false);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 font-mono-tech text-[10px] uppercase cursor-pointer"
+                        >
+                          Restore Voided Transaction
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="p-4 rounded-xl bg-[#08090e] border border-white/10 space-y-3">
             <div className="flex items-center justify-between">
@@ -1340,7 +1767,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
       {subTab === 'transactions' && (
         <div className="space-y-4">
           <div className="p-3.5 rounded-xl bg-[#08090e] border border-white/10 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2.5">
               <div className="relative lg:col-span-2">
                 <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -1351,6 +1778,17 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                   className="w-full pl-8 pr-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none focus:border-white/30"
                 />
               </div>
+
+              <select
+                value={txEnvFilter}
+                onChange={(e) => setTxEnvFilter(e.target.value as any)}
+                className="px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
+              >
+                <option value="all">All Environments</option>
+                <option value="live">Live Only</option>
+                <option value="test">Test Only</option>
+                <option value="legacy">Historical / Unclassified</option>
+              </select>
 
               <select
                 value={txTypeFilter}
@@ -1368,9 +1806,10 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                 className="px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
               >
                 <option value="all">All Statuses</option>
-                <option value="paid">Paid</option>
+                <option value="paid">Paid / Successful</option>
                 <option value="pending">Pending</option>
                 <option value="failed">Failed</option>
+                <option value="voided">Voided</option>
                 <option value="refunded">Refunded</option>
                 <option value="refund_due">Refund due</option>
                 <option value="needs_review">Needs review</option>
@@ -1417,6 +1856,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                 />
                 {(txTypeFilter !== 'all' ||
                   txStatusFilter !== 'all' ||
+                  txEnvFilter !== 'all' ||
                   txInstFilter !== 'all' ||
                   txDateFrom ||
                   txDateTo ||
@@ -1427,6 +1867,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                       setTxSearch('');
                       setTxTypeFilter('all');
                       setTxStatusFilter('all');
+                      setTxEnvFilter('all');
                       setTxInstFilter('all');
                       setTxDateFrom('');
                       setTxDateTo('');
@@ -1455,23 +1896,33 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-white/10 bg-black/40 font-mono-tech text-[10px] uppercase text-zinc-400">
-                    <th className="py-2.5 px-3">Type</th>
+                    <th className="py-2.5 px-3">Env &amp; Type</th>
                     <th className="py-2.5 px-3">Date</th>
                     <th className="py-2.5 px-3">Institution &amp; Dept</th>
                     <th className="py-2.5 px-3">Year</th>
                     <th className="py-2.5 px-3">Amount</th>
                     <th className="py-2.5 px-3">Status</th>
                     <th className="py-2.5 px-3">Reference</th>
-                    <th className="py-2.5 px-3">Qty</th>
+                    <th className="py-2.5 px-3">Slots / Reconciliation</th>
                     <th className="py-2.5 px-3">Sponsor</th>
                     <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.06]">
                   {filteredLedgerRows.map((row) => {
+                    const rowEnv = row.environment || 'legacy';
+                    const envBadge =
+                      rowEnv === 'live'
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        : rowEnv === 'test'
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        : 'bg-zinc-500/20 text-zinc-300 border-zinc-500/30';
+
                     const statusBadge =
                       row.status === 'paid'
                         ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        : row.status === 'voided'
+                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 line-through'
                         : row.status === 'pending'
                         ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                         : row.status === 'refund_due'
@@ -1483,9 +1934,14 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                         : 'bg-red-500/15 text-red-300 border-red-500/30';
 
                     return (
-                      <tr key={row.id} className="hover:bg-white/[0.02]">
+                      <tr key={row.id} className={`hover:bg-white/[0.02] ${row.status === 'voided' ? 'opacity-65' : ''}`}>
                         <td className="py-2.5 px-3 font-mono-tech text-[11px] text-zinc-200 whitespace-nowrap">
-                          {row.type === 'slot_purchase' ? 'Slot purchase' : 'Student payment'}
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${envBadge}`}>
+                              {rowEnv}
+                            </span>
+                            <span>{row.type === 'slot_purchase' ? 'Slot purchase' : 'Student payment'}</span>
+                          </div>
                         </td>
                         <td className="py-2.5 px-3 font-mono-tech text-[11px] text-zinc-400 whitespace-nowrap">
                           {row.date.slice(0, 10)}
@@ -1513,6 +1969,11 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                           >
                             {row.status.replace('_', ' ')}
                           </span>
+                          {row.voidReason && (
+                            <p className="text-[10px] text-rose-300/90 mt-0.5 truncate max-w-[160px]" title={`Voided by ${row.voidedBy || 'Host'}: ${row.voidReason}`}>
+                              Void: {row.voidReason}
+                            </p>
+                          )}
                           {row.refundNote && (
                             <p className="text-[10px] text-zinc-500 mt-0.5 truncate max-w-[140px]" title={row.refundNote}>
                               Note: {row.refundNote}
@@ -1522,11 +1983,26 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                         <td className="py-2.5 px-3 font-mono-tech text-[11px] text-zinc-400 whitespace-nowrap">
                           {row.reference}
                         </td>
-                        <td className="py-2.5 px-3 font-mono-tech text-[11px] text-zinc-300">
-                          {row.quantity}
+                        <td className="py-2.5 px-3 font-mono-tech text-[11px] text-zinc-300 whitespace-nowrap">
+                          {row.type === 'slot_purchase' ? (
+                            <div className="space-y-0.5">
+                              {row.didCreditSlots ? (
+                                <span className="text-emerald-300 font-bold">+{row.creditedSlots} credited</span>
+                              ) : (
+                                <span className="text-zinc-500">0 credited ({row.quantity} req)</span>
+                              )}
+                              {(row.reversedSlots || 0) > 0 && (
+                                <span className="block text-[10px] text-rose-400">
+                                  Reversed: -{row.reversedSlots} (Net: {row.netActiveSlots || 0})
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span>1 profile</span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3 text-xs text-zinc-300 truncate max-w-[130px]">
-                          {row.sponsor || '—'}
+                          {row.sponsor || row.payerName || '—'}
                         </td>
                         <td className="py-2.5 px-3 text-right whitespace-nowrap">
                           <div className="inline-flex items-center gap-1.5">
@@ -1535,7 +2011,7 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                                 type="button"
                                 disabled={verifyingRef === row.reference}
                                 onClick={() => handleReverifyPendingRow(row)}
-                                className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono-tech text-[10px] inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-mono-tech text-[10px] inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
                               >
                                 <RefreshCw
                                   className={`w-3 h-3 ${
@@ -1545,16 +2021,58 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                                 <span>Re-verify</span>
                               </button>
                             )}
-                            {row.status !== 'refunded' && row.status !== 'failed' && (
+
+                            {row.status !== 'voided' ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setVoidTargetRow(row);
+                                  setVoidReason('');
+                                  setVoidClassifyAsTest(rowEnv !== 'live');
+                                  setVoidConfirmedCheck(false);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-mono-tech text-[10px] cursor-pointer"
+                              >
+                                Void
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRestoreTargetRow(row);
+                                  setRestoreReason('');
+                                  setRestoreConfirmedCheck(false);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-mono-tech text-[10px] cursor-pointer"
+                              >
+                                Restore
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setClassifyTargetRow(row);
+                                setClassifyEnv(rowEnv === 'live' ? 'live' : 'test');
+                                setClassifyReason('');
+                                setClassifyConfirmedCheck(false);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-mono-tech text-[10px] cursor-pointer"
+                              title="Classify Environment (Test / Live)"
+                            >
+                              Env
+                            </button>
+
+                            {row.status !== 'refunded' && row.status !== 'failed' && row.status !== 'voided' && (
                               <button
                                 type="button"
                                 onClick={() => {
                                   setRefundTargetRow(row);
                                   setRefundNote(row.refundNote || '');
                                 }}
-                                className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-mono-tech text-[10px] cursor-pointer"
+                                className="px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-mono-tech text-[10px] cursor-pointer"
                               >
-                                Mark refunded
+                                Refund
                               </button>
                             )}
                           </div>
@@ -2267,6 +2785,51 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
               </p>
             </div>
 
+            {/* 3 Major Pricing & Sponsorship Programs Summary */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pb-2">
+              <div className="p-3 rounded-xl bg-black/40 border border-emerald-500/25">
+                <span className="text-[10px] font-mono-tech uppercase text-emerald-400 font-bold">
+                  Program 1 • Full Sponsorship
+                </span>
+                <p className="font-syne font-bold text-xs text-white mt-0.5">
+                  100% Covered by Sponsor or KoHot
+                </p>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  An individual alumnus, patron, or KoHot funds graduate slots so students publish free.
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-black/40 border border-[#d4af37]/30">
+                <span className="text-[10px] font-mono-tech uppercase text-[#d4af37] font-bold">
+                  Program 2 • Founding Class Discount
+                </span>
+                <p className="font-syne font-bold text-xs text-white mt-0.5">
+                  {Number(defaultDiscountPercentInput) || 20}% Departmental Discount (₦
+                  {Math.max(
+                    0,
+                    Math.round(
+                      (Number(studentFeeNairaInput) || 1000) *
+                        (1 - (Number(defaultDiscountPercentInput) || 20) / 100)
+                    )
+                  ).toLocaleString()}{' '}
+                  / profile)
+                </p>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Reflected dynamically on the public website pricing card for pioneer departmental sets.
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-black/40 border border-white/10">
+                <span className="text-[10px] font-mono-tech uppercase text-sky-400 font-bold">
+                  Program 3 • Standard Price
+                </span>
+                <p className="font-syne font-bold text-xs text-white mt-0.5">
+                  ₦{(Number(studentFeeNairaInput) || 1000).toLocaleString()} per Graduate Profile
+                </p>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  One-time lifetime archival contribution when no sponsorship or discount applies.
+                </p>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
               <div>
                 <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
@@ -2281,8 +2844,59 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                   className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
                 />
                 <span className="font-mono-tech text-[10px] text-zinc-500 mt-0.5 block">
-                  Stored as {Math.round((Number(studentFeeNairaInput) || 0) * 100)} kobo (Default: ₦500 / 50000 kobo)
+                  Stored as {Math.round((Number(studentFeeNairaInput) || 0) * 100)} kobo (Default: ₦1,000)
                 </span>
+              </div>
+
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Founding Class / Dept Discount (%)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={defaultDiscountPercentInput}
+                  onChange={(e) => setDefaultDiscountPercentInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
+                />
+                <span className="font-mono-tech text-[10px] text-[#d4af37] mt-0.5 block">
+                  Founding Class pays ₦
+                  {Math.max(
+                    0,
+                    Math.round(
+                      (Number(studentFeeNairaInput) || 1000) *
+                        (1 - (Number(defaultDiscountPercentInput) || 0) / 100)
+                    )
+                  ).toLocaleString()}{' '}
+                  per profile
+                </span>
+              </div>
+
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Founding Discount Offer Title
+                </label>
+                <input
+                  type="text"
+                  value={foundingDiscountNameInput}
+                  onChange={(e) => setFoundingDiscountNameInput(e.target.value)}
+                  placeholder="Founding Class Departmental Discount"
+                  className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Founding Discount Offer Description
+                </label>
+                <input
+                  type="text"
+                  value={foundingDiscountDescInput}
+                  onChange={(e) => setFoundingDiscountDescInput(e.target.value)}
+                  placeholder="Special rate for the founding graduating class of a department."
+                  className="w-full px-3 py-2 rounded-lg bg-black/60 border border-white/10 text-xs text-white focus:outline-none"
+                />
               </div>
 
               <div>
@@ -2918,6 +3532,279 @@ export const MasterFinancesSection: React.FC<MasterFinancesSectionProps> = ({
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL: VOID TRANSACTION & COMPENSATING SLOT REVERSAL
+         ===================================================================== */}
+      {voidTargetRow && (
+        <div
+          className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setVoidTargetRow(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-[#14151a] border border-amber-500/30 p-5 space-y-4 text-white shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="font-syne font-bold text-base text-amber-300">Void Transaction</h3>
+              <button
+                type="button"
+                onClick={() => setVoidTargetRow(null)}
+                className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleConfirmVoidTransaction} className="space-y-3 text-xs">
+              <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10 space-y-1">
+                <p className="text-zinc-300">
+                  Reference: <strong className="text-white font-mono-tech">{voidTargetRow.reference}</strong>
+                </p>
+                <p className="text-zinc-300">
+                  Amount (preserved): <strong className="text-white">{formatMoneyFromKobo(voidTargetRow.amountKobo)}</strong> • Current Status:{' '}
+                  <strong className="text-white uppercase">{voidTargetRow.status}</strong>
+                </p>
+                <p className="text-zinc-300">
+                  Cohort: <strong className="text-white">{voidTargetRow.institutionName} — {voidTargetRow.departmentName} ({voidTargetRow.classYear})</strong>
+                </p>
+                {voidTargetRow.type === 'slot_purchase' && (
+                  <p className="text-amber-300 font-mono-tech text-[11px] pt-1">
+                    {voidTargetRow.netActiveSlots && voidTargetRow.netActiveSlots > 0
+                      ? `Reconciles slots: will insert a compensating void_reversal entry (-${voidTargetRow.netActiveSlots} slots) in slot_ledger. Blocked automatically if those slots are already consumed.`
+                      : 'No active credited slots found in slot_ledger for this reference (0 slots will be deducted).'}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Mandatory Void Reason *
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={voidReason}
+                  onChange={(e) => setVoidReason(e.target.value)}
+                  placeholder="e.g. Erroneous Paystack test transaction — voiding before live launch"
+                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={voidClassifyAsTest}
+                  onChange={(e) => setVoidClassifyAsTest(e.target.checked)}
+                  className="rounded accent-amber-400"
+                />
+                <span className="text-zinc-300">
+                  Also classify transaction environment as <strong className="text-amber-300">TEST</strong>
+                </span>
+              </label>
+
+              <label className="flex items-start gap-2 cursor-pointer select-none p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25">
+                <input
+                  type="checkbox"
+                  checked={voidConfirmedCheck}
+                  onChange={(e) => setVoidConfirmedCheck(e.target.checked)}
+                  className="mt-0.5 rounded accent-amber-400"
+                />
+                <span className="text-[11px] text-amber-200 leading-relaxed">
+                  I confirm voiding this transaction. Original transaction ID, reference, and amount remain preserved in financial audit history.
+                </span>
+              </label>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setVoidTargetRow(null)}
+                  className="px-3.5 py-2 rounded-xl bg-white/5 text-zinc-300 font-mono-tech text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingVoid || !voidConfirmedCheck || voidReason.trim().length < 3}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-syne font-bold text-xs uppercase cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingVoid ? 'Voiding...' : 'Confirm Void'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL: RESTORE VOIDED TRANSACTION
+         ===================================================================== */}
+      {restoreTargetRow && (
+        <div
+          className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setRestoreTargetRow(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-[#14151a] border border-emerald-500/30 p-5 space-y-4 text-white shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="font-syne font-bold text-base text-emerald-300">Restore Voided Transaction</h3>
+              <button
+                type="button"
+                onClick={() => setRestoreTargetRow(null)}
+                className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleConfirmRestoreTransaction} className="space-y-3 text-xs">
+              <p className="text-zinc-300 leading-relaxed">
+                Restoring <strong className="text-white font-mono-tech">{restoreTargetRow.reference}</strong> (
+                {formatMoneyFromKobo(restoreTargetRow.amountKobo)}) to its previous status (
+                <strong className="text-white">{restoreTargetRow.previousStatus || 'Paid'}</strong>).
+                {(restoreTargetRow.reversedSlots || 0) > 0 && (
+                  <span className="block text-emerald-300 mt-1">
+                    Will also insert a compensating <code className="font-mono-tech">void_restore</code> entry (+
+                    {restoreTargetRow.reversedSlots} slots) into <code className="font-mono-tech">slot_ledger</code>.
+                  </span>
+                )}
+              </p>
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Mandatory Restoration Reason *
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={restoreReason}
+                  onChange={(e) => setRestoreReason(e.target.value)}
+                  placeholder="e.g. Voided in error — verified payment should remain active"
+                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+              <label className="flex items-start gap-2 cursor-pointer select-none p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
+                <input
+                  type="checkbox"
+                  checked={restoreConfirmedCheck}
+                  onChange={(e) => setRestoreConfirmedCheck(e.target.checked)}
+                  className="mt-0.5 rounded accent-emerald-400"
+                />
+                <span className="text-[11px] text-emerald-200 leading-relaxed">
+                  I confirm restoring this voided transaction and any reversed slot credits.
+                </span>
+              </label>
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRestoreTargetRow(null)}
+                  className="px-3.5 py-2 rounded-xl bg-white/5 text-zinc-300 font-mono-tech text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingRestore || !restoreConfirmedCheck || restoreReason.trim().length < 3}
+                  className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-black font-syne font-bold text-xs uppercase cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingRestore ? 'Restoring...' : 'Confirm Restore'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL: CLASSIFY TRANSACTION ENVIRONMENT (TEST / LIVE / LEGACY)
+         ===================================================================== */}
+      {classifyTargetRow && (
+        <div
+          className="fixed inset-0 z-[9995] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setClassifyTargetRow(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-[#14151a] border border-white/15 p-5 space-y-4 text-white shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="font-syne font-bold text-base">Classify Transaction Environment</h3>
+              <button
+                type="button"
+                onClick={() => setClassifyTargetRow(null)}
+                className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleConfirmClassifyEnvironment} className="space-y-3 text-xs">
+              <p className="text-zinc-400">
+                Reference <strong className="text-white font-mono-tech">{classifyTargetRow.reference}</strong> (
+                {formatMoneyFromKobo(classifyTargetRow.amountKobo)}) is currently marked as{' '}
+                <strong className="text-white uppercase">{classifyTargetRow.environment || 'legacy'}</strong>.
+              </p>
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Target Environment *
+                </label>
+                <select
+                  value={classifyEnv}
+                  onChange={(e) => setClassifyEnv(e.target.value as TransactionEnvironment)}
+                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                >
+                  <option value="test">TEST (Excluded from live commercial revenue)</option>
+                  <option value="live">LIVE (Requires independent live Paystack verification)</option>
+                  <option value="legacy">LEGACY / UNCLASSIFIED (Excluded from live revenue)</option>
+                </select>
+                {classifyEnv === 'live' && (
+                  <p className="mt-1.5 text-[11px] text-amber-300 font-mono-tech leading-relaxed">
+                    Security Guard: Classifying a transaction as LIVE requires server-side verification of this reference against the live Paystack API. Test or unverified references will be rejected.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block font-mono-tech text-[10px] uppercase text-zinc-400 mb-1">
+                  Classification Reason *
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  value={classifyReason}
+                  onChange={(e) => setClassifyReason(e.target.value)}
+                  placeholder="e.g. Verified against Paystack dashboard as a test-mode transaction"
+                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-white text-xs focus:outline-none"
+                />
+              </div>
+              <label className="flex items-start gap-2 cursor-pointer select-none p-2.5 rounded-xl bg-white/5 border border-white/10">
+                <input
+                  type="checkbox"
+                  checked={classifyConfirmedCheck}
+                  onChange={(e) => setClassifyConfirmedCheck(e.target.checked)}
+                  className="mt-0.5 rounded accent-[#d4af37]"
+                />
+                <span className="text-[11px] text-zinc-300 leading-relaxed">
+                  I confirm updating the environment classification for this transaction and its linked slot records.
+                </span>
+              </label>
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setClassifyTargetRow(null)}
+                  className="px-3.5 py-2 rounded-xl bg-white/5 text-zinc-300 font-mono-tech text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingClassify || !classifyConfirmedCheck || classifyReason.trim().length < 3}
+                  className="px-4 py-2 rounded-xl bg-[#d4af37] text-black font-syne font-bold text-xs uppercase cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingClassify ? 'Saving...' : 'Save Classification'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

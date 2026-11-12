@@ -57,9 +57,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       };
     }
 
-    const matchedSet = availableSets.find(
-      (s) => (s.classRepEmail || '').trim().toLowerCase() === cleanEmail && !s.deletedAt
-    );
+    const RECOVERY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+    const matchedSet = availableSets.find((s) => {
+      if ((s.classRepEmail || '').trim().toLowerCase() !== cleanEmail) return false;
+      if (!s.deletedAt) return true;
+      const deletedMs = new Date(s.deletedAt).getTime();
+      return Number.isFinite(deletedMs) && Date.now() - deletedMs < RECOVERY_WINDOW_MS;
+    });
 
     if (matchedSet) {
       return {
@@ -285,13 +289,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       <GoogleAccountChooserModal
         isOpen={isGoogleChooserOpen}
         onClose={() => setIsGoogleChooserOpen(false)}
+        appName={brandName}
+        logoUrl={logoUrl}
         onSelectAccount={async (acct) => {
           setIsGoogleChooserOpen(false);
           await handleOAuthPayload(
             {
               email: acct.email,
               name: acct.name,
-              credential: (acct as any).credential || `google-${acct.email}`,
+              credential: acct.credential || `google-${acct.email}`,
+              idToken: acct.idToken,
+              accessToken: acct.accessToken,
             },
             'google'
           );

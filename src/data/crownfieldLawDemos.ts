@@ -1935,7 +1935,7 @@ export const CROWNFIELD_PUBLIC_LAW_SETS: ClassSet[] = [
     faculty: 'Faculty of Law',
     graduationYear: 2023,
     academicYears: 5,
-    classSetName: 'Trailblazers — Class of 2023',
+    classSetName: 'THE TRAILBLAZERS',
     classSlogan: 'First to Dare, First to Lead',
     isFoundingClass: true,
     estimatedGraduatesCount: 120,
@@ -2021,13 +2021,6 @@ Through rigorous moot court trials, marathon drafting sessions at the Faculty La
         dateStr: 'Valedictory • Nov 2023',
       },
     ],
-    socials: {
-      youtube: 'https://youtube.com/@crownfieldlaw',
-      instagram: '@crownfield_trailblazers23',
-      linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
-      twitter: '@crownfield_law',
-      website: 'https://law.crownfield.edu.ng',
-    },
   },
 
   // 2. Phoenix — Class of 2024
@@ -2042,7 +2035,7 @@ Through rigorous moot court trials, marathon drafting sessions at the Faculty La
     faculty: 'Faculty of Law',
     graduationYear: 2024,
     academicYears: 5,
-    classSetName: 'Phoenix — Class of 2024',
+    classSetName: 'THE PHOENIX',
     classSlogan: 'Rising with Tenacity, Reigning in Justice',
     isFoundingClass: false,
     estimatedGraduatesCount: 135,
@@ -2128,13 +2121,6 @@ From founding the Legal Aid Clinic to representing Crownfield at international t
         dateStr: 'Sign-Out • Oct 2024',
       },
     ],
-    socials: {
-      youtube: 'https://youtube.com/@crownfieldlaw',
-      instagram: '@crownfield_phoenix24',
-      linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
-      twitter: '@crownfield_law',
-      website: 'https://law.crownfield.edu.ng',
-    },
   },
 
   // 3. Frontiers — Class of 2025
@@ -2149,7 +2135,7 @@ From founding the Legal Aid Clinic to representing Crownfield at international t
     faculty: 'Faculty of Law',
     graduationYear: 2025,
     academicYears: 5,
-    classSetName: 'Frontiers — Class of 2025',
+    classSetName: 'THE FRONTIERS',
     classSlogan: 'Breaking Boundaries, Shaping Horizons',
     isFoundingClass: false,
     estimatedGraduatesCount: 140,
@@ -2235,13 +2221,6 @@ As we stand on the threshold of our Call to Bar, we leave behind a department ri
         dateStr: 'Convocation • Nov 2025',
       },
     ],
-    socials: {
-      youtube: 'https://youtube.com/@crownfieldlaw',
-      instagram: '@crownfield_frontiers25',
-      linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
-      twitter: '@crownfield_law',
-      website: 'https://law.crownfield.edu.ng',
-    },
   },
 
   // 4. Apex — Class of 2026
@@ -2256,7 +2235,7 @@ As we stand on the threshold of our Call to Bar, we leave behind a department ri
     faculty: 'Faculty of Law',
     graduationYear: 2026,
     academicYears: 5,
-    classSetName: 'Apex — Class of 2026',
+    classSetName: 'THE APEX',
     classSlogan: 'At the Pinnacle of Honor',
     isFoundingClass: false,
     estimatedGraduatesCount: 150,
@@ -2342,12 +2321,5 @@ To our professors, mentors, and the three illustrious classes who paved the way 
         dateStr: 'Documentary • Nov 2026',
       },
     ],
-    socials: {
-      youtube: 'https://youtube.com/@crownfieldlaw',
-      instagram: '@crownfield_apex26',
-      linkedin: 'https://linkedin.com/company/crownfield-law-alumni',
-      twitter: '@crownfield_law',
-      website: 'https://law.crownfield.edu.ng',
-    },
   },
 ];

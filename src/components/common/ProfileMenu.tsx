@@ -38,6 +38,7 @@ import { HelpModal } from '../public/HelpModal';
 import { UniversalModal } from './UniversalModal';
 import { ImageCropModal } from './ImageCropModal';
 import { ContactSupportModal } from './ContactSupportModal';
+import { useStaticBackdropScrollLock } from '../../utils/useStaticBackdropScrollLock';
 
 export interface ProfileMenuProps {
   currentUser: UserAccount;
@@ -105,6 +106,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
 }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  useStaticBackdropScrollLock(isProfileOpen || isNotifOpen);
   const [isDarkMenu, setIsDarkMenu] = useState<boolean>(() =>
     typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : true
   );
@@ -610,6 +612,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
       {isProfileOpen && typeof document !== 'undefined' && createPortal(
         <div
           ref={menuRef}
+          data-modal-scrollable="true"
           data-theme={isDarkMenu ? 'dark' : 'light'}
           style={{
             position: 'fixed',
@@ -793,7 +796,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
               <span>Contact Support</span>
             </button>
 
-            {/* Request album deletion (30-day recoverable soft delete) */}
+            {/* Delete Album (30-day recoverable soft delete) */}
             {isAdmin && currentSet && onOpenRequestDeletion && (
               <button
                 id="profile-menu-delete-album"
@@ -803,11 +806,11 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({
                   onOpenRequestDeletion();
                 }}
                 className="w-full px-3 py-2 rounded-xl hover:bg-[var(--kh-danger-bg)] text-xs font-mono-tech text-[var(--kh-danger)] flex items-center justify-between gap-2 transition-colors text-left cursor-pointer"
-                title={currentSet.deletedAt ? 'Recover soft-deleted album (within 30 days)' : 'Soft-delete album (recoverable within 30 days)'}
+                title={currentSet.deletedAt ? 'Recover soft-deleted album (within 30 days)' : 'Delete album (recoverable within 30 days)'}
               >
                 <div className="flex items-center gap-2.5 min-w-0">
                   <Trash2 className="w-4 h-4 text-[var(--kh-danger)] shrink-0" />
-                  <span className="truncate">{currentSet.deletedAt ? 'Recover Album' : 'Request album deletion'}</span>
+                  <span className="truncate">{currentSet.deletedAt ? 'Recover Album' : 'Delete Album'}</span>
                 </div>
                 {currentSet.deletedAt && (
                   <span className="px-1.5 py-0.5 rounded-full bg-[var(--kh-warning-bg)] text-[var(--kh-warning)] text-[9px] font-mono-tech uppercase font-bold shrink-0">
